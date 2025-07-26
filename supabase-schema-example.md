@@ -22,6 +22,8 @@ CREATE TABLE public.profiles (
     phone_number TEXT, -- Added for contact/initial password (NOT stored as plaintext password)
     role_id UUID NOT NULL REFERENCES public.roles(id), -- Link to the new roles table
     status TEXT NOT NULL DEFAULT 'active' CHECK (status = ANY (ARRAY['active'::text, 'blocked'::text, 'banned'::text])), -- Account status
+    packer_status TEXT DEFAULT 'available' CHECK (packer_status = ANY (ARRAY['available'::text, 'busy'::text, 'unavailable'::text])), -- Packer availability status
+    current_order_id UUID REFERENCES public.orders(id), -- Track which order packer is currently working on
     avatar_url TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -180,6 +182,8 @@ CREATE TABLE public.attendance_logs (
     status TEXT NOT NULL DEFAULT 'present' CHECK (status = ANY (ARRAY['present'::text, 'absent'::text])),
     start_time TIMESTAMPTZ,
     end_time TIMESTAMPTZ,
+    toolbox_briefing_completed BOOLEAN DEFAULT FALSE, -- Track if mandatory briefing is completed
+    is_project_start BOOLEAN DEFAULT FALSE, -- Mark if this is the first day of project for this packer
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(order_id, packer_id, log_date, shift_period)
