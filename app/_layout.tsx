@@ -1,10 +1,8 @@
-import { useEffect } from 'react';
+import React from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider } from '../utils/AuthContext';
-
-// Import NativeWind styles
-import '../global.css';
+import './globals.css';
 
 export default function RootLayout() {
   return (
@@ -15,6 +13,7 @@ export default function RootLayout() {
         <Stack.Screen name="auth" />
         <Stack.Screen name="(admin)" />
         <Stack.Screen name="(packer)" />
+        <Stack.Screen name="+not-found" />
       </Stack>
     </AuthProvider>
   );

@@ -61,16 +61,27 @@ export const AuthProvider = ({ children }) => {
 
   const loadUserProfile = async (userId) => {
     try {
+      console.log('👤 Loading user profile for userId:', userId);
       const { data, error } = await db.getUserProfile(userId);
       
       if (error) {
-        console.error('Error loading user profile:', error);
+        console.error('❌ Error loading user profile:', error);
+        console.log('❌ Profile error details:', JSON.stringify(error, null, 2));
         return;
       }
 
-      setProfile(data);
+      if (data) {
+        console.log('✅ Profile loaded successfully:', {
+          name: data.full_name,
+          role: data.roles?.name,
+          status: data.status
+        });
+        setProfile(data);
+      } else {
+        console.log('⚠️ No profile data returned for user');
+      }
     } catch (error) {
-      console.error('Error in loadUserProfile:', error);
+      console.error('💥 Error in loadUserProfile:', error);
     }
   };
 
@@ -118,15 +129,18 @@ export const AuthProvider = ({ children }) => {
       setLoading(true);
       const { error } = await auth.signOut();
       
-      if (!error) {
-        setUser(null);
-        setProfile(null);
-        setSession(null);
-      }
+      // Always clear the local state, even if there's an error
+      setUser(null);
+      setProfile(null);
+      setSession(null);
       
       return { error };
     } catch (error) {
       console.error('Sign out error:', error);
+      // Clear state even on error
+      setUser(null);
+      setProfile(null);
+      setSession(null);
       return { error };
     } finally {
       setLoading(false);
@@ -142,8 +156,12 @@ export const AuthProvider = ({ children }) => {
     return profile?.roles?.name === 'packer';
   };
 
-  const isProjectLead = () => {
-    return profile?.roles?.name === 'project_lead';
+  const isProjectLead = (orderId?: string) => {
+    // Check if user is assigned as project lead for a specific order
+    if (!orderId || !profile) return false;
+    // This would need to be checked against the order's project_lead_id
+    // For now, return false - implement when needed
+    return false;
   };
 
   const hasPermission = (permission) => {

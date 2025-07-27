@@ -1,13 +1,31 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const { signIn } = useAuth();
+  const { user, profile, loading: authLoading, signIn } = useAuth();
+  const router = useRouter();
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (!authLoading && user && profile) {
+      console.log('🔄 Login: User already authenticated, redirecting...');
+      const userRole = profile.roles?.name;
+      
+      if (userRole === 'admin' || userRole === 'director' || userRole === 'sales') {
+        router.replace('/(admin)/dashboard');
+      } else if (userRole === 'packer') {
+        router.replace('/(packer)/dashboard');
+      } else {
+        router.replace('/');
+      }
+    }
+  }, [user, profile, authLoading, router]);
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -18,14 +36,29 @@ export default function LoginScreen() {
     setLoading(true);
     
     try {
+      console.log('🔐 Attempting login with:', email);
+      
       const { data, error } = await signIn(email, password);
       
+      console.log('🔐 Login response:', { 
+        user: data?.user?.email, 
+        error: error?.message,
+        session: data?.session ? 'exists' : 'none'
+      });
+      
       if (error) {
-        Alert.alert('Login Failed', error.message);
+        console.error('🚫 Login error:', error);
+        Alert.alert('Login Failed', error.message || 'An error occurred during login');
+      } else if (data?.user) {
+        console.log('✅ Login successful, auth context will handle navigation');
+        // Navigation will be handled by the index page when auth state updates
+        // Clear the form
+        setEmail('');
+        setPassword('');
       }
-      // Success is handled by the AuthContext and router
     } catch (error) {
-      Alert.alert('Error', 'An unexpected error occurred');
+      console.error('💥 Unexpected login error:', error);
+      Alert.alert('Login Error', 'An unexpected error occurred. Please try again.');
     } finally {
       setLoading(false);
     }
