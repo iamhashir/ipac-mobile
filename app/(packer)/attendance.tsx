@@ -44,11 +44,13 @@ export default function AttendanceScreen() {
   // State management based on reference
   const [order, setOrder] = useState<Order | null>(null);
   const [packers, setPackers] = useState<string[]>([]);
+  const [packersData, setPackersData] = useState<any[]>([]);
   const [projectLead, setProjectLead] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [attendance, setAttendance] = useState<AttendanceRecord>({});
   const [toolboxCompleted, setToolboxCompleted] = useState(false);
   const [isAfternoon, setIsAfternoon] = useState(false);
+  const [saving, setSaving] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Parse parameters
@@ -72,15 +74,16 @@ export default function AttendanceScreen() {
       setProjectLead(orderData.project_lead_name);
 
       // Load packer details
-      const { data: packersData, error: packersError } = await db.getOrderPackers(orderId);
+      const { data: packersResponse, error: packersError } = await db.getOrderPackers(orderId);
       if (packersError) {
         console.error('Error loading packers:', packersError);
         Alert.alert('Error', 'Failed to load packer details');
         return;
       }
 
-      // Set packer names
-      const packerNames = packersData.map(packer => packer.full_name);
+      // Store packers data and names
+      setPackersData(packersResponse);
+      const packerNames = packersResponse.map(packer => packer.full_name);
       setPackers(packerNames);
 
       // Initialize attendance records
@@ -203,10 +206,122 @@ export default function AttendanceScreen() {
   };
 
 
+  const saveAttendance = async () => {
+    if (!order || packersData.length === 0) {
+      Alert.alert('Error', 'Missing order or packer data');
+      return false;
+    }
+
+    setSaving(true);
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const attendancePromises = [];
+
+      // Create attendance records for each packer and period
+      for (const packerName of packers) {
+        const packerData = packersData.find(p => p.full_name === packerName);
+        if (!packerData) continue;
+
+        const packerAttendance = attendance[packerName];
+        if (!packerAttendance) continue;
+
+        // Save morning attendance if present
+        if (packerAttendance.morning.present === true) {
+          const morningStartTime = packerAttendance.morning.startTime 
+            ? new Date(`${today} ${packerAttendance.morning.startTime}`).toISOString()
+            : null;
+          const morningEndTime = packerAttendance.morning.endTime 
+            ? new Date(`${today} ${packerAttendance.morning.endTime}`).toISOString()
+            : null;
+
+          attendancePromises.push(
+            db.logAttendance(
+              orderId,
+              packerData.packer_id || packerData.id,
+              'morning',
+              'present',
+              morningStartTime,
+              morningEndTime,
+              toolboxCompleted,
+              true // is_project_start
+            )
+          );
+        }
+
+        // Save afternoon attendance if present
+        if (packerAttendance.afternoon.present === true) {
+          const afternoonStartTime = packerAttendance.afternoon.startTime 
+            ? new Date(`${today} ${packerAttendance.afternoon.startTime}`).toISOString()
+            : null;
+          const afternoonEndTime = packerAttendance.afternoon.endTime 
+            ? new Date(`${today} ${packerAttendance.afternoon.endTime}`).toISOString()
+            : null;
+
+          attendancePromises.push(
+            db.logAttendance(
+              orderId,
+              packerData.packer_id || packerData.id,
+              'afternoon',
+              'present',
+              afternoonStartTime,
+              afternoonEndTime,
+              toolboxCompleted,
+              false // is_project_start
+            )
+          );
+        }
+      }
+
+      // Execute all attendance logging promises
+      const results = await Promise.all(attendancePromises);
+      
+      // Check for errors
+      const errors = results.filter(result => result.error);
+      if (errors.length > 0) {
+        console.error('Attendance logging errors:', errors);
+        Alert.alert('Warning', 'Some attendance records may not have been saved properly');
+        return false;
+      }
+
+      console.log('Attendance saved successfully');
+      return true;
+    } catch (error) {
+      console.error('Error saving attendance:', error);
+      Alert.alert('Error', 'Failed to save attendance records');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleContinueToPackaging = async () => {
+    if (!toolboxCompleted) {
+      Alert.alert('Warning', 'Please confirm toolbox briefing is completed first');
+      return;
+    }
+
+    const saved = await saveAttendance();
+    if (saved) {
+      router.push({
+        pathname: '/(packer)/packaging-dossier',
+        params: { orderId }
+      });
+    }
+  };
+
   const handleSignOut = async () => {
-    const { error } = await signOut();
-    if (error) {
-      Alert.alert('Error', 'Failed to sign out');
+    try {
+      const { error } = await signOut();
+      if (error) {
+        console.error('Sign out error:', error);
+        Alert.alert('Error', 'Failed to sign out');
+      } else {
+        // Force navigation to login after successful sign out
+        router.replace('/auth/login');
+      }
+    } catch (error) {
+      console.error('Unexpected sign out error:', error);
+      Alert.alert('Error', 'An unexpected error occurred during sign out');
     }
   };
 
@@ -304,20 +419,20 @@ export default function AttendanceScreen() {
             )}
             
             <TouchableOpacity
-              onPress={() => router.push('/(packer)/packaging-dossier')}
-              disabled={!toolboxCompleted}
+              onPress={handleContinueToPackaging}
+              disabled={!toolboxCompleted || saving}
               className={`py-3 px-6 rounded-lg ${
-                !toolboxCompleted
+                !toolboxCompleted || saving
                   ? 'bg-gray-300'
                   : 'bg-blue-500'
               }`}
             >
               <Text className={`text-center font-semibold ${
-                !toolboxCompleted
+                !toolboxCompleted || saving
                   ? 'text-gray-500'
                   : 'text-white'
               }`}>
-                Continue to Packaging Dossier
+                {saving ? 'Saving Attendance...' : 'Continue to Packaging Dossier'}
               </Text>
             </TouchableOpacity>
           </View>

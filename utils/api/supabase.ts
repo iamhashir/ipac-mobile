@@ -156,8 +156,32 @@ export const db = {
   updateAttendanceEndTime: async (attendanceId, endTime) => {
     const { data, error } = await supabase
       .from('attendance_logs')
-      .update({ end_time: endTime, updated_at: new Date().toISOString() })
-      .eq('id', attendanceId);
+      .update({ 
+        end_time: endTime, 
+        updated_at: new Date().toISOString() 
+      })
+      .eq('id', attendanceId)
+      .select();
+    
+    return { data, error };
+  },
+
+  // Update attendance end time by order, packer, and shift period
+  updateAttendanceEndTimeByDetails: async (orderId, packerId, shiftPeriod, endTime) => {
+    const today = new Date().toISOString().split('T')[0];
+    
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .update({ 
+        end_time: endTime, 
+        updated_at: new Date().toISOString() 
+      })
+      .eq('order_id', orderId)
+      .eq('packer_id', packerId)
+      .eq('shift_period', shiftPeriod)
+      .eq('log_date', today)
+      .is('end_time', null) // Only update records without end time
+      .select();
     
     return { data, error };
   },
@@ -276,9 +300,10 @@ export const db = {
   // Update project lead for an order
   updateProjectLead: async (orderId, projectLeadId) => {
     const { data, error } = await supabase
-      .from('orders')
-      .update({ project_lead_id: projectLeadId })
-      .eq('id', orderId);
+      .rpc('update_project_lead_with_status', {
+        order_uuid: orderId,
+        lead_id: projectLeadId
+      });
     
     return { data, error };
   },

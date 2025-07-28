@@ -133,9 +133,18 @@ export default function PackerDashboard() {
   };
 
   const handleSignOut = async () => {
-    const { error } = await signOut();
-    if (error) {
-      Alert.alert('Error', 'Failed to sign out');
+    try {
+      const { error } = await signOut();
+      if (error) {
+        console.error('Sign out error:', error);
+        Alert.alert('Error', 'Failed to sign out');
+      } else {
+        // Force navigation to login after successful sign out
+        router.replace('/auth/login');
+      }
+    } catch (error) {
+      console.error('Unexpected sign out error:', error);
+      Alert.alert('Error', 'An unexpected error occurred during sign out');
     }
   };
 

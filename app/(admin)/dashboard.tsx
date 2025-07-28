@@ -1,15 +1,26 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
 
 export default function AdminDashboard() {
   const { profile, signOut } = useAuth();
+  const router = useRouter();
 
   const handleSignOut = async () => {
-    const { error } = await signOut();
-    if (error) {
-      Alert.alert('Error', 'Failed to sign out');
+    try {
+      const { error } = await signOut();
+      if (error) {
+        console.error('Sign out error:', error);
+        Alert.alert('Error', 'Failed to sign out');
+      } else {
+        // Force navigation to login after successful sign out
+        router.replace('/auth/login');
+      }
+    } catch (error) {
+      console.error('Unexpected sign out error:', error);
+      Alert.alert('Error', 'An unexpected error occurred during sign out');
     }
   };
 

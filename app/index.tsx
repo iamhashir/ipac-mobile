@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { View, Text, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../utils/AuthContext';
@@ -6,14 +6,34 @@ import { useAuth } from '../utils/AuthContext';
 export default function Index() {
   const { user, profile, loading } = useAuth();
   const router = useRouter();
+  const [loadingTimeout, setLoadingTimeout] = useState(false);
+
+  // Add a timeout to prevent infinite loading
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (loading) {
+        console.log('🏠 Index: Loading timeout reached, forcing redirect to login');
+        setLoadingTimeout(true);
+        router.replace('/auth/login');
+      }
+    }, 10000); // 10 second timeout
+
+    return () => clearTimeout(timeout);
+  }, [loading, router]);
 
   useEffect(() => {
     console.log('🏠 Index: Auth state changed', { 
       loading, 
       user: user?.email, 
       profile: profile?.full_name,
-      role: profile?.roles?.name 
+      role: profile?.roles?.name,
+      loadingTimeout 
     });
+    
+    // If we hit the loading timeout, don't process further
+    if (loadingTimeout) {
+      return;
+    }
     
     // Don't do anything while still loading
     if (loading) {
@@ -28,9 +48,13 @@ export default function Index() {
       return;
     }
     
-    // User exists but no profile - redirect to login (profile should load quickly or there's an error)
+    // User exists but no profile - could be profile loading error
+    // Give it a chance but if profile is null and not loading, go to login
     if (!profile) {
-      console.log('🏠 Index: User exists but no profile loaded, redirecting to login');
+      console.log('🏠 Index: User exists but no profile loaded');
+      console.log('🏠 Index: This could indicate RLS policy issues or missing profile data');
+      // Instead of immediately redirecting, let's try to handle this case
+      // by redirecting to login where they can try again
       router.replace('/auth/login');
       return;
     }
@@ -49,7 +73,7 @@ export default function Index() {
       console.log('🏠 Index: Unknown role, redirecting to login');
       router.replace('/auth/login');
     }
-  }, [user, profile, loading, router]);
+  }, [user, profile, loading, router, loadingTimeout]);
 
   // Show loading screen while checking authentication
   return (

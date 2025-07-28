@@ -62,11 +62,16 @@ export const AuthProvider = ({ children }) => {
   const loadUserProfile = async (userId) => {
     try {
       console.log('👤 Loading user profile for userId:', userId);
+      
       const { data, error } = await db.getUserProfile(userId);
       
       if (error) {
         console.error('❌ Error loading user profile:', error);
         console.log('❌ Profile error details:', JSON.stringify(error, null, 2));
+        
+        // If there's an error loading profile, still set loading to false
+        // This prevents infinite loading state
+        setProfile(null);
         return;
       }
 
@@ -79,9 +84,12 @@ export const AuthProvider = ({ children }) => {
         setProfile(data);
       } else {
         console.log('⚠️ No profile data returned for user');
+        setProfile(null);
       }
     } catch (error) {
       console.error('💥 Error in loadUserProfile:', error);
+      // On any error, set profile to null to prevent infinite loading
+      setProfile(null);
     }
   };
 
