@@ -10,6 +10,8 @@ interface Order {
   order_name: string;
   description: string;
   client_name: string;
+  production_status: string;
+  assigned_packers_count: number;
 }
 
 interface Packer {
@@ -17,16 +19,18 @@ interface Packer {
   full_name: string;
   username: string;
   packer_status: string;
+  current_order_name?: string;
+  is_available: boolean;
 }
 
 export default function PackerDashboard() {
   const { profile, signOut } = useAuth();
   const router = useRouter();
   const [availableOrders, setAvailableOrders] = useState<Order[]>([]);
-  const [availablePackers, setAvailablePackers] = useState<Packer[]>([]);
+  const [allPackers, setAllPackers] = useState<Packer[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<string | null>(null);
   const [selectedPackers, setSelectedPackers] = useState<string[]>([]);
-  const [projectLeads, setProjectLeads] = useState<string[]>([]);
+  const [projectLead, setProjectLead] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -43,12 +47,21 @@ export default function PackerDashboard() {
         setAvailableOrders(orders || []);
       }
 
-      // Load available packers
-      const { data: packers, error: packersError } = await db.getAvailablePackers();
+      // Load all packers with their current assignment status
+      const { data: packersData, error: packersError } = await db.getAllPackersWithStatus();
       if (packersError) {
         console.error('Error loading packers:', packersError);
       } else {
-        setAvailablePackers(packers || []);
+        // Transform the data to include availability
+        const transformedPackers = (packersData || []).map(packer => ({
+          id: packer.id,
+          full_name: packer.full_name,
+          username: packer.username,
+          packer_status: packer.packer_status,
+          current_order_name: packer.current_order_name || null,
+          is_available: packer.packer_status === 'available'
+        }));
+        setAllPackers(transformedPackers);
       }
     } catch (error) {
       console.error('Error in loadData:', error);
@@ -58,6 +71,10 @@ export default function PackerDashboard() {
   };
 
   const togglePackerSelection = (packerId: string) => {
+    // Only allow selection of available packers
+    const packer = allPackers.find(p => p.id === packerId);
+    if (!packer?.is_available) return;
+    
     setSelectedPackers(prev => 
       prev.includes(packerId) 
         ? prev.filter(id => id !== packerId)
@@ -66,11 +83,11 @@ export default function PackerDashboard() {
   };
 
   const toggleProjectLead = (packerId: string) => {
-    setProjectLeads(prev => 
-      prev.includes(packerId) 
-        ? prev.filter(id => id !== packerId)
-        : [...prev, packerId]
-    );
+    // Only allow project lead selection from selected packers
+    if (!selectedPackers.includes(packerId)) return;
+    
+    // Only one project lead can be selected
+    setProjectLead(prev => prev === packerId ? null : packerId);
   };
 
   const handleNext = async () => {
@@ -86,19 +103,27 @@ export default function PackerDashboard() {
 
     try {
       // Assign packers to order
-      const { error } = await db.assignPackersToOrder(selectedOrder, selectedPackers);
+      const { error: assignError } = await db.assignPackersToOrder(selectedOrder, selectedPackers);
       
-      if (error) {
+      if (assignError) {
         Alert.alert('Error', 'Failed to assign team to project');
         return;
+      }
+
+      // Update project lead if one is selected
+      if (projectLead) {
+        const { error: leadError } = await db.updateProjectLead(selectedOrder, projectLead);
+        if (leadError) {
+          console.error('Error updating project lead:', leadError);
+          // Don't block navigation for this error, just log it
+        }
       }
 
       // Navigate to attendance screen
       router.push({
         pathname: '/(packer)/attendance',
         params: { 
-          orderId: selectedOrder,
-          packerIds: JSON.stringify(selectedPackers)
+          orderId: selectedOrder
         }
       });
     } catch (error) {
@@ -229,51 +254,80 @@ export default function PackerDashboard() {
             </View>
 
             <ScrollView className="flex-1 px-4">
-              {availablePackers.length === 0 ? (
+              {allPackers.length === 0 ? (
                 <Text className="text-gray-500 text-center py-8">
-                  No packers available
+                  No packers found
                 </Text>
               ) : (
-                availablePackers.map((packer) => (
-                  <View
-                    key={packer.id}
-                    className="flex-row items-center justify-between py-3 border-b border-gray-100"
-                  >
-                    <TouchableOpacity 
-                      onPress={() => togglePackerSelection(packer.id)}
-                      className="flex-row items-center flex-1"
-                      activeOpacity={0.7}
+                allPackers.map((packer) => {
+                  const isSelected = selectedPackers.includes(packer.id);
+                  const isProjectLead = projectLead === packer.id;
+                  const canBeProjectLead = isSelected && packer.is_available;
+                  
+                  return (
+                    <View
+                      key={packer.id}
+                      className={`flex-row items-center justify-between py-3 border-b border-gray-100 ${
+                        !packer.is_available ? 'opacity-50' : ''
+                      }`}
                     >
-                      <View className={`w-6 h-6 rounded border-2 mr-3 items-center justify-center ${
-                        selectedPackers.includes(packer.id)
-                          ? 'bg-primary-500 border-primary-500'
-                          : 'border-gray-300'
-                      }`}>
-                        {selectedPackers.includes(packer.id) && (
-                          <Text className="text-white text-xs">✓</Text>
-                        )}
-                      </View>
-                      <Text className="text-gray-800 font-medium">
-                        {packer.full_name}
-                      </Text>
-                    </TouchableOpacity>
-                    
-                    <TouchableOpacity 
-                      onPress={() => toggleProjectLead(packer.id)}
-                      activeOpacity={0.7}
-                    >
-                      <View className={`w-6 h-6 rounded-full border-2 items-center justify-center ${
-                        projectLeads.includes(packer.id)
-                          ? 'bg-primary-500 border-primary-500'
-                          : 'border-gray-300'
-                      }`}>
-                        {projectLeads.includes(packer.id) && (
-                          <Text className="text-white text-xs">✓</Text>
-                        )}
-                      </View>
-                    </TouchableOpacity>
-                  </View>
-                ))
+                      <TouchableOpacity 
+                        onPress={() => togglePackerSelection(packer.id)}
+                        className="flex-row items-center flex-1"
+                        activeOpacity={packer.is_available ? 0.7 : 1}
+                        disabled={!packer.is_available}
+                      >
+                        <View className={`w-6 h-6 rounded border-2 mr-3 items-center justify-center ${
+                          isSelected
+                            ? 'bg-primary-500 border-primary-500'
+                            : packer.is_available
+                            ? 'border-gray-300'
+                            : 'border-gray-200 bg-gray-100'
+                        }`}>
+                          {isSelected && (
+                            <Text className="text-white text-xs">✓</Text>
+                          )}
+                        </View>
+                        
+                        <View className="flex-1">
+                          <Text className={`font-medium ${
+                            packer.is_available ? 'text-gray-800' : 'text-gray-400'
+                          }`}>
+                            {packer.full_name}
+                          </Text>
+                          {!packer.is_available && packer.current_order_name && (
+                            <Text className="text-xs text-gray-400 mt-0.5">
+                              Working on: {packer.current_order_name}
+                            </Text>
+                          )}
+                          {!packer.is_available && !packer.current_order_name && (
+                            <Text className="text-xs text-gray-400 mt-0.5">
+                              Status: {packer.packer_status}
+                            </Text>
+                          )}
+                        </View>
+                      </TouchableOpacity>
+                      
+                      <TouchableOpacity 
+                        onPress={() => toggleProjectLead(packer.id)}
+                        activeOpacity={canBeProjectLead ? 0.7 : 1}
+                        disabled={!canBeProjectLead}
+                      >
+                        <View className={`w-6 h-6 rounded-full border-2 items-center justify-center ${
+                          isProjectLead
+                            ? 'bg-primary-500 border-primary-500'
+                            : canBeProjectLead
+                            ? 'border-gray-300'
+                            : 'border-gray-200 bg-gray-100'
+                        }`}>
+                          {isProjectLead && (
+                            <Text className="text-white text-xs">✓</Text>
+                          )}
+                        </View>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })
               )}
             </ScrollView>
           </View>

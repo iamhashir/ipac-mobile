@@ -122,22 +122,19 @@ export const db = {
     return { data, error };
   },
 
-  // Assign packers to order
+  // Assign packers to order using new JSON structure
   assignPackersToOrder: async (orderId, packerIds) => {
-    const assignments = packerIds.map(packerId => ({
-      order_id: orderId,
-      packer_id: packerId,
-    }));
-
     const { data, error } = await supabase
-      .from('order_teams')
-      .insert(assignments);
+      .rpc('assign_packers_to_order', {
+        order_uuid: orderId,
+        packer_ids: packerIds
+      });
     
     return { data, error };
   },
 
-  // Log attendance
-  logAttendance: async (orderId, packerId, shiftPeriod, status, startTime = null) => {
+  // Log attendance with comprehensive data
+  logAttendance: async (orderId, packerId, shiftPeriod, status, startTime = null, endTime = null, toolboxBriefing = false, isProjectStart = false) => {
     const { data, error } = await supabase
       .from('attendance_logs')
       .insert({
@@ -146,8 +143,41 @@ export const db = {
         shift_period: shiftPeriod,
         status: status,
         start_time: startTime,
-        log_date: new Date().toISOString().split('T')[0], // Today's date
+        end_time: endTime,
+        toolbox_briefing_completed: toolboxBriefing,
+        is_project_start: isProjectStart,
+        log_date: new Date().toISOString().split('T')[0],
       });
+    
+    return { data, error };
+  },
+
+  // Update attendance end time
+  updateAttendanceEndTime: async (attendanceId, endTime) => {
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .update({ end_time: endTime, updated_at: new Date().toISOString() })
+      .eq('id', attendanceId);
+    
+    return { data, error };
+  },
+
+  // Get active attendance for a packer today
+  getActiveAttendance: async (orderId, packerId, shiftPeriod) => {
+    const today = new Date().toISOString().split('T')[0];
+    
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .select('*')
+      .eq('order_id', orderId)
+      .eq('packer_id', packerId)
+      .eq('shift_period', shiftPeriod)
+      .eq('log_date', today)
+      .eq('status', 'present')
+      .is('end_time', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
     
     return { data, error };
   },
@@ -221,6 +251,34 @@ export const db = {
       .from('profiles')
       .select('id, full_name, username')
       .in('id', packerIds);
+    
+    return { data, error };
+  },
+
+  // Get packers assigned to an order (using new JSON structure)
+  getOrderPackers: async (orderId) => {
+    const { data, error } = await supabase
+      .rpc('get_order_packers', {
+        order_uuid: orderId
+      });
+    
+    return { data, error };
+  },
+
+  // Get all packers with their current assignment status
+  getAllPackersWithStatus: async () => {
+    const { data, error } = await supabase
+      .rpc('get_all_packers_with_status');
+    
+    return { data, error };
+  },
+
+  // Update project lead for an order
+  updateProjectLead: async (orderId, projectLeadId) => {
+    const { data, error } = await supabase
+      .from('orders')
+      .update({ project_lead_id: projectLeadId })
+      .eq('id', orderId);
     
     return { data, error };
   },
