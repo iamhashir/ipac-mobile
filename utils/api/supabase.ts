@@ -183,6 +183,47 @@ export const db = {
     
     return { data, error };
   },
+
+  // Get order by ID
+  getOrderById: async (orderId) => {
+    const { data, error } = await supabase
+      .from('orders')
+      .select(`
+        id,
+        order_name,
+        description,
+        clients (
+          name
+        )
+      `)
+      .eq('id', orderId)
+      .single();
+    
+    // Transform the data to match expected format
+    if (data) {
+      return {
+        data: {
+          id: data.id,
+          order_name: data.order_name,
+          description: data.description,
+          client_name: data.clients?.name || 'Unknown Client'
+        },
+        error
+      };
+    }
+    
+    return { data, error };
+  },
+
+  // Get packers by IDs
+  getPackersByIds: async (packerIds) => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, full_name, username')
+      .in('id', packerIds);
+    
+    return { data, error };
+  },
 };
 
 export default supabase;

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
 import { View, Text, ActivityIndicator } from 'react-native';
@@ -6,9 +6,19 @@ import { View, Text, ActivityIndicator } from 'react-native';
 export default function AdminLayout() {
   const { user, profile, loading } = useAuth();
   const router = useRouter();
+  const [timeoutReached, setTimeoutReached] = useState(false);
 
   useEffect(() => {
-    if (!loading) {
+    // Set a timeout to prevent infinite loading
+    const timeout = setTimeout(() => {
+      setTimeoutReached(true);
+    }, 5000); // 5 second timeout
+
+    return () => clearTimeout(timeout);
+  }, []);
+
+  useEffect(() => {
+    if (!loading || timeoutReached) {
       if (!user) {
         console.log('🔒 Admin layout: No user, redirecting to login');
         router.replace('/auth/login');
@@ -30,7 +40,7 @@ export default function AdminLayout() {
       
       console.log('✅ Admin layout: Access granted for', userRole);
     }
-  }, [user, profile, loading]);
+  }, [user, profile, loading, timeoutReached]);
 
   if (loading) {
     return (

@@ -26,6 +26,7 @@ export default function PackerDashboard() {
   const [availablePackers, setAvailablePackers] = useState<Packer[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<string | null>(null);
   const [selectedPackers, setSelectedPackers] = useState<string[]>([]);
+  const [projectLeads, setProjectLeads] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -58,6 +59,14 @@ export default function PackerDashboard() {
 
   const togglePackerSelection = (packerId: string) => {
     setSelectedPackers(prev => 
+      prev.includes(packerId) 
+        ? prev.filter(id => id !== packerId)
+        : [...prev, packerId]
+    );
+  };
+
+  const toggleProjectLead = (packerId: string) => {
+    setProjectLeads(prev => 
       prev.includes(packerId) 
         ? prev.filter(id => id !== packerId)
         : [...prev, packerId]
@@ -226,12 +235,15 @@ export default function PackerDashboard() {
                 </Text>
               ) : (
                 availablePackers.map((packer) => (
-                  <TouchableOpacity
+                  <View
                     key={packer.id}
-                    onPress={() => togglePackerSelection(packer.id)}
                     className="flex-row items-center justify-between py-3 border-b border-gray-100"
                   >
-                    <View className="flex-row items-center flex-1">
+                    <TouchableOpacity 
+                      onPress={() => togglePackerSelection(packer.id)}
+                      className="flex-row items-center flex-1"
+                      activeOpacity={0.7}
+                    >
                       <View className={`w-6 h-6 rounded border-2 mr-3 items-center justify-center ${
                         selectedPackers.includes(packer.id)
                           ? 'bg-primary-500 border-primary-500'
@@ -244,10 +256,23 @@ export default function PackerDashboard() {
                       <Text className="text-gray-800 font-medium">
                         {packer.full_name}
                       </Text>
-                    </View>
+                    </TouchableOpacity>
                     
-                    <View className="w-6 h-6 rounded-full border-2 border-gray-300" />
-                  </TouchableOpacity>
+                    <TouchableOpacity 
+                      onPress={() => toggleProjectLead(packer.id)}
+                      activeOpacity={0.7}
+                    >
+                      <View className={`w-6 h-6 rounded-full border-2 items-center justify-center ${
+                        projectLeads.includes(packer.id)
+                          ? 'bg-primary-500 border-primary-500'
+                          : 'border-gray-300'
+                      }`}>
+                        {projectLeads.includes(packer.id) && (
+                          <Text className="text-white text-xs">✓</Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  </View>
                 ))
               )}
             </ScrollView>

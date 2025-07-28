@@ -87,14 +87,13 @@ export const AuthProvider = ({ children }) => {
 
   const signIn = async (email, password) => {
     try {
-      setLoading(true);
       const { data, error } = await auth.signIn(email, password);
+      // Don't manually set loading to false here - let the auth state change handle it
       return { data, error };
     } catch (error) {
       console.error('Sign in error:', error);
+      setLoading(false); // Only set loading false on error
       return { data: null, error };
-    } finally {
-      setLoading(false);
     }
   };
 

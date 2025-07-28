@@ -28,16 +28,10 @@ export default function Index() {
       return;
     }
     
-    // User exists but no profile - wait a bit more or redirect to login
+    // User exists but no profile - redirect to login (profile should load quickly or there's an error)
     if (!profile) {
-      console.log('🏠 Index: User exists but no profile loaded yet');
-      // Give it a moment for profile to load, then redirect if still no profile
-      setTimeout(() => {
-        if (!profile && user) {
-          console.log('🏠 Index: Profile failed to load, redirecting to login');
-          router.replace('/auth/login');
-        }
-      }, 1500);
+      console.log('🏠 Index: User exists but no profile loaded, redirecting to login');
+      router.replace('/auth/login');
       return;
     }
     
