@@ -170,11 +170,23 @@ export default function PackerDashboard() {
         return;
       }
 
-      // Create session to track progress
-      const sessionCreated = await createSession(selectedOrder, orderData);
-      if (!sessionCreated) {
-        console.error('Failed to create session, but continuing...');
+      // Create sessions for all selected packers (team-based sessions)
+      const { data: teamSessions, error: sessionError } = await db.createTeamSessions(selectedOrder, orderData, selectedPackers);
+      if (sessionError || !teamSessions) {
+        console.error('Failed to create team sessions:', sessionError);
+        Alert.alert('Warning', 'Failed to create team sessions, but you can continue');
         // Don't block navigation if session creation fails
+      } else {
+        console.log(`Created ${teamSessions.length} team sessions for selected packers`);
+        
+        // Update the current user's session in context if they're part of the selected team
+        if (profile?.id && selectedPackers.includes(profile.id)) {
+          const userSession = teamSessions.find(s => s.packer_id === profile.id);
+          if (userSession && createSession) {
+            // Update the session context with the user's session
+            await createSession(selectedOrder, orderData);
+          }
+        }
       }
 
       // Navigate to attendance screen

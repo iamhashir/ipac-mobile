@@ -111,10 +111,16 @@ export const PackerSessionProvider: React.FC<PackerSessionProviderProps> = ({ ch
           setSession(userSession);
           console.log('Loaded existing team session for user:', userSession);
           return true;
+        } else {
+          // User doesn't have a session but sessions exist for this order
+          // This means they weren't selected as part of the team
+          console.log('User is not part of the selected team for this order');
+          setSession(null);
+          return true; // Return true to not block navigation
         }
       }
 
-      // Create individual session for current user
+      // Create individual session for current user (fallback - should rarely happen now)
       const sessionData: Omit<PackerSession, 'id' | 'created_at' | 'updated_at'> = {
         packer_id: profile.id,
         order_id: orderId,
