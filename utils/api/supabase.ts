@@ -94,14 +94,35 @@ export const db = {
     return { data, error };
   },
 
-  // Get available orders for packer selection
+  // Get available orders for packer selection (including in_progress orders)
   getAvailableOrders: async () => {
     const { data, error } = await supabase
-      .from('available_orders_for_assignment')
-      .select('*')
+      .from('orders')
+      .select(`
+        id,
+        order_name,
+        description,
+        production_status,
+        clients (
+          name
+        )
+      `)
+      .in('production_status', ['pending', 'in_progress'])
       .order('order_name');
     
-    return { data, error };
+    if (error) return { data: null, error };
+    
+    // Transform the data to match expected format
+    const transformedData = data?.map(order => ({
+      id: order.id,
+      order_name: order.order_name,
+      description: order.description,
+      production_status: order.production_status,
+      client_name: order.clients?.name || 'Unknown Client',
+      assigned_packers_count: 0 // This could be calculated if needed
+    })) || [];
+    
+    return { data: transformedData, error };
   },
 
   // Get available packers
@@ -186,6 +207,27 @@ export const db = {
     return { data, error };
   },
 
+  // Update attendance records to allow restarting
+  updateAttendanceForRestart: async (orderId, packerId, shiftPeriod, startTimeIso) => {
+    const today = new Date().toISOString().split('T')[0];
+    
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .update({
+        start_time: startTimeIso,
+        end_time: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('order_id', orderId)
+      .eq('packer_id', packerId)
+      .eq('shift_period', shiftPeriod)
+      .eq('log_date', today)
+      .not('end_time', 'is', null) // Only update records that have an end time
+      .select();
+    
+    return { data, error };
+  },
+
   // Get active attendance for a packer today
   getActiveAttendance: async (orderId, packerId, shiftPeriod) => {
     const today = new Date().toISOString().split('T')[0];
@@ -200,10 +242,13 @@ export const db = {
       .eq('status', 'present')
       .is('end_time', null)
       .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
+      .limit(1);
     
-    return { data, error };
+    // Return the first item if data exists, otherwise null
+    return { 
+      data: data && data.length > 0 ? data[0] : null, 
+      error 
+    };
   },
 
   // Get today's attendance for an order
@@ -238,7 +283,7 @@ export const db = {
     return { data, error };
   },
 
-  // Get order by ID
+  // Get order by ID with project lead
   getOrderById: async (orderId) => {
     const { data, error } = await supabase
       .from('orders')
@@ -248,6 +293,9 @@ export const db = {
         description,
         clients (
           name
+        ),
+        project_lead:profiles!project_lead_id (
+          full_name
         )
       `)
       .eq('id', orderId)
@@ -260,7 +308,8 @@ export const db = {
           id: data.id,
           order_name: data.order_name,
           description: data.description,
-          client_name: data.clients?.name || 'Unknown Client'
+          client_name: data.clients?.name || 'Unknown Client',
+          project_lead_name: data.project_lead?.full_name || ''
         },
         error
       };
@@ -306,6 +355,169 @@ export const db = {
       });
     
     return { data, error };
+  },
+
+  // Session management functions
+  // Create a new packer session
+  createPackerSession: async (sessionData) => {
+    const { data, error } = await supabase
+      .from('packer_sessions')
+      .insert(sessionData)
+      .select()
+      .single();
+    
+    return { data, error };
+  },
+
+  // Get active session for a packer
+  getActivePackerSession: async (packerId) => {
+    const { data, error } = await supabase
+      .from('packer_sessions')
+      .select('*')
+      .eq('packer_id', packerId)
+      .eq('session_active', true)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    
+    // Return the first item if data exists, otherwise null
+    return { 
+      data: data && data.length > 0 ? data[0] : null, 
+      error 
+    };
+  },
+
+  // Update packer session
+  updatePackerSession: async (sessionId, updates) => {
+    const { data, error } = await supabase
+      .from('packer_sessions')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', sessionId)
+      .select()
+      .single();
+    
+    return { data, error };
+  },
+
+  // Get packer attendance by order and date (returns latest records)
+  getPackerAttendanceByOrderAndDate: async (orderId, packerId, date) => {
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .select('*')
+      .eq('order_id', orderId)
+      .eq('packer_id', packerId)
+      .eq('log_date', date)
+      .order('created_at', { ascending: false });
+    
+    return { data, error };
+  },
+
+  // Get latest attendance records for all packers in an order
+  getLatestAttendanceForOrder: async (orderId) => {
+    const today = new Date().toISOString().split('T')[0];
+    
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .select(`
+        *,
+        profiles (
+          id,
+          full_name,
+          username
+        )
+      `)
+      .eq('order_id', orderId)
+      .eq('log_date', today)
+      .order('packer_id')
+      .order('shift_period')
+      .order('created_at', { ascending: false });
+    
+    if (error) return { data: null, error };
+    
+    // Group by packer and shift to get latest records
+    const latestRecords = {};
+    
+    if (data) {
+      data.forEach(record => {
+        const key = `${record.packer_id}_${record.shift_period}`;
+        if (!latestRecords[key] || new Date(record.created_at) > new Date(latestRecords[key].created_at)) {
+          latestRecords[key] = record;
+        }
+      });
+    }
+    
+    return { data: Object.values(latestRecords), error };
+  },
+
+  // Get session by ID
+  getPackerSessionById: async (sessionId) => {
+    const { data, error } = await supabase
+      .from('packer_sessions')
+      .select('*')
+      .eq('id', sessionId)
+      .single();
+    
+    return { data, error };
+  },
+
+  // Get active sessions for an order (for team-based sessions)
+  getActiveSessionsForOrder: async (orderId) => {
+    const { data, error } = await supabase
+      .from('packer_sessions')
+      .select('*')
+      .eq('order_id', orderId)
+      .eq('session_active', true)
+      .order('created_at', { ascending: false });
+    
+    return { data, error };
+  },
+
+  // Create or update sessions for all packers in a team
+  createTeamSessions: async (orderId, orderData, packerIds) => {
+    try {
+      const sessions = [];
+      
+      for (const packerId of packerIds) {
+        // Check if session already exists for this packer and order
+        const { data: existingSession } = await supabase
+          .from('packer_sessions')
+          .select('*')
+          .eq('packer_id', packerId)
+          .eq('order_id', orderId)
+          .eq('session_active', true)
+          .single();
+        
+        if (!existingSession) {
+          // Create new session for this packer
+          const sessionData = {
+            packer_id: packerId,
+            order_id: orderId,
+            order_name: orderData.order_name,
+            client_name: orderData.client_name,
+            project_lead_name: orderData.project_lead_name,
+            team_selected: true,
+            attendance_completed: false,
+            packaging_started: false,
+            session_active: true
+          };
+          
+          const { data: newSession, error } = await supabase
+            .from('packer_sessions')
+            .insert(sessionData)
+            .select()
+            .single();
+          
+          if (!error && newSession) {
+            sessions.push(newSession);
+          }
+        } else {
+          sessions.push(existingSession);
+        }
+      }
+      
+      return { data: sessions, error: null };
+    } catch (error) {
+      return { data: null, error };
+    }
   },
 };
 

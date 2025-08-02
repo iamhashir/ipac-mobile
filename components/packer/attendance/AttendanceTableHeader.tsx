@@ -6,12 +6,14 @@ type TimePeriod = "morning" | "afternoon";
 
 interface AttendanceTableHeaderProps {
   isAfternoon: boolean;
+  isMorning: boolean;
   onBulkPresenceToggle: (period: TimePeriod, isPresent: boolean) => void;
   onBulkTimeToggle: (period: TimePeriod, timeType: "start" | "end") => void;
 }
 
 export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
   isAfternoon,
+  isMorning,
   onBulkPresenceToggle,
   onBulkTimeToggle,
 }) => {
@@ -71,32 +73,31 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
                   />
                 </TouchableOpacity>
                 <TouchableOpacity
-                  className="bg-red-50 rounded-full p-1"
+                  className={`bg-red-50 rounded-full p-1 ${
+                    isAfternoon ? "opacity-50" : ""
+                  }`}
                   onPress={() => onBulkPresenceToggle("morning", false)}
+                  disabled={isAfternoon}
                 >
-                  <XCircle size={24} color="#DC2626" />
+                  <XCircle size={24} color={isAfternoon ? "#9CA3AF" : "#DC2626"} />
                 </TouchableOpacity>
               </View>
             </View>
           </View>
 
           <View className="flex-1 items-center justify-center p-2 border-r border-gray-300">
-            <TouchableOpacity
-              className={`bg-blue-50 rounded-full p-1 flex-row ${
-                isAfternoon ? "opacity-50" : ""
-              }`}
-              onPress={() => onBulkTimeToggle("morning", "start")}
-              disabled={isAfternoon}
-            >
+            <View className={`bg-blue-50 rounded-full p-1 flex-row ${
+              isAfternoon ? "opacity-50" : ""
+            }`}>
               <Clock size={16} color={isAfternoon ? "#9CA3AF" : "#2563EB"} />
               <Text
                 className={`ml-1 text-xs${
                   isAfternoon ? "text-gray-400" : "text-blue-600"
                 }`}
               >
-                Start
+                Start (Auto)
               </Text>
-            </TouchableOpacity>
+            </View>
           </View>
 
           <View className="flex-1 items-center justify-center p-2 border-r border-gray-300">
@@ -127,38 +128,50 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
               <Text className="text-xs mb-1 text-center">Present / Absent</Text>
               <View className="flex-row items-center gap-1 justify-center">
                 <TouchableOpacity
-                  className="bg-green-50 rounded-full p-1"
+                  className={`bg-green-50 rounded-full p-1 ${
+                    isMorning ? "opacity-50" : ""
+                  }`}
                   onPress={() => onBulkPresenceToggle("afternoon", true)}
+                  disabled={isMorning}
                 >
-                  <CheckCircle size={24} color="#16A34A" />
+                  <CheckCircle size={24} color={isMorning ? "#9CA3AF" : "#16A34A"} />
                 </TouchableOpacity>
                 <TouchableOpacity
-                  className="bg-red-50 rounded-full p-1"
+                  className={`bg-red-50 rounded-full p-1 ${
+                    isMorning ? "opacity-50" : "
+                  }`}
                   onPress={() => onBulkPresenceToggle("afternoon", false)}
+                  disabled={isMorning}
                 >
-                  <XCircle size={24} color="#DC2626" />
+                  <XCircle size={24} color={isMorning ? "#9CA3AF" : "#DC2626"} />
                 </TouchableOpacity>
               </View>
             </View>
           </View>
 
           <View className="flex-1 items-center justify-center p-2 border-r border-gray-300">
-            <TouchableOpacity
-              className="bg-blue-50 rounded-full p-1 flex-row"
-              onPress={() => onBulkTimeToggle("afternoon", "start")}
-            >
-              <Clock size={16} color="#2563EB" />
-              <Text className="ml-1 text-xs text-blue-600">Start</Text>
-            </TouchableOpacity>
+            <View className={`bg-blue-50 rounded-full p-1 flex-row ${
+              isMorning ? "opacity-50" : ""
+            }`}>
+              <Clock size={16} color={isMorning ? "#9CA3AF" : "#2563EB"} />
+              <Text className={`ml-1 text-xs ${
+                isMorning ? "text-gray-400" : "text-blue-600"
+              }`}>Start (Auto)</Text>
+            </View>
           </View>
 
           <View className="flex-1 items-center justify-center p-2">
             <TouchableOpacity
-              className="bg-blue-50 rounded-full p-1 flex-row"
+              className={`bg-blue-50 rounded-full p-1 flex-row ${
+                isMorning ? "opacity-50" : "
+              }`}
               onPress={() => onBulkTimeToggle("afternoon", "end")}
+              disabled={isMorning}
             >
-              <Clock size={16} color="#1E40AF" />
-              <Text className="ml-1 text-xs text-blue-800">End</Text>
+              <Clock size={16} color={isMorning ? "#9CA3AF" : "#1E40AF"} />
+              <Text className={`ml-1 text-xs ${
+                isMorning ? "text-gray-400" : "text-blue-800"
+              }`}>End</Text>
             </TouchableOpacity>
           </View>
         </View>

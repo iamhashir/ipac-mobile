@@ -3,11 +3,13 @@ import { View, Text, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
+import { usePackerSession } from '../../utils/PackerSessionContext';
 import { db } from '../../utils/api/supabase';
 import { ProjectHeader } from '../../components/packer/attendance/ProjectHeader';
 import { AttendanceTable } from '../../components/packer/attendance/AttendanceTable';
 import { Clock } from '../../components/packer/attendance/Clock';
 import { ArrowLeft } from 'lucide-react-native';
+import { NavigationButtons } from '../../components/NavigationButtons';
 
 // Types based on the reference
 interface AttendancePeriod {
@@ -53,13 +55,16 @@ export default function AttendanceScreen() {
   const [saving, setSaving] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Parse parameters
-  const orderId = params.orderId as string;
+  // Parse parameters - get from session if not in params
+  const { session } = usePackerSession();
+  const orderId = (params.orderId as string) || session?.order_id;
 
   useEffect(() => {
-    loadData();
-    checkAfternoonTime();
-  }, []);
+    if (orderId) {
+      loadData();
+      checkAfternoonTime();
+    }
+  }, [orderId]);
 
   const loadData = async () => {
     try {
@@ -107,6 +112,14 @@ export default function AttendanceScreen() {
         };
       });
       setAttendance(initialAttendance);
+      
+      // Load existing attendance data from database
+await loadExistingAttendance(packersResponse, initialAttendance);
+
+      // Fetch project lead
+      if (orderData.project_lead_name) {
+        setProjectLead(orderData.project_lead_name);
+      }
 
     } catch (error) {
       console.error('Error in loadData:', error);
@@ -116,23 +129,99 @@ export default function AttendanceScreen() {
     }
   };
 
+  const loadExistingAttendance = async (packersResponse: any[], initialAttendance: AttendanceRecord) => {
+    try {
+      // Get today's date
+      const today = new Date().toISOString().split('T')[0];
+      
+      // Load existing attendance records for each packer
+      for (const packer of packersResponse) {
+        const packerId = packer.packer_id || packer.id;
+        const packerName = packer.full_name;
+        
+        // Get attendance records for this packer and order today
+        const { data: attendanceRecords, error } = await db.getPackerAttendanceByOrderAndDate(
+          orderId,
+          packerId,
+          today
+        );
+        
+        if (error) {
+          console.error(`Error loading attendance for ${packerName}:`, error);
+          continue;
+        }
+        
+        if (attendanceRecords && attendanceRecords.length > 0) {
+          // Process attendance records and update state
+          const morningRecord = attendanceRecords.find(r => r.shift_period === 'morning');
+          const afternoonRecord = attendanceRecords.find(r => r.shift_period === 'afternoon');
+          
+          if (morningRecord) {
+            initialAttendance[packerName].morning = {
+              present: morningRecord.status === 'present',
+              startTime: morningRecord.start_time ? formatTimeFromISO(morningRecord.start_time) : null,
+              endTime: morningRecord.end_time ? formatTimeFromISO(morningRecord.end_time) : null,
+              manualStart: false,
+              manualEnd: false
+            };
+          }
+          
+          if (afternoonRecord) {
+            initialAttendance[packerName].afternoon = {
+              present: afternoonRecord.status === 'present',
+              startTime: afternoonRecord.start_time ? formatTimeFromISO(afternoonRecord.start_time) : null,
+              endTime: afternoonRecord.end_time ? formatTimeFromISO(afternoonRecord.end_time) : null,
+              manualStart: false,
+              manualEnd: false
+            };
+          }
+          
+          // Check if toolbox briefing was completed
+          if (attendanceRecords.some(r => r.toolbox_briefing_completed)) {
+            setToolboxCompleted(true);
+          }
+        }
+      }
+      
+      // Update attendance state with loaded data
+      setAttendance(initialAttendance);
+      console.log('Existing attendance data loaded from database');
+      
+    } catch (error) {
+      console.error('Error loading existing attendance:', error);
+    }
+  };
+  
+  const formatTimeFromISO = (isoString: string): string => {
+    const date = new Date(isoString);
+    return date.toLocaleTimeString('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+  };
+
   const checkAfternoonTime = () => {
     const now = new Date();
     const hour = now.getHours();
     setIsAfternoon(hour >= 12);
   };
 
-  const togglePresence = (name: string, period: TimePeriod, isPresent: boolean) => {
-    setAttendance(prevAttendance => ({
-      ...prevAttendance,
-      [name]: {
-        ...prevAttendance[name],
-        [period]: {
-          ...prevAttendance[name][period],
-          present: isPresent,
-        }
-      }
-    }));
+  const isMorning = () => {
+    const now = new Date();
+    const hour = now.getHours();
+    return hour < 12;
+  };
+
+  const togglePresence = async (name: string, period: TimePeriod, isPresent: boolean) => {
+    if (isPresent) {
+      // When marking as present, automatically set start time and record attendance
+      await recordAttendanceForPacker(name, period);
+    } else {
+      // When marking as absent, record this in the database and update local state
+      await recordAbsentForPacker(name, period);
+    }
   };
 
   const toggleStartEndTime = (name: string, period: TimePeriod, timeType: 'start' | 'end') => {
@@ -149,23 +238,147 @@ export default function AttendanceScreen() {
     }));
   };
 
-  const bulkTogglePresence = (period: TimePeriod, isPresent: boolean) => {
-    const updatedAttendance = { ...attendance };
-    packers.forEach(name => {
-      updatedAttendance[name][period].present = isPresent;
-    });
-    setAttendance(updatedAttendance);
+  const recordAbsentForPacker = async (name: string, period: TimePeriod) => {
+    const packerData = packersData.find(p => p.full_name === name);
+    if (!packerData) {
+      Alert.alert('Error', 'Packer data not found');
+      return;
+    }
+
+    try {
+      // Log absent attendance record to database
+      const { error } = await db.logAttendance(
+        orderId,
+        packerData.packer_id || packerData.id,
+        period,
+        'absent',
+        null, // no start time for absent
+        null, // no end time for absent
+        toolboxCompleted,
+        false // not project start for absent
+      );
+
+      if (error) {
+        console.error('Error logging absent attendance:', error);
+        Alert.alert('Error', `Failed to record absent status for ${name}`);
+        return;
+      }
+
+      // Update local state to show absent
+      setAttendance(prevAttendance => ({
+        ...prevAttendance,
+        [name]: {
+          ...prevAttendance[name],
+          [period]: {
+            ...prevAttendance[name][period],
+            present: false,
+            startTime: null,
+            endTime: null
+          }
+        }
+      }));
+
+      console.log(`Absent attendance recorded for ${name} - ${period}`);
+    } catch (error) {
+      console.error('Error in recordAbsentForPacker:', error);
+      Alert.alert('Error', 'An unexpected error occurred');
+    }
   };
 
-  const bulkToggleTime = (period: TimePeriod, timeType: 'start' | 'end') => {
-    const newTime = getCurrentTime();
-    const updatedAttendance = { ...attendance };
-    packers.forEach(name => {
-      if (updatedAttendance[name][period].present) {
-        updatedAttendance[name][period][timeType === 'start' ? 'startTime' : 'endTime'] = newTime;
+  const recordAttendanceForPacker = async (name: string, period: TimePeriod) => {
+    const packerData = packersData.find(p => p.full_name === name);
+    if (!packerData) {
+      Alert.alert('Error', 'Packer data not found');
+      return;
+    }
+
+    try {
+      const currentTime = getCurrentTime();
+      const today = new Date().toISOString().split('T')[0];
+      const startTimeISO = new Date(`${today} ${currentTime}`).toISOString();
+      
+      // Log attendance record to database
+      const { error } = await db.logAttendance(
+        orderId,
+        packerData.packer_id || packerData.id,
+        period,
+        'present',
+        startTimeISO,
+        null, // no end time yet
+        toolboxCompleted,
+        period === 'morning' // is_project_start only for morning
+      );
+
+      if (error) {
+        console.error('Error logging attendance:', error);
+        Alert.alert('Error', `Failed to record attendance for ${name}`);
+        return;
       }
-    });
-    setAttendance(updatedAttendance);
+
+      // Update local state to show present with start time
+      setAttendance(prevAttendance => ({
+        ...prevAttendance,
+        [name]: {
+          ...prevAttendance[name],
+          [period]: {
+            ...prevAttendance[name][period],
+            present: true,
+            startTime: currentTime,
+            endTime: null
+          }
+        }
+      }));
+
+      console.log(`Attendance recorded for ${name} - ${period}`);
+    } catch (error) {
+      console.error('Error in recordAttendanceForPacker:', error);
+      Alert.alert('Error', 'An unexpected error occurred');
+    }
+  };
+
+  const bulkTogglePresence = async (period: TimePeriod, isPresent: boolean) => {
+    if (isPresent) {
+      // When bulk marking as present, record attendance for all packers
+      const promises = packers.map(name => recordAttendanceForPacker(name, period));
+      await Promise.all(promises);
+    } else {
+      // When bulk marking as absent, record absent status for all packers
+      const promises = packers.map(name => recordAbsentForPacker(name, period));
+      await Promise.all(promises);
+    }
+  };
+
+  const bulkToggleTime = async (period: TimePeriod, timeType: 'start' | 'end') => {
+    if (timeType === 'end') {
+      const newTime = new Date().toISOString();
+      const promises = packers.map(name => {
+        const packerData = packersData.find(p => p.full_name === name);
+        if (!packerData || !attendance[name][period].present || !attendance[name][period].startTime) {
+          return Promise.resolve(); // skip if no valid attendance to end
+        }
+        return db.updateAttendanceEndTimeByDetails(orderId, packerData.packer_id || packerData.id, period, newTime);
+      });
+      await Promise.all(promises);
+
+      const updatedAttendance = { ...attendance };
+      packers.forEach(name => {
+        if (updatedAttendance[name][period].present) {
+          updatedAttendance[name][period].endTime = getCurrentTime();
+        }
+      });
+      setAttendance(updatedAttendance);
+      console.log(`All ${period} end times recorded.`);
+    } else {
+      // Start time logic (though now it's automatic and just a text display)
+      const newTime = getCurrentTime();
+      const updatedAttendance = { ...attendance };
+      packers.forEach(name => {
+        if (updatedAttendance[name][period].present) {
+          updatedAttendance[name][period].startTime = newTime;
+        }
+      });
+      setAttendance(updatedAttendance);
+    }
   };
 
   const clearEndTime = (name: string, period: TimePeriod) => {
@@ -179,6 +392,116 @@ export default function AttendanceScreen() {
         }
       }
     }));
+  };
+
+  const recordNewAttendance = async (name: string, period: TimePeriod) => {
+    const packerData = packersData.find(p => p.full_name === name);
+    if (!packerData) {
+      Alert.alert('Error', 'Packer data not found');
+      return;
+    }
+
+    try {
+      const currentTime = getCurrentTime();
+      const today = new Date().toISOString().split('T')[0];
+      const startTimeISO = new Date(`${today} ${currentTime}`).toISOString();
+      
+      // First, try to update existing record to clear end time and set new start time
+      const { error: updateError } = await db.updateAttendanceForRestart(
+        orderId,
+        packerData.packer_id || packerData.id,
+        period,
+        startTimeISO
+      );
+
+      // If update fails, it means no existing record, so create new one
+      if (updateError) {
+        console.log('No existing record to update, creating new one');
+        const { error: insertError } = await db.logAttendance(
+          orderId,
+          packerData.packer_id || packerData.id,
+          period,
+          'present',
+          startTimeISO,
+          null, // no end time yet
+          toolboxCompleted,
+          false // not project start since it's a return
+        );
+
+        if (insertError) {
+          console.error('Error logging new attendance:', insertError);
+          Alert.alert('Error', 'Failed to record new attendance');
+          return;
+        }
+      }
+
+      // Update local state to show new start time
+      setAttendance(prevAttendance => ({
+        ...prevAttendance,
+        [name]: {
+          ...prevAttendance[name],
+          [period]: {
+            ...prevAttendance[name][period],
+            startTime: currentTime,
+            endTime: null,
+            present: true
+          }
+        }
+      }));
+
+      Alert.alert('Success', `New attendance recorded for ${name}`);
+    } catch (error) {
+      console.error('Error in recordNewAttendance:', error);
+      Alert.alert('Error', 'An unexpected error occurred');
+    }
+  };
+
+  const endWork = async (name: string, period: TimePeriod) => {
+    const packerData = packersData.find(p => p.full_name === name);
+    if (!packerData) {
+      Alert.alert('Error', 'Packer data not found');
+      return;
+    }
+
+    const attendanceEntry = attendance[name]?.[period];
+    if (!attendanceEntry?.present || !attendanceEntry?.startTime) {
+      Alert.alert('Error', 'No active attendance found to end');
+      return;
+    }
+
+    try {
+      const endTime = new Date().toISOString();
+      
+      const { error } = await db.updateAttendanceEndTimeByDetails(
+        orderId,
+        packerData.packer_id || packerData.id,
+        period,
+        endTime
+      );
+
+      if (error) {
+        console.error('Error updating end time:', error);
+        Alert.alert('Error', 'Failed to record end time');
+        return;
+      }
+
+      const endTimeFormatted = getCurrentTime();
+      setAttendance(prevAttendance => ({
+        ...prevAttendance,
+        [name]: {
+          ...prevAttendance[name],
+          [period]: {
+            ...prevAttendance[name][period],
+            endTime: endTimeFormatted,
+          }
+        }
+      }));
+
+      Alert.alert('Success', `Work ended for ${name}`);
+    } catch (error) {
+      console.error('Error in endWork:', error);
+      Alert.alert('Error', 'An unexpected error occurred');
+    }
   };
 
   const getCurrentTime = () => {
@@ -207,87 +530,26 @@ export default function AttendanceScreen() {
 
 
   const saveAttendance = async () => {
-    if (!order || packersData.length === 0) {
-      Alert.alert('Error', 'Missing order or packer data');
-      return false;
-    }
-
+    // Since attendance is now saved immediately when Present buttons are pressed,
+    // we just need to validate that required attendance exists and proceed
     setSaving(true);
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const attendancePromises = [];
+      // Check if at least one packer is marked as present
+      const hasPresentPackers = packers.some(name => {
+        const packerAttendance = attendance[name];
+        return packerAttendance?.morning.present === true || packerAttendance?.afternoon.present === true;
+      });
 
-      // Create attendance records for each packer and period
-      for (const packerName of packers) {
-        const packerData = packersData.find(p => p.full_name === packerName);
-        if (!packerData) continue;
-
-        const packerAttendance = attendance[packerName];
-        if (!packerAttendance) continue;
-
-        // Save morning attendance if present
-        if (packerAttendance.morning.present === true) {
-          const morningStartTime = packerAttendance.morning.startTime 
-            ? new Date(`${today} ${packerAttendance.morning.startTime}`).toISOString()
-            : null;
-          const morningEndTime = packerAttendance.morning.endTime 
-            ? new Date(`${today} ${packerAttendance.morning.endTime}`).toISOString()
-            : null;
-
-          attendancePromises.push(
-            db.logAttendance(
-              orderId,
-              packerData.packer_id || packerData.id,
-              'morning',
-              'present',
-              morningStartTime,
-              morningEndTime,
-              toolboxCompleted,
-              true // is_project_start
-            )
-          );
-        }
-
-        // Save afternoon attendance if present
-        if (packerAttendance.afternoon.present === true) {
-          const afternoonStartTime = packerAttendance.afternoon.startTime 
-            ? new Date(`${today} ${packerAttendance.afternoon.startTime}`).toISOString()
-            : null;
-          const afternoonEndTime = packerAttendance.afternoon.endTime 
-            ? new Date(`${today} ${packerAttendance.afternoon.endTime}`).toISOString()
-            : null;
-
-          attendancePromises.push(
-            db.logAttendance(
-              orderId,
-              packerData.packer_id || packerData.id,
-              'afternoon',
-              'present',
-              afternoonStartTime,
-              afternoonEndTime,
-              toolboxCompleted,
-              false // is_project_start
-            )
-          );
-        }
-      }
-
-      // Execute all attendance logging promises
-      const results = await Promise.all(attendancePromises);
-      
-      // Check for errors
-      const errors = results.filter(result => result.error);
-      if (errors.length > 0) {
-        console.error('Attendance logging errors:', errors);
-        Alert.alert('Warning', 'Some attendance records may not have been saved properly');
+      if (!hasPresentPackers) {
+        Alert.alert('Warning', 'No packers marked as present. Please mark attendance before continuing.');
         return false;
       }
 
-      console.log('Attendance saved successfully');
+      console.log('Attendance validation successful - records already saved when Present buttons were pressed');
       return true;
     } catch (error) {
-      console.error('Error saving attendance:', error);
-      Alert.alert('Error', 'Failed to save attendance records');
+      console.error('Error validating attendance:', error);
+      Alert.alert('Error', 'An unexpected error occurred');
       return false;
     } finally {
       setSaving(false);
@@ -371,6 +633,9 @@ export default function AttendanceScreen() {
         </View>
       </View>
 
+      {/* Navigation Buttons */}
+      <NavigationButtons currentScreen="attendance" />
+
       {/* Main Content */}
       <View className="flex-1 mx-4 mb-4">
         <View className="bg-white rounded-lg shadow-md flex-1">
@@ -395,6 +660,7 @@ export default function AttendanceScreen() {
               names={packers}
               attendance={attendance}
               isAfternoon={isAfternoon}
+              isMorning={isMorning()}
               onPresenceToggle={togglePresence}
               onToggleTime={toggleStartEndTime}
               onLongPress={handleLongPress}
@@ -402,6 +668,8 @@ export default function AttendanceScreen() {
               onClearEndTime={clearEndTime}
               onBulkPresenceToggle={bulkTogglePresence}
               onBulkTimeToggle={bulkToggleTime}
+              onEndWork={endWork}
+              onRecordNewAttendance={recordNewAttendance}
             />
           </View>
 
@@ -409,7 +677,20 @@ export default function AttendanceScreen() {
           <View className="p-4 bg-gray-50 border-t border-gray-200 rounded-b-lg">
             {!toolboxCompleted && (
               <TouchableOpacity
-                onPress={() => setToolboxCompleted(true)}
+                onPress={() => {
+                  // Check if at least one packer is marked as present
+                  const hasPresentPackers = packers.some(name => {
+                    const packerAttendance = attendance[name];
+                    return packerAttendance?.morning.present === true || packerAttendance?.afternoon.present === true;
+                  });
+
+                  if (!hasPresentPackers) {
+                    Alert.alert('Warning', 'Please fill attendance first! At least one packer must be marked as present before confirming toolbox briefing.');
+                    return;
+                  }
+
+                  setToolboxCompleted(true);
+                }}
                 className="mb-4 py-3 px-6 rounded-lg bg-orange-500"
               >
                 <Text className="text-center font-semibold text-white">

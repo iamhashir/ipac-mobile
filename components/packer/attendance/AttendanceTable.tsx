@@ -27,6 +27,7 @@ interface AttendanceTableProps {
   names: string[];
   attendance: AttendanceRecord;
   isAfternoon: boolean;
+  isMorning: boolean;
   onPresenceToggle: (name: string, period: TimePeriod, isPresent: boolean) => void;
   onToggleTime: (name: string, period: TimePeriod, timeType: 'start' | 'end') => void;
   onLongPress: (name: string, period: TimePeriod, timeType: 'start' | 'end') => void;
@@ -34,12 +35,15 @@ interface AttendanceTableProps {
   onClearEndTime: (name: string, period: TimePeriod) => void;
   onBulkPresenceToggle: (period: TimePeriod, isPresent: boolean) => void;
   onBulkTimeToggle: (period: TimePeriod, timeType: 'start' | 'end') => void;
+  onEndWork?: (name: string, period: TimePeriod) => void;
+  onRecordNewAttendance?: (name: string, period: TimePeriod) => void;
 }
 
 export const AttendanceTable: React.FC<AttendanceTableProps> = ({
   names,
   attendance,
   isAfternoon,
+  isMorning,
   onPresenceToggle,
   onToggleTime,
   onLongPress,
@@ -47,6 +51,8 @@ export const AttendanceTable: React.FC<AttendanceTableProps> = ({
   onClearEndTime,
   onBulkPresenceToggle,
   onBulkTimeToggle,
+  onEndWork,
+  onRecordNewAttendance,
 }) => {
   return (
     <View className="flex-1" style={{ minWidth: 800 }}>
@@ -58,11 +64,12 @@ export const AttendanceTable: React.FC<AttendanceTableProps> = ({
           <ScrollView showsVerticalScrollIndicator={false} className="rounded-md border-3 border-gray-300">
             <AttendanceTableHeader 
               isAfternoon={isAfternoon}
+              isMorning={isMorning}
               onBulkPresenceToggle={onBulkPresenceToggle}
               onBulkTimeToggle={onBulkTimeToggle}
             />
             {names.map((name) => (
-              <AttendanceRow
+                <AttendanceRow
                 key={name}
                 name={name}
                 attendance={attendance[name] || {
@@ -82,11 +89,14 @@ export const AttendanceTable: React.FC<AttendanceTableProps> = ({
                   }
                 }}
                 isAfternoon={isAfternoon}
+                isMorning={isMorning}
                 onPresenceToggle={onPresenceToggle}
                 onToggleTime={onToggleTime}
                 onLongPress={onLongPress}
                 onMouseUp={onMouseUp}
                 onClearEndTime={onClearEndTime}
+                onEndWork={onEndWork}
+                onRecordNewAttendance={onRecordNewAttendance}
               />
             ))}
           </ScrollView>

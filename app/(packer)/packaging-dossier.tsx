@@ -4,8 +4,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
 import { db } from '../../utils/api/supabase';
-import { EndWork } from '../../components/packer/EndWork';
 import { ArrowLeft } from 'lucide-react-native';
+import { NavigationButtons } from '../../components/NavigationButtons';
 
 interface Order {
   id: string;
@@ -129,6 +129,9 @@ export default function PackagingDossier() {
         </TouchableOpacity>
       </View>
 
+      {/* Navigation Buttons */}
+      <NavigationButtons currentScreen="packaging-dossier" />
+
       {/* Main Content */}
       <ScrollView className="flex-1 p-4">
         {order && (
@@ -150,25 +153,12 @@ export default function PackagingDossier() {
           </Text>
         </View>
 
-        {/* Packers End Work Section */}
+        {/* Note: End work functionality has been moved to the attendance screen */}
         <View className="bg-white rounded-lg shadow-md p-4 mb-4">
-          <Text className="text-lg font-semibold mb-4">Mark End of Work</Text>
-          <Text className="text-gray-600 mb-4">
-            Mark when you finish your work for the current shift ({getCurrentShift()}):
+          <Text className="text-lg font-semibold mb-2">Work Management</Text>
+          <Text className="text-gray-700">
+            To mark the end of your work, please return to the attendance screen using the back button.
           </Text>
-          
-          {packers.map((packer) => (
-            <View key={packer.id} className="flex-row justify-between items-center py-2 border-b border-gray-200">
-              <Text className="font-medium">{packer.full_name}</Text>
-              <EndWork
-                orderId={orderId}
-                packerId={packer.packer_id || packer.id}
-                packerName={packer.full_name}
-                shiftPeriod={getCurrentShift()}
-                onUpdate={handleRefresh}
-              />
-            </View>
-          ))}
         </View>
       </ScrollView>
     </SafeAreaView>

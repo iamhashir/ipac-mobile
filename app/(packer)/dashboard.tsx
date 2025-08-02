@@ -3,7 +3,9 @@ import { View, Text, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
+import { usePackerSession } from '../../utils/PackerSessionContext';
 import { db } from '../../utils/api/supabase';
+import { NavigationButtons } from '../../components/NavigationButtons';
 
 interface Order {
   id: string;
@@ -25,6 +27,7 @@ interface Packer {
 
 export default function PackerDashboard() {
   const { profile, signOut } = useAuth();
+  const { createSession, session } = usePackerSession();
   const router = useRouter();
   const [availableOrders, setAvailableOrders] = useState<Order[]>([]);
   const [allPackers, setAllPackers] = useState<Packer[]>([]);
@@ -36,6 +39,46 @@ export default function PackerDashboard() {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Check for existing session and restore state
+  useEffect(() => {
+    if (session && session.order_id) {
+      // User has an active session, restore their previous selections
+      restoreSessionState();
+    }
+  }, [session]);
+
+  const restoreSessionState = async () => {
+    if (!session || !session.order_id) return;
+    
+    try {
+      // Set the selected order from session
+      setSelectedOrder(session.order_id);
+      
+      // Load the packers assigned to this order
+      const { data: orderPackers, error } = await db.getOrderPackers(session.order_id);
+      if (error) {
+        console.error('Error loading session packers:', error);
+        return;
+      }
+      
+      // Set selected packers from the order
+      if (orderPackers && orderPackers.length > 0) {
+        const packerIds = orderPackers.map(p => p.packer_id || p.id);
+        setSelectedPackers(packerIds);
+        
+        // Find project lead if exists
+        const leadPacker = orderPackers.find(p => p.is_project_lead);
+        if (leadPacker) {
+          setProjectLead(leadPacker.packer_id || leadPacker.id);
+        }
+      }
+      
+      console.log('Session state restored for order:', session.order_id);
+    } catch (error) {
+      console.error('Error restoring session state:', error);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -119,6 +162,21 @@ export default function PackerDashboard() {
         }
       }
 
+      // Get order details for session creation
+      const { data: orderData, error: orderError } = await db.getOrderById(selectedOrder);
+      if (orderError || !orderData) {
+        console.error('Error getting order details:', orderError);
+        Alert.alert('Error', 'Failed to get project details');
+        return;
+      }
+
+      // Create session to track progress
+      const sessionCreated = await createSession(selectedOrder, orderData);
+      if (!sessionCreated) {
+        console.error('Failed to create session, but continuing...');
+        // Don't block navigation if session creation fails
+      }
+
       // Navigate to attendance screen
       router.push({
         pathname: '/(packer)/attendance',
@@ -199,6 +257,9 @@ export default function PackerDashboard() {
         </View>
       </View>
 
+      {/* Navigation Buttons */}
+      <NavigationButtons currentScreen="dashboard" />
+
       {/* Main Content */}
       <View className="flex-1 p-4">
         <View className="flex-row flex-1 space-x-4">
@@ -211,7 +272,7 @@ export default function PackerDashboard() {
             </View>
             
             <ScrollView className="flex-1 p-4">
-              {availableOrders.length === 0 ? (
+{availableOrders.length === 0 ? (
                 <Text className="text-gray-500 text-center py-8">
                   No projects available
                 </Text>
@@ -219,12 +280,15 @@ export default function PackerDashboard() {
                 availableOrders.map((order) => (
                   <TouchableOpacity
                     key={order.id}
-                    onPress={() => setSelectedOrder(order.id)}
+                    onPress={() => order.production_status !== 'in_progress' ? setSelectedOrder(order.id) : null}
                     className={`mb-2 p-3 rounded-lg border ${
                       selectedOrder === order.id
                         ? 'bg-primary-50 border-primary-500'
+                        : order.production_status === 'in_progress'
+                        ? 'bg-gray-100 border-gray-300 opacity-50'
                         : 'bg-gray-50 border-gray-200'
                     }`}
+                    disabled={order.production_status === 'in_progress'}
                   >
                     <View className="flex-row items-center">
                       <View className={`w-4 h-4 rounded mr-3 ${

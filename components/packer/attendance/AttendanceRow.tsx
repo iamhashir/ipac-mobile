@@ -22,6 +22,7 @@ interface AttendanceRowProps {
   name: string;
   attendance: AttendanceEntry;
   isAfternoon: boolean;
+  isMorning: boolean;
   onPresenceToggle: (
     name: string,
     period: TimePeriod,
@@ -39,17 +40,22 @@ interface AttendanceRowProps {
   ) => void;
   onMouseUp: () => void;
   onClearEndTime: (name: string, period: TimePeriod) => void;
+  onEndWork?: (name: string, period: TimePeriod) => void;
+  onRecordNewAttendance?: (name: string, period: TimePeriod) => void;
 }
 
 export const AttendanceRow: React.FC<AttendanceRowProps> = ({
   name,
   attendance,
   isAfternoon,
+  isMorning,
   onPresenceToggle,
   onToggleTime,
   onLongPress,
   onMouseUp,
   onClearEndTime,
+  onEndWork,
+  onRecordNewAttendance,
 }) => {
   return (
     <View
@@ -101,20 +107,27 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
                     attendance.morning.present === false
                       ? "bg-red-600 border-red-600"
                       : "border-red-300 bg-white"
-                  }`}
+                  } ${isAfternoon ? "opacity-50" : ""}`}
                   onPress={() => onPresenceToggle(name, "morning", false)}
+                  disabled={isAfternoon}
                 >
                   <XCircle
                     size={16}
                     color={
-                      attendance.morning.present === false ? "white" : "#DC2626"
+                      attendance.morning.present === false 
+                        ? "white" 
+                        : isAfternoon 
+                          ? "#9CA3AF" 
+                          : "#DC2626"
                     }
                   />
                   <Text
                     className={`ml-1 text-xs ${
                       attendance.morning.present === false
                         ? "text-white"
-                        : "text-red-600"
+                        : isAfternoon
+                          ? "text-gray-400"
+                          : "text-red-600"
                     }`}
                   >
                     Absent
@@ -126,7 +139,7 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
 
           {/* Morning Start Time */}
           <View className="flex-1 p-2 border-r border-gray-300">
-            <TouchableOpacity
+            <View
               className={`p-2 rounded flex items-center justify-center ${
                 !attendance.morning.present || isAfternoon
                   ? "bg-gray-100"
@@ -134,9 +147,6 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
                   ? "bg-green-700"
                   : "bg-blue-100"
               }`}
-              disabled={!attendance.morning.present || isAfternoon}
-              onPress={() => onToggleTime(name, "morning", "start")}
-              onLongPress={() => onLongPress(name, "morning", "start")}
             >
               {attendance.morning.startTime ? (
                 <Text className="text-lg font-bold text-white">
@@ -150,10 +160,10 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
                       : "text-blue-600"
                   }`}
                 >
-                  Start
+                  Start (Auto)
                 </Text>
               )}
-            </TouchableOpacity>
+            </View>
           </View>
 
           {/* Morning End Time */}
@@ -174,7 +184,11 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
                   !attendance.morning.startTime ||
                   isAfternoon
                 }
-                onPress={() => onToggleTime(name, "morning", "end")}
+onPress={() => {
+                  if (onEndWork && !attendance.morning.endTime) {
+                    onEndWork(name, "morning");
+                  }
+                }}
                 onLongPress={() => onLongPress(name, "morning", "end")}
               >
                 {attendance.morning.endTime ? (
@@ -199,7 +213,11 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
               {attendance.morning.endTime && !isAfternoon && (
                 <TouchableOpacity
                   className="p-2 bg-red-100 rounded"
-                  onPress={() => onClearEndTime(name, "morning")}
+onPress={() => {
+                    if (onRecordNewAttendance) {
+                      onRecordNewAttendance(name, "morning");
+                    }
+                  }}
                 >
                   <XCircle size={16} color="#DC2626" />
                 </TouchableOpacity>
@@ -221,22 +239,27 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
                     attendance.afternoon.present === true
                       ? "bg-blue-500 border-blue-500"
                       : "border-blue-300 bg-white"
-                  }`}
+                  } ${isMorning ? "opacity-50" : ""}`}
                   onPress={() => onPresenceToggle(name, "afternoon", true)}
+                  disabled={isMorning}
                 >
                   <CheckCircle
                     size={16}
                     color={
                       attendance.afternoon.present === true
                         ? "white"
-                        : "#3B82F6"
+                        : isMorning
+                          ? "#9CA3AF"
+                          : "#3B82F6"
                     }
                   />
                   <Text
                     className={`ml-1 text-xs ${
                       attendance.afternoon.present === true
                         ? "text-white"
-                        : "text-blue-600"
+                        : isMorning
+                          ? "text-gray-400"
+                          : "text-blue-600"
                     }`}
                   >
                     Present
@@ -248,22 +271,27 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
                     attendance.afternoon.present === false
                       ? "bg-red-600 border-red-600"
                       : "border-red-300 bg-white"
-                  }`}
+                  } ${isMorning ? "opacity-50" : ""}`}
                   onPress={() => onPresenceToggle(name, "afternoon", false)}
+                  disabled={isMorning}
                 >
                   <XCircle
                     size={16}
                     color={
                       attendance.afternoon.present === false
                         ? "white"
-                        : "#DC2626"
+                        : isMorning
+                          ? "#9CA3AF"
+                          : "#DC2626"
                     }
                   />
                   <Text
                     className={`ml-1 text-xs ${
                       attendance.afternoon.present === false
                         ? "text-white"
-                        : "text-red-600"
+                        : isMorning
+                          ? "text-gray-400"
+                          : "text-red-600"
                     }`}
                   >
                     Absent
@@ -275,17 +303,14 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
 
           {/* Afternoon Start Time */}
           <View className="flex-1 p-2 border-r border-gray-300">
-            <TouchableOpacity
+            <View
               className={`w-full p-2 rounded flex items-center justify-center ${
-                !attendance.afternoon.present
+                !attendance.afternoon.present || isMorning
                   ? "bg-gray-100"
                   : attendance.afternoon.startTime
                   ? "bg-green-700"
                   : "bg-blue-100"
               }`}
-              disabled={!attendance.afternoon.present}
-              onPress={() => onToggleTime(name, "afternoon", "start")}
-              onLongPress={() => onLongPress(name, "afternoon", "start")}
             >
               {attendance.afternoon.startTime ? (
                 <Text className="text-lg font-bold text-white">
@@ -294,15 +319,15 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
               ) : (
                 <Text
                   className={`${
-                    !attendance.afternoon.present
+                    !attendance.afternoon.present || isMorning
                       ? "text-gray-500"
                       : "text-blue-600"
                   }`}
                 >
-                  Start
+                  Start (Auto)
                 </Text>
               )}
-            </TouchableOpacity>
+            </View>
           </View>
 
           {/* Afternoon End Time */}
@@ -311,7 +336,8 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
               <TouchableOpacity
                 className={`flex-grow p-2 rounded flex items-center justify-center ${
                   !attendance.afternoon.present ||
-                  !attendance.afternoon.startTime
+                  !attendance.afternoon.startTime ||
+                  isMorning
                     ? "bg-gray-100"
                     : attendance.afternoon.endTime
                     ? "bg-green-700"
@@ -319,9 +345,14 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
                 }`}
                 disabled={
                   !attendance.afternoon.present ||
-                  !attendance.afternoon.startTime
+                  !attendance.afternoon.startTime ||
+                  isMorning
                 }
-                onPress={() => onToggleTime(name, "afternoon", "end")}
+onPress={() => {
+                  if (onEndWork && !attendance.afternoon.endTime) {
+                    onEndWork(name, "afternoon");
+                  }
+                }}
                 onLongPress={() => onLongPress(name, "afternoon", "end")}
               >
                 {attendance.afternoon.endTime ? (
@@ -332,7 +363,8 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
                   <Text
                     className={`${
                       !attendance.afternoon.present ||
-                      !attendance.afternoon.startTime
+                      !attendance.afternoon.startTime ||
+                      isMorning
                         ? "text-gray-500"
                         : "text-blue-600"
                     }`}
@@ -342,10 +374,14 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
                 )}
               </TouchableOpacity>
 
-              {attendance.afternoon.endTime && (
+              {attendance.afternoon.endTime && !isMorning && (
                 <TouchableOpacity
                   className="p-2 bg-red-100 rounded border-b-2 border-gray-200"
-                  onPress={() => onClearEndTime(name, "afternoon")}
+onPress={() => {
+                    if (onRecordNewAttendance) {
+                      onRecordNewAttendance(name, "afternoon");
+                    }
+                  }}
                 >
                   <XCircle size={16} color="#DC2626" />
                 </TouchableOpacity>

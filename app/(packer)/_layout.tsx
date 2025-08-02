@@ -1,3 +1,4 @@
+
 import React, { useEffect } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
@@ -62,6 +63,7 @@ export default function PackerLayout() {
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="dashboard" />
       <Stack.Screen name="attendance" />
+      <Stack.Screen name="packaging-dossier" />
     </Stack>
   );
 }
