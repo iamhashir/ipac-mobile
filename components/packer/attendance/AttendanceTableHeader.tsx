@@ -91,7 +91,7 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
             }`}>
               <Clock size={16} color={isAfternoon ? "#9CA3AF" : "#2563EB"} />
               <Text
-                className={`ml-1 text-xs${
+                className={`ml-1 text-xs ${
                   isAfternoon ? "text-gray-400" : "text-blue-600"
                 }`}
               >
@@ -138,7 +138,7 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
                 </TouchableOpacity>
                 <TouchableOpacity
                   className={`bg-red-50 rounded-full p-1 ${
-                    isMorning ? "opacity-50" : "
+                    isMorning ? "opacity-50" : ""
                   }`}
                   onPress={() => onBulkPresenceToggle("afternoon", false)}
                   disabled={isMorning}
@@ -161,9 +161,9 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
           </View>
 
           <View className="flex-1 items-center justify-center p-2">
-            <TouchableOpacity
+              <TouchableOpacity
               className={`bg-blue-50 rounded-full p-1 flex-row ${
-                isMorning ? "opacity-50" : "
+                isMorning ? "opacity-50" : ""
               }`}
               onPress={() => onBulkTimeToggle("afternoon", "end")}
               disabled={isMorning}
