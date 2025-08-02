@@ -3,11 +3,15 @@ import { View, Text, TextInput, TouchableOpacity, Alert, KeyboardAvoidingView, P
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
+import { Eye, EyeOff } from 'lucide-react-native';
+import { ErrorAlert } from '../../components/ui/Alert';
 
 export default function LoginScreen() {
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [errorAlert, setErrorAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
   const { user, profile, loading: authLoading, signIn } = useAuth();
   const router = useRouter();
 
@@ -28,17 +32,20 @@ export default function LoginScreen() {
   }, [user, profile, authLoading, router]);
 
   const handleLogin = async () => {
-    if (!email || !password) {
-      Alert.alert('Error', 'Please enter both email and password');
+    if (!username || !password) {
+      setErrorAlert({visible: true, title: 'Missing Credentials', message: 'Please enter both username and password'});
       return;
     }
 
     setLoading(true);
     
     try {
-      console.log('🔐 Attempting login with:', email);
+      console.log('🔐 Attempting login with username:', username);
       
-      const { data, error } = await signIn(email, password);
+      // For Supabase auth, we need to convert username to email format
+      // Assuming username maps to email in your system
+      const emailForAuth = username.includes('@') ? username : `${username}@ipac.local`;
+      const { data, error } = await signIn(emailForAuth, password);
       
       console.log('🔐 Login response:', { 
         user: data?.user?.email, 
@@ -48,17 +55,17 @@ export default function LoginScreen() {
       
       if (error) {
         console.error('🚫 Login error:', error);
-        Alert.alert('Login Failed', error.message || 'An error occurred during login');
+        setErrorAlert({visible: true, title: 'Login Failed', message: error.message || 'Invalid username or password'});
       } else if (data?.user) {
         console.log('✅ Login successful, auth context will handle navigation');
         // Navigation will be handled by the index page when auth state updates
         // Clear the form
-        setEmail('');
+        setUsername('');
         setPassword('');
       }
     } catch (error) {
       console.error('💥 Unexpected login error:', error);
-      Alert.alert('Login Error', 'An unexpected error occurred. Please try again.');
+      setErrorAlert({visible: true, title: 'Login Error', message: 'An unexpected error occurred. Please try again.'});
     } finally {
       setLoading(false);
     }
@@ -81,18 +88,25 @@ export default function LoginScreen() {
             </Text>
           </View>
 
+          {/* Error Alert */}
+          <ErrorAlert
+            visible={errorAlert.visible}
+            title={errorAlert.title}
+            message={errorAlert.message}
+            onClose={() => setErrorAlert({visible: false, title: ''})}
+          />
+
           {/* Login Form */}
           <View className="space-y-6">
             <View>
               <Text className="text-gray-700 text-base font-medium mb-2">
-                Email Address
+                Username
               </Text>
               <TextInput
                 className="bg-white border border-gray-300 rounded-lg px-4 py-3 text-base"
-                placeholder="Enter your email"
-                value={email}
-                onChangeText={setEmail}
-                keyboardType="email-address"
+                placeholder="Enter your username"
+                value={username}
+                onChangeText={setUsername}
                 autoCapitalize="none"
                 autoCorrect={false}
               />
@@ -102,13 +116,25 @@ export default function LoginScreen() {
               <Text className="text-gray-700 text-base font-medium mb-2">
                 Password
               </Text>
-              <TextInput
-                className="bg-white border border-gray-300 rounded-lg px-4 py-3 text-base"
-                placeholder="Enter your password"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-              />
+              <View className="relative">
+                <TextInput
+                  className="bg-white border border-gray-300 rounded-lg px-4 py-3 pr-12 text-base"
+                  placeholder="Enter your password"
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry={!showPassword}
+                />
+                <TouchableOpacity
+                  className="absolute right-3 top-3"
+                  onPress={() => setShowPassword(!showPassword)}
+                >
+                  {showPassword ? (
+                    <EyeOff size={20} color="#6B7280" />
+                  ) : (
+                    <Eye size={20} color="#6B7280" />
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
 
             <TouchableOpacity

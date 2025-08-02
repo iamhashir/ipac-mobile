@@ -10,6 +10,7 @@ import { AttendanceTable } from '../../components/packer/attendance/AttendanceTa
 import { Clock } from '../../components/packer/attendance/Clock';
 import { ArrowLeft } from 'lucide-react-native';
 import { NavigationButtons } from '../../components/NavigationButtons';
+import { SuccessAlert, ErrorAlert } from '../../components/ui/Alert';
 
 // Types based on the reference
 interface AttendancePeriod {
@@ -53,6 +54,8 @@ export default function AttendanceScreen() {
   const [toolboxCompleted, setToolboxCompleted] = useState(false);
   const [isAfternoon, setIsAfternoon] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [successAlert, setSuccessAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
+  const [errorAlert, setErrorAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Parse parameters - get from session if not in params
@@ -72,7 +75,7 @@ export default function AttendanceScreen() {
       const { data: orderData, error: orderError } = await db.getOrderById(orderId);
       if (orderError) {
         console.error('Error loading order:', orderError);
-        Alert.alert('Error', 'Failed to load order details');
+        setErrorAlert({visible: true, title: 'Load Error', message: 'Failed to load order details'});
         return;
       }
       setOrder(orderData);
@@ -82,7 +85,7 @@ export default function AttendanceScreen() {
       const { data: packersResponse, error: packersError } = await db.getOrderPackers(orderId);
       if (packersError) {
         console.error('Error loading packers:', packersError);
-        Alert.alert('Error', 'Failed to load packer details');
+        setErrorAlert({visible: true, title: 'Load Error', message: 'Failed to load packer details'});
         return;
       }
 
@@ -123,7 +126,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
 
     } catch (error) {
       console.error('Error in loadData:', error);
-      Alert.alert('Error', 'An unexpected error occurred');
+      setErrorAlert({visible: true, title: 'Unexpected Error', message: 'An unexpected error occurred'});
     } finally {
       setLoading(false);
     }
@@ -241,7 +244,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
   const recordAbsentForPacker = async (name: string, period: TimePeriod) => {
     const packerData = packersData.find(p => p.full_name === name);
     if (!packerData) {
-      Alert.alert('Error', 'Packer data not found');
+      setErrorAlert({visible: true, title: 'Data Error', message: 'Packer data not found'});
       return;
     }
 
@@ -260,7 +263,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
 
       if (error) {
         console.error('Error logging absent attendance:', error);
-        Alert.alert('Error', `Failed to record absent status for ${name}`);
+        setErrorAlert({visible: true, title: 'Record Error', message: `Failed to record absent status for ${name}`});
         return;
       }
 
@@ -281,7 +284,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       console.log(`Absent attendance recorded for ${name} - ${period}`);
     } catch (error) {
       console.error('Error in recordAbsentForPacker:', error);
-      Alert.alert('Error', 'An unexpected error occurred');
+      setErrorAlert({visible: true, title: 'Unexpected Error', message: 'An unexpected error occurred'});
     }
   };
 
@@ -624,6 +627,22 @@ await loadExistingAttendance(packersResponse, initialAttendance);
 
       {/* Navigation Buttons */}
       <NavigationButtons currentScreen="attendance" />
+
+      {/* Alert Messages */}
+      <View className="px-4">
+        <SuccessAlert
+          visible={successAlert.visible}
+          title={successAlert.title}
+          message={successAlert.message}
+          onClose={() => setSuccessAlert({visible: false, title: ''})}
+        />
+        <ErrorAlert
+          visible={errorAlert.visible}
+          title={errorAlert.title}
+          message={errorAlert.message}
+          onClose={() => setErrorAlert({visible: false, title: ''})}
+        />
+      </View>
 
       {/* Main Content */}
       <View className="flex-1 mx-4 mb-4">

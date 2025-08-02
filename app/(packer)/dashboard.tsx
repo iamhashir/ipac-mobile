@@ -6,6 +6,7 @@ import { useAuth } from '../../utils/AuthContext';
 import { usePackerSession } from '../../utils/PackerSessionContext';
 import { db } from '../../utils/api/supabase';
 import { NavigationButtons } from '../../components/NavigationButtons';
+import { SuccessAlert, ErrorAlert } from '../../components/ui/Alert';
 
 interface Order {
   id: string;
@@ -35,6 +36,8 @@ export default function PackerDashboard() {
   const [selectedPackers, setSelectedPackers] = useState<string[]>([]);
   const [projectLead, setProjectLead] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [successAlert, setSuccessAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
+  const [errorAlert, setErrorAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
 
   useEffect(() => {
     loadData();
@@ -149,7 +152,7 @@ export default function PackerDashboard() {
       const { error: assignError } = await db.assignPackersToOrder(selectedOrder, selectedPackers);
       
       if (assignError) {
-        Alert.alert('Error', 'Failed to assign team to project');
+        setErrorAlert({visible: true, title: 'Assignment Failed', message: 'Failed to assign team to project'});
         return;
       }
 
@@ -166,7 +169,7 @@ export default function PackerDashboard() {
       const { data: orderData, error: orderError } = await db.getOrderById(selectedOrder);
       if (orderError || !orderData) {
         console.error('Error getting order details:', orderError);
-        Alert.alert('Error', 'Failed to get project details');
+        setErrorAlert({visible: true, title: 'Project Error', message: 'Failed to get project details'});
         return;
       }
 
@@ -174,10 +177,11 @@ export default function PackerDashboard() {
       const { data: teamSessions, error: sessionError } = await db.createTeamSessions(selectedOrder, orderData, selectedPackers);
       if (sessionError || !teamSessions) {
         console.error('Failed to create team sessions:', sessionError);
-        Alert.alert('Warning', 'Failed to create team sessions, but you can continue');
+        setErrorAlert({visible: true, title: 'Session Warning', message: 'Failed to create team sessions, but you can continue'});
         // Don't block navigation if session creation fails
       } else {
         console.log(`Created ${teamSessions.length} team sessions for selected packers`);
+        setSuccessAlert({visible: true, title: 'Team Assigned Successfully', message: `Created sessions for ${teamSessions.length} team members`});
         
         // Update the current user's session in context if they're part of the selected team
         if (profile?.id && selectedPackers.includes(profile.id)) {
@@ -198,7 +202,7 @@ export default function PackerDashboard() {
       });
     } catch (error) {
       console.error('Error assigning team:', error);
-      Alert.alert('Error', 'An unexpected error occurred');
+      setErrorAlert({visible: true, title: 'Unexpected Error', message: 'An unexpected error occurred'});
     }
   };
 
@@ -207,14 +211,14 @@ export default function PackerDashboard() {
       const { error } = await signOut();
       if (error) {
         console.error('Sign out error:', error);
-        Alert.alert('Error', 'Failed to sign out');
+        setErrorAlert({visible: true, title: 'Sign Out Failed', message: 'Failed to sign out'});
       } else {
         // Force navigation to login after successful sign out
         router.replace('/auth/login');
       }
     } catch (error) {
       console.error('Unexpected sign out error:', error);
-      Alert.alert('Error', 'An unexpected error occurred during sign out');
+      setErrorAlert({visible: true, title: 'Sign Out Error', message: 'An unexpected error occurred during sign out'});
     }
   };
 
@@ -271,6 +275,22 @@ export default function PackerDashboard() {
 
       {/* Navigation Buttons */}
       <NavigationButtons currentScreen="dashboard" />
+
+      {/* Alert Messages */}
+      <View className="px-4">
+        <SuccessAlert
+          visible={successAlert.visible}
+          title={successAlert.title}
+          message={successAlert.message}
+          onClose={() => setSuccessAlert({visible: false, title: ''})}
+        />
+        <ErrorAlert
+          visible={errorAlert.visible}
+          title={errorAlert.title}
+          message={errorAlert.message}
+          onClose={() => setErrorAlert({visible: false, title: ''})}
+        />
+      </View>
 
       {/* Main Content */}
       <View className="flex-1 p-4">
@@ -418,26 +438,40 @@ export default function PackerDashboard() {
           </View>
         </View>
 
-        {/* Next Button */}
-        <View className="mt-4 flex-row justify-end">
-          <TouchableOpacity
-            onPress={handleNext}
-            disabled={!selectedOrder || selectedPackers.length === 0}
-            className={`px-6 py-3 rounded-lg ${
-              selectedOrder && selectedPackers.length > 0
-                ? 'bg-primary-500'
-                : 'bg-gray-300'
-            }`}
-          >
-            <Text className={`font-semibold ${
-              selectedOrder && selectedPackers.length > 0
-                ? 'text-white'
-                : 'text-gray-500'
-            }`}>
-              ▷ Next
+        {/* Next Button - Only show if no active session */}
+        {!session && (
+          <View className="mt-4 flex-row justify-end">
+            <TouchableOpacity
+              onPress={handleNext}
+              disabled={!selectedOrder || selectedPackers.length === 0}
+              className={`px-6 py-3 rounded-lg ${
+                selectedOrder && selectedPackers.length > 0
+                  ? 'bg-primary-500'
+                  : 'bg-gray-300'
+              }`}
+            >
+              <Text className={`font-semibold ${
+                selectedOrder && selectedPackers.length > 0
+                  ? 'text-white'
+                  : 'text-gray-500'
+              }`}>
+                ▷ Next
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Session Active Message */}
+        {session && (
+          <View className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <Text className="text-blue-800 font-medium text-center">
+              ✓ Team session active for: {session.order_name}
             </Text>
-          </TouchableOpacity>
-        </View>
+            <Text className="text-blue-600 text-sm text-center mt-1">
+              Use navigation buttons above to continue your work
+            </Text>
+          </View>
+        )}
       </View>
     </SafeAreaView>
   );
