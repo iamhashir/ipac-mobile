@@ -406,33 +406,22 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       const today = new Date().toISOString().split('T')[0];
       const startTimeISO = new Date(`${today} ${currentTime}`).toISOString();
       
-      // First, try to update existing record to clear end time and set new start time
-      const { error: updateError } = await db.updateAttendanceForRestart(
+      // Always create a new attendance log (like Present button does)
+      const { error } = await db.logAttendance(
         orderId,
         packerData.packer_id || packerData.id,
         period,
-        startTimeISO
+        'present',
+        startTimeISO,
+        null, // no end time yet
+        toolboxCompleted,
+        false // not project start since it's a return
       );
 
-      // If update fails, it means no existing record, so create new one
-      if (updateError) {
-        console.log('No existing record to update, creating new one');
-        const { error: insertError } = await db.logAttendance(
-          orderId,
-          packerData.packer_id || packerData.id,
-          period,
-          'present',
-          startTimeISO,
-          null, // no end time yet
-          toolboxCompleted,
-          false // not project start since it's a return
-        );
-
-        if (insertError) {
-          console.error('Error logging new attendance:', insertError);
-          Alert.alert('Error', 'Failed to record new attendance');
-          return;
-        }
+      if (error) {
+        console.error('Error logging new attendance:', error);
+        Alert.alert('Error', 'Failed to record new attendance');
+        return;
       }
 
       // Update local state to show new start time
@@ -449,7 +438,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
         }
       }));
 
-      Alert.alert('Success', `New attendance recorded for ${name}`);
+      console.log(`New attendance log created for ${name} - ${period}`);
     } catch (error) {
       console.error('Error in recordNewAttendance:', error);
       Alert.alert('Error', 'An unexpected error occurred');
