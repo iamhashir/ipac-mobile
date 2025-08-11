@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { CheckCircle, XCircle, X } from 'lucide-react-native';
 
@@ -8,6 +8,8 @@ interface AlertProps {
   message?: string;
   onClose?: () => void;
   visible: boolean;
+  autoDismiss?: boolean;
+  autoDismissTime?: number;
 }
 
 export const Alert: React.FC<AlertProps> = ({
@@ -15,8 +17,21 @@ export const Alert: React.FC<AlertProps> = ({
   title,
   message,
   onClose,
-  visible
+  visible,
+  autoDismiss = false,
+  autoDismissTime = 5000
 }) => {
+  // Auto dismiss effect
+  useEffect(() => {
+    if (visible && autoDismiss && onClose) {
+      const timer = setTimeout(() => {
+        onClose();
+      }, autoDismissTime);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [visible, autoDismiss, autoDismissTime, onClose]);
+
   if (!visible) return null;
 
   const isSuccess = type === 'success';
@@ -26,7 +41,17 @@ export const Alert: React.FC<AlertProps> = ({
   const iconColor = isSuccess ? '#16A34A' : '#DC2626';
 
   return (
-    <View className={`${bgColor} ${borderColor} border rounded-lg p-4 mb-4`}>
+    <View 
+      className={`${bgColor} ${borderColor} border rounded-lg p-4 mb-4 shadow-lg`}
+      style={{
+        position: 'absolute',
+        bottom: 100,
+        right: 20,
+        zIndex: 1000,
+        maxWidth: 320,
+        minWidth: 280
+      }}
+    >
       <View className="flex-row items-start">
         <View className="flex-shrink-0">
           {isSuccess ? (

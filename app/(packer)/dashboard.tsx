@@ -108,6 +108,20 @@ export default function PackerDashboard() {
           is_available: packer.packer_status === 'available'
         }));
         setAllPackers(transformedPackers);
+        
+        // Auto-select the logged-in user if they're available
+        if (profile?.id) {
+          const currentUser = transformedPackers.find(packer => packer.id === profile.id);
+          if (currentUser && currentUser.is_available) {
+            setSelectedPackers(prev => {
+              if (!prev.includes(profile.id)) {
+                return [...prev, profile.id];
+              }
+              return prev;
+            });
+            console.log('Auto-selected current user:', currentUser.full_name);
+          }
+        }
       }
     } catch (error) {
       console.error('Error in loadData:', error);
@@ -121,11 +135,19 @@ export default function PackerDashboard() {
     const packer = allPackers.find(p => p.id === packerId);
     if (!packer?.is_available) return;
     
-    setSelectedPackers(prev => 
-      prev.includes(packerId) 
-        ? prev.filter(id => id !== packerId)
-        : [...prev, packerId]
-    );
+    setSelectedPackers(prev => {
+      const isCurrentlySelected = prev.includes(packerId);
+      
+      if (isCurrentlySelected) {
+        // If deselecting this packer and they're the project lead, clear project lead
+        if (projectLead === packerId) {
+          setProjectLead(null);
+        }
+        return prev.filter(id => id !== packerId);
+      } else {
+        return [...prev, packerId];
+      }
+    });
   };
 
   const toggleProjectLead = (packerId: string) => {
@@ -138,12 +160,17 @@ export default function PackerDashboard() {
 
   const handleNext = async () => {
     if (!selectedOrder) {
-      Alert.alert('Error', 'Please select a project');
+      setErrorAlert({visible: true, title: 'Project Required', message: 'Please select a project'});
       return;
     }
 
     if (selectedPackers.length === 0) {
-      Alert.alert('Error', 'Please select at least one packer');
+      setErrorAlert({visible: true, title: 'Team Required', message: 'Please select at least one packer'});
+      return;
+    }
+
+    if (!projectLead) {
+      setErrorAlert({visible: true, title: 'Project Lead Required', message: 'Please select a project lead from the team members'});
       return;
     }
 
@@ -277,20 +304,20 @@ export default function PackerDashboard() {
       <NavigationButtons currentScreen="dashboard" />
 
       {/* Alert Messages */}
-      <View className="px-4">
-        <SuccessAlert
-          visible={successAlert.visible}
-          title={successAlert.title}
-          message={successAlert.message}
-          onClose={() => setSuccessAlert({visible: false, title: ''})}
-        />
-        <ErrorAlert
-          visible={errorAlert.visible}
-          title={errorAlert.title}
-          message={errorAlert.message}
-          onClose={() => setErrorAlert({visible: false, title: ''})}
-        />
-      </View>
+      <SuccessAlert
+        visible={successAlert.visible}
+        title={successAlert.title}
+        message={successAlert.message}
+        onClose={() => setSuccessAlert({visible: false, title: ''})}
+        autoDismiss={true}
+      />
+      <ErrorAlert
+        visible={errorAlert.visible}
+        title={errorAlert.title}
+        message={errorAlert.message}
+        onClose={() => setErrorAlert({visible: false, title: ''})}
+        autoDismiss={true}
+      />
 
       {/* Main Content */}
       <View className="flex-1 p-4">

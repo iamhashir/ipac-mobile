@@ -67,6 +67,73 @@ export const auth = {
     const { data: { user }, error } = await supabase.auth.getUser();
     return { user, error };
   },
+
+  // Get user by username (for username-based login)
+  getUserByUsername: async (username) => {
+    try {
+      console.log('🔍 Looking up username:', username);
+      
+      // Use a stored function to lookup username securely
+      // This bypasses RLS policies since it runs with elevated privileges
+      const { data, error } = await supabase
+        .rpc('get_user_email_by_username', {
+          lookup_username: username
+        });
+      
+      console.log('🔍 Username lookup result:', { 
+        username, 
+        found: !!data, 
+        error: error?.message 
+      });
+      
+      if (error) {
+        console.error('❌ Database error during username lookup:', error);
+        return { data: null, error };
+      }
+      
+      if (!data) {
+        console.log('⚠️ No user found with username:', username);
+        return { 
+          data: null, 
+          error: { message: 'User not found', code: 'USER_NOT_FOUND' }
+        };
+      }
+      
+      // Return data in expected format
+      return { data: { email: data }, error: null };
+    } catch (error) {
+      console.error('💥 Unexpected error in getUserByUsername:', error);
+      return { data: null, error: { message: 'Lookup failed', originalError: error } };
+    }
+  },
+
+  // Sign in with username/password
+  signInWithUsername: async (username, password) => {
+    try {
+      // First get the email for this username
+      const { data: userProfile, error: lookupError } = await auth.getUserByUsername(username);
+      
+      if (lookupError || !userProfile?.email) {
+        return { 
+          data: null, 
+          error: { message: 'Invalid username or password' }
+        };
+      }
+      
+      // Now sign in with the email
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: userProfile.email,
+        password,
+      });
+      
+      return { data, error };
+    } catch (error) {
+      return { 
+        data: null, 
+        error: { message: 'Authentication failed' }
+      };
+    }
+  },
 };
 
 // Helper functions for database operations

@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
 import { Eye, EyeOff } from 'lucide-react-native';
 import { ErrorAlert } from '../../components/ui/Alert';
+import { auth } from '../../utils/api/supabase';
 
 export default function LoginScreen() {
   const [username, setUsername] = useState('');
@@ -42,10 +43,22 @@ export default function LoginScreen() {
     try {
       console.log('🔐 Attempting login with username:', username);
       
-      // For Supabase auth, we need to convert username to email format
-      // Assuming username maps to email in your system
-      const emailForAuth = username.includes('@') ? username : `${username}@ipac.local`;
-      const { data, error } = await signIn(emailForAuth, password);
+      let authResult;
+      
+      // Check if input looks like an email
+      if (username.includes('@')) {
+        // Sign in directly with email
+        authResult = await signIn(username, password);
+      } else {
+        // Use username-based login - call the auth function directly
+        authResult = await auth.signInWithUsername(username, password);
+        
+        // Note: Since we're bypassing the AuthContext signIn method,
+        // the auth state change will still be detected by the auth listener
+        // in AuthContext, so the user will be properly authenticated
+      }
+      
+      const { data, error } = authResult;
       
       console.log('🔐 Login response:', { 
         user: data?.user?.email, 
@@ -94,6 +107,7 @@ export default function LoginScreen() {
             title={errorAlert.title}
             message={errorAlert.message}
             onClose={() => setErrorAlert({visible: false, title: ''})}
+            autoDismiss={true}
           />
 
           {/* Login Form */}
