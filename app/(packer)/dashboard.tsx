@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
 import { usePackerSession } from '../../utils/PackerSessionContext';
 import { db } from '../../utils/api/supabase';
+import { teamLead } from '../../utils/api/teamLead';
 import { NavigationButtons } from '../../components/NavigationButtons';
 import { SuccessAlert, ErrorAlert } from '../../components/ui/Alert';
 
@@ -183,12 +184,14 @@ export default function PackerDashboard() {
         return;
       }
 
-      // Update project lead if one is selected
+      // Assign team lead using the new temporary role system
       if (projectLead) {
-        const { error: leadError } = await db.updateProjectLead(selectedOrder, projectLead);
-        if (leadError) {
-          console.error('Error updating project lead:', leadError);
+        const { error: teamLeadError } = await teamLead.assignTeamLead(selectedOrder, projectLead);
+        if (teamLeadError) {
+          console.error('Error assigning team lead:', teamLeadError);
           // Don't block navigation for this error, just log it
+        } else {
+          console.log('Team lead assigned successfully:', projectLead);
         }
       }
 

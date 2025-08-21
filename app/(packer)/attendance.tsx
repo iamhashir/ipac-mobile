@@ -216,7 +216,54 @@ await loadExistingAttendance(packersResponse, initialAttendance);
   };
 
   const togglePresence = async (name: string, period: TimePeriod, isPresent: boolean) => {
+    // First check if user has permission to mark attendance
+    const { data: canMarkAttendance, error: permissionError } = await db.canUserMarkAttendance(orderId);
+    
+    if (permissionError) {
+      console.error('Error checking attendance permissions:', permissionError);
+      Alert.alert('Error', 'Failed to verify permissions');
+      return;
+    }
+    
+    if (!canMarkAttendance) {
+      // Show alert for packers trying to mark their own attendance
+      Alert.alert(
+        'Permission Denied', 
+        'Only team leaders and administrators can mark attendance. Please contact your project lead if you need to update your attendance status.',
+        [{ text: 'OK', style: 'default' }]
+      );
+      return;
+    }
+    
+    const packerData = packersData.find(p => p.full_name === name);
+    if (!packerData) {
+      Alert.alert('Error', 'Packer data not found');
+      return;
+    }
+    
     if (isPresent) {
+      // Check if attendance can be recorded (prevents spam clicking)
+      const { data: canRecord, error: validationError } = await db.canRecordAttendance(
+        orderId, 
+        packerData.packer_id || packerData.id, 
+        period
+      );
+      
+      if (validationError) {
+        console.error('Error validating attendance recording:', validationError);
+        Alert.alert('Error', 'Failed to validate attendance recording');
+        return;
+      }
+      
+      if (!canRecord) {
+        Alert.alert(
+          'Already Recorded', 
+          `${name} already has active attendance for ${period}. Please mark their end time first if they need to restart their shift.`,
+          [{ text: 'OK', style: 'default' }]
+        );
+        return;
+      }
+      
       // When marking as present, automatically set start time and record attendance
       await recordAttendanceForPacker(name, period);
     } else {
@@ -338,9 +385,63 @@ await loadExistingAttendance(packersResponse, initialAttendance);
   };
 
   const bulkTogglePresence = async (period: TimePeriod, isPresent: boolean) => {
+    // First check if user has permission to mark attendance
+    const { data: canMarkAttendance, error: permissionError } = await db.canUserMarkAttendance(orderId);
+    
+    if (permissionError) {
+      console.error('Error checking attendance permissions:', permissionError);
+      Alert.alert('Error', 'Failed to verify permissions');
+      return;
+    }
+    
+    if (!canMarkAttendance) {
+      Alert.alert(
+        'Permission Denied', 
+        'Only team leaders and administrators can mark attendance.',
+        [{ text: 'OK', style: 'default' }]
+      );
+      return;
+    }
+    
     if (isPresent) {
-      // When bulk marking as present, record attendance for all packers
-      const promises = packers.map(name => recordAttendanceForPacker(name, period));
+      // When bulk marking as present, validate each packer first
+      const validPackers = [];
+      
+      for (const name of packers) {
+        const packerData = packersData.find(p => p.full_name === name);
+        if (!packerData) continue;
+        
+        const { data: canRecord } = await db.canRecordAttendance(
+          orderId, 
+          packerData.packer_id || packerData.id, 
+          period
+        );
+        
+        if (canRecord) {
+          validPackers.push(name);
+        }
+      }
+      
+      if (validPackers.length === 0) {
+        Alert.alert('Already Recorded', `All packers already have active attendance for ${period}.`);
+        return;
+      }
+      
+      if (validPackers.length < packers.length) {
+        const skippedCount = packers.length - validPackers.length;
+        Alert.alert(
+          'Partial Update', 
+          `${skippedCount} packer(s) already have active attendance and will be skipped.`,
+          [{ text: 'Continue', onPress: () => {
+            const promises = validPackers.map(name => recordAttendanceForPacker(name, period));
+            Promise.all(promises);
+          }}, { text: 'Cancel' }]
+        );
+        return;
+      }
+      
+      // Record attendance for all valid packers
+      const promises = validPackers.map(name => recordAttendanceForPacker(name, period));
       await Promise.all(promises);
     } else {
       // When bulk marking as absent, record absent status for all packers

@@ -586,6 +586,28 @@ export const db = {
       return { data: null, error };
     }
   },
+
+  // Check if user can mark attendance for an order
+  canUserMarkAttendance: async (orderId) => {
+    const { data, error } = await supabase
+      .rpc('can_user_mark_attendance', {
+        order_uuid: orderId
+      });
+    
+    return { data, error };
+  },
+
+  // Check if attendance can be recorded (prevents spam clicking)
+  canRecordAttendance: async (orderId, packerId, shiftPeriod) => {
+    const { data, error } = await supabase
+      .rpc('can_record_attendance', {
+        order_uuid: orderId,
+        packer_uuid: packerId,
+        shift_period_param: shiftPeriod
+      });
+    
+    return { data, error };
+  },
 };
 
 export default supabase;
