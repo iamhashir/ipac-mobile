@@ -8,6 +8,9 @@ module.exports = {
   presets: [require("nativewind/preset")],
   theme: {
     extend: {
+      screens: {
+        xs: '360px', // extra-small phones
+      },
       colors: {
         // Based on your screenshots - blue header theme
         primary: {

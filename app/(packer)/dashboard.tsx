@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Alert, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
@@ -31,6 +31,11 @@ export default function PackerDashboard() {
   const { profile, signOut } = useAuth();
   const { createSession, session } = usePackerSession();
   const router = useRouter();
+  const { width, height } = useWindowDimensions();
+  const isLandscape = width > height;
+  const isCompact = isLandscape && height < 450;
+  const isPortraitPhone = !isLandscape && width < 480; // stack header info and smaller sizes
+  const isPortraitStack = !isLandscape && width < 600; // stack columns on narrow portrait
   const [availableOrders, setAvailableOrders] = useState<Order[]>([]);
   const [allPackers, setAllPackers] = useState<Packer[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<string | null>(null);
@@ -268,7 +273,7 @@ export default function PackerDashboard() {
 
   if (loading) {
     return (
-      <SafeAreaView className="flex-1 bg-gray-50">
+      <SafeAreaView className="flex-1 bg-gray-50" edges={['top','bottom','left','right']}>
         <View className="flex-1 justify-center items-center">
           <Text className="text-lg text-gray-600">Loading...</Text>
         </View>
@@ -277,30 +282,48 @@ export default function PackerDashboard() {
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-gray-50">
+    <SafeAreaView className="flex-1 bg-gray-50" edges={['top','bottom','left','right']}>
       {/* Header */}
-      <View className="bg-primary-500 px-4 py-3">
-        <View className="flex-row justify-between items-center">
-          <View>
-            <Text className="text-white text-xl font-bold">
-              Files to be processed
-            </Text>
-            <Text className="text-primary-100 text-sm">
-              Welcome, {profile?.full_name}
-            </Text>
+      <View className={`bg-primary-500 ${isCompact ? 'px-3 py-2' : 'px-4 py-3'}`}>
+        {isPortraitPhone ? (
+          <View className="space-y-1">
+            <View className="flex-row justify-between items-center">
+              <Text className="text-white text-lg font-bold">Files to be processed</Text>
+              <TouchableOpacity 
+                onPress={handleSignOut}
+                className="px-2 py-1 bg-primary-600 rounded"
+              >
+                <Text className="text-white text-xs">Sign Out</Text>
+              </TouchableOpacity>
+            </View>
+            <View className="flex-row justify-between items-center">
+              <Text className="text-primary-100 text-xs">Welcome, {profile?.full_name}</Text>
+              <Text className="text-white text-xs font-medium">{getCurrentTime()}</Text>
+            </View>
           </View>
-          <View className="flex-row items-center space-x-4">
-            <Text className="text-white text-sm font-medium">
-              {getCurrentTime()}
-            </Text>
-            <TouchableOpacity 
-              onPress={handleSignOut}
-              className="bg-primary-600 px-3 py-1 rounded"
-            >
-              <Text className="text-white text-sm">Sign Out</Text>
-            </TouchableOpacity>
+        ) : (
+          <View className="flex-row justify-between items-center">
+            <View>
+              <Text className={`${isCompact ? 'text-lg' : 'text-xl'} text-white font-bold`}>
+                Files to be processed
+              </Text>
+              <Text className="text-primary-100 text-xs">
+                Welcome, {profile?.full_name}
+              </Text>
+            </View>
+            <View className="flex-row items-center space-x-3">
+              <Text className="text-white text-xs font-medium">
+                {getCurrentTime()}
+              </Text>
+              <TouchableOpacity 
+                onPress={handleSignOut}
+                className={`${isCompact ? 'px-2 py-1' : 'px-3 py-1'} bg-primary-600 rounded`}
+              >
+                <Text className="text-white text-xs">Sign Out</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
+        )}
       </View>
 
       {/* Navigation Buttons */}
@@ -323,19 +346,19 @@ export default function PackerDashboard() {
       />
 
       {/* Main Content */}
-      <View className="flex-1 p-4">
-        <View className="flex-row flex-1 space-x-4">
+      <View className={`flex-1 ${isCompact ? 'p-3' : 'p-4'}`}>
+        <View className={`${isPortraitStack ? 'flex-col space-y-3' : (isCompact ? 'flex-row space-x-3' : 'flex-row space-x-4')} flex-1`}>
           {/* Left Column - Select File */}
           <View className="flex-1 bg-white rounded-lg shadow-sm">
-            <View className="bg-primary-500 px-4 py-3 rounded-t-lg">
-              <Text className="text-white font-semibold text-base">
+            <View className={`bg-primary-500 ${isCompact ? 'px-3 py-2' : 'px-4 py-3'} rounded-t-lg`}>
+              <Text className={`${isCompact ? 'text-sm' : 'text-base'} text-white font-semibold`}>
                 📁 Select File
               </Text>
             </View>
             
-            <ScrollView className="flex-1 p-4">
+            <ScrollView className={`flex-1 ${isCompact ? 'p-3' : 'p-4'}`}>
 {availableOrders.length === 0 ? (
-                <Text className="text-gray-500 text-center py-8">
+                <Text className="text-gray-500 text-center py-6">
                   No projects available
                 </Text>
               ) : (
@@ -343,7 +366,7 @@ export default function PackerDashboard() {
                   <TouchableOpacity
                     key={order.id}
                     onPress={() => order.production_status !== 'in_progress' ? setSelectedOrder(order.id) : null}
-                    className={`mb-2 p-3 rounded-lg border ${
+                    className={`mb-2 ${isCompact ? 'p-2' : 'p-3'} rounded-lg border ${
                       selectedOrder === order.id
                         ? 'bg-primary-50 border-primary-500'
                         : order.production_status === 'in_progress'
@@ -362,7 +385,7 @@ export default function PackerDashboard() {
                         }`}>
                           📄 {order.order_name}
                         </Text>
-                        <Text className="text-gray-600 text-sm mt-1">
+                        <Text className="text-gray-600 text-xs mt-1">
                           {order.client_name}
                         </Text>
                       </View>
@@ -375,22 +398,22 @@ export default function PackerDashboard() {
 
           {/* Right Column - Select Packers */}
           <View className="flex-1 bg-white rounded-lg shadow-sm">
-            <View className="bg-primary-500 px-4 py-3 rounded-t-lg">
-              <Text className="text-white font-semibold text-base">
+            <View className={`bg-primary-500 ${isCompact ? 'px-3 py-2' : 'px-4 py-3'} rounded-t-lg`}>
+              <Text className={`${isCompact ? 'text-sm' : 'text-base'} text-white font-semibold`}>
                 Select Packers
               </Text>
             </View>
             
-            <View className="p-4">
-              <View className="flex-row justify-between items-center mb-4">
-                <Text className="text-gray-700 font-medium">Packer Name</Text>
-                <Text className="text-gray-700 font-medium">Project Lead</Text>
+            <View className={`${isCompact ? 'p-3' : 'p-4'}`}>
+              <View className={`flex-row justify-between items-center ${isCompact ? 'mb-2' : 'mb-4'}`}>
+                <Text className={`${isCompact ? 'text-sm' : 'text-base'} text-gray-700 font-medium`}>Packer Name</Text>
+                <Text className={`${isCompact ? 'text-sm' : 'text-base'} text-gray-700 font-medium`}>Project Lead</Text>
               </View>
             </View>
 
-            <ScrollView className="flex-1 px-4">
+            <ScrollView className={`${isCompact ? 'px-3' : 'px-4'} flex-1`}>
               {allPackers.length === 0 ? (
-                <Text className="text-gray-500 text-center py-8">
+                <Text className="text-gray-500 text-center py-6">
                   No packers found
                 </Text>
               ) : (
@@ -402,7 +425,7 @@ export default function PackerDashboard() {
                   return (
                     <View
                       key={packer.id}
-                      className={`flex-row items-center justify-between py-3 border-b border-gray-100 ${
+                      className={`flex-row items-center justify-between ${isCompact ? 'py-2' : 'py-3'} border-b border-gray-100 ${
                         !packer.is_available ? 'opacity-50' : ''
                       }`}
                     >
@@ -431,12 +454,12 @@ export default function PackerDashboard() {
                             {packer.full_name}
                           </Text>
                           {!packer.is_available && packer.current_order_name && (
-                            <Text className="text-xs text-gray-400 mt-0.5">
+                            <Text className="text-[11px] text-gray-400 mt-0.5">
                               Working on: {packer.current_order_name}
                             </Text>
                           )}
                           {!packer.is_available && !packer.current_order_name && (
-                            <Text className="text-xs text-gray-400 mt-0.5">
+                            <Text className="text-[11px] text-gray-400 mt-0.5">
                               Status: {packer.packer_status}
                             </Text>
                           )}
@@ -470,11 +493,11 @@ export default function PackerDashboard() {
 
         {/* Next Button - Only show if no active session */}
         {!session && (
-          <View className="mt-4 flex-row justify-end">
+          <View className={`${isCompact ? 'mt-3' : 'mt-4'} flex-row justify-end`}>
             <TouchableOpacity
               onPress={handleNext}
               disabled={!selectedOrder || selectedPackers.length === 0}
-              className={`px-6 py-3 rounded-lg ${
+              className={`${isCompact ? 'px-4 py-2' : 'px-6 py-3'} rounded-lg ${
                 selectedOrder && selectedPackers.length > 0
                   ? 'bg-primary-500'
                   : 'bg-gray-300'
@@ -493,11 +516,11 @@ export default function PackerDashboard() {
 
         {/* Session Active Message */}
         {session && (
-          <View className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <View className={`${isCompact ? 'mt-3 p-3' : 'mt-4 p-4'} bg-blue-50 border border-blue-200 rounded-lg`}>
             <Text className="text-blue-800 font-medium text-center">
               ✓ Team session active for: {session.order_name}
             </Text>
-            <Text className="text-blue-600 text-sm text-center mt-1">
+            <Text className="text-blue-600 text-xs md:text-sm text-center mt-1">
               Use navigation buttons above to continue your work
             </Text>
           </View>

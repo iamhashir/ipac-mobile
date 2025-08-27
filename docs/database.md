@@ -50,8 +50,18 @@ auth.users ──1:1─→ profiles ──N:1─→ roles
 materials ──1:N─→ material_variants ──1:N─→ order_package_materials
                                       └─1:N─→ supplier_pricing
 
-packing_types ──1:N─→ order_packages
+packing_types ──1:N─→ order_packages ──1:N─→ package_info
 units_of_measure ──1:N─→ order_package_materials, supplier_pricing, transportation
+
+order_packages ──1:N─→ order_package_services ──N:1─→ services ──N:1─→ tags
+                 ├─1:N─→ order_package_securing ──N:1─→ securing_template ──N:1─→ beam
+                 ├─1:N─→ package_items
+                 └─N:N─→ task_logs (via task_packages)
+
+task_logs ──N:N─→ profiles (via task_assignments)
+          └─N:N─→ media (via task_media)
+
+media ──N:N─→ orders, order_packages, order_package_securing, order_package_services
 ```
 
 ---
@@ -136,6 +146,7 @@ units_of_measure ──1:N─→ order_package_materials, supplier_pricing, tran
 | `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
 | `name` | `text` | - | NOT NULL, UNIQUE |
 | `description` | `text` | - | - |
+| `unit_id` | `uuid` | - | FK → units_of_measure(id) |
 | `created_at` | `timestamptz` | `now()` | - |
 
 **Relationships**:
@@ -167,22 +178,25 @@ units_of_measure ──1:N─→ order_package_materials, supplier_pricing, tran
 | `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
 | `order_package_id` | `uuid` | - | NOT NULL, FK → order_packages(id) |
 | `material_variant_id` | `uuid` | - | NOT NULL, FK → material_variants(id) |
-| `quantity_calculated` | `numeric` | - | NOT NULL, CHECK (≥ 0) |
+| `material_type` | `material_type` | - | NOT NULL, ENUM (standard/dimensional/gas) |
+| `is_final` | `boolean` | `false` | NOT NULL |
+| `quantity` | `numeric` | - | NOT NULL, CHECK (≥ 0) |
 | `unit_id` | `uuid` | - | NOT NULL, FK → units_of_measure(id) |
-| `quantity_actual` | `numeric` | - | - |
-| `cost_actual` | `numeric` | - | - |
-| `cost_at_calculation` | `numeric` | - | NOT NULL |
-| `usage_details` | `jsonb` | - | - |
-| `notes` | `text` | - | - |
+| `length` | `numeric` | - | - |
+| `width` | `numeric` | - | - |
+| `height` | `numeric` | - | - |
+| `qty_of_cylinder` | `numeric` | - | - |
+| `qty_of_gas_used` | `numeric` | - | - |
+| `comment` | `text` | - | - |
 | `created_at` | `timestamptz` | `now()` | - |
 | `updated_at` | `timestamptz` | `now()` | - |
 
-**Business Logic**: Critical for cost control - tracks both estimated and actual material usage. Enables variance analysis and inventory management.
+**Business Logic**: Tracks materials with type-specific fields. The `is_final` flag indicates whether values are estimates or actuals. Supports standard materials, dimensional materials (with length/width/height), and gas materials (with cylinder/gas quantities).
 
 ---
 
 ### order_packages
-**Purpose**: Individual packages within an order with detailed specifications and dimensions.
+**Purpose**: Individual packages within an order with detailed specifications.
 
 | Column | Type | Default | Constraints |
 |--------|------|---------|-------------|
@@ -190,22 +204,15 @@ units_of_measure ──1:N─→ order_package_materials, supplier_pricing, tran
 | `order_id` | `uuid` | - | NOT NULL, FK → orders(id) |
 | `package_number` | `integer` | - | NOT NULL |
 | `description` | `text` | - | - |
-| `packing_type_id` | `uuid` | - | FK → packing_types(id) |
-| `equipment_original_dimensions` | `jsonb` | - | NOT NULL |
-| `equipment_final_dimensions` | `jsonb` | - | - |
-| `equipment_original_net_weight_kg` | `numeric` | - | NOT NULL |
-| `equipment_final_net_weight_kg` | `numeric` | - | - |
-| `box_internal_original_dimensions` | `jsonb` | - | - |
-| `box_internal_final_dimensions` | `jsonb` | - | - |
-| `box_external_original_dimensions` | `jsonb` | - | - |
-| `box_external_final_dimensions` | `jsonb` | - | - |
+| `original_pkg_info` | `uuid` | - | FK → package_info(id) |
+| `final_pkg_info` | `uuid` | - | FK → package_info(id) |
 | `status` | `text` | `'design'` | NOT NULL, CHECK (design/approved/in_production/packed/delivered) |
 | `quantity` | `integer` | `1` | CHECK (> 0) |
 | `boxes_completed` | `integer` | `0` | - |
 | `created_at` | `timestamptz` | `now()` | - |
 | `updated_at` | `timestamptz` | `now()` | - |
 
-**Business Logic**: Core packaging entity tracking dimensional changes through the packaging process. JSONB dimensions allow flexible coordinate storage.
+**Business Logic**: Core packaging entity linking to package_info for detailed specifications. Original and final states are tracked through separate package_info references.
 
 ---
 
@@ -217,6 +224,7 @@ units_of_measure ──1:N─→ order_package_materials, supplier_pricing, tran
 | `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
 | `order_id` | `uuid` | - | NOT NULL, FK → orders(id) |
 | `packer_id` | `uuid` | - | NOT NULL, FK → profiles(id) |
+| `is_team_lead` | `boolean` | `false` | - |
 | `created_at` | `timestamptz` | `now()` | - |
 
 **Relationships**:
@@ -224,7 +232,7 @@ units_of_measure ──1:N─→ order_package_materials, supplier_pricing, tran
 - `packer_id` → `profiles.id`
 - `UNIQUE(order_id, packer_id)` prevents duplicate assignments
 
-**Business Logic**: Proper relational approach using junction table for many-to-many relationship between orders and packers. Provides better query performance, referential integrity, and easier complex operations. Triggers automatically update packer status when team assignments change.
+**Business Logic**: Proper relational approach using junction table for many-to-many relationship between orders and packers. Provides better query performance, referential integrity, and easier complex operations. Triggers automatically update packer status when team assignments change. The `is_team_lead` flag enables temporary team lead permissions for specific orders.
 
 ---
 
@@ -357,14 +365,21 @@ units_of_measure ──1:N─→ order_package_materials, supplier_pricing, tran
 
 ---
 
+
+
+
+
+
+
+
+
+
 ### task_logs
 **Purpose**: Time tracking for specific packaging tasks.
 
 | Column | Type | Default | Constraints |
 |--------|------|---------|-------------|
 | `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
-| `order_package_id` | `uuid` | - | NOT NULL, FK → order_packages(id) |
-| `packer_id` | `uuid` | - | NOT NULL, FK → profiles(id) |
 | `task_name` | `text` | - | NOT NULL |
 | `start_time` | `timestamptz` | - | NOT NULL |
 | `end_time` | `timestamptz` | - | - |
@@ -373,7 +388,49 @@ units_of_measure ──1:N─→ order_package_materials, supplier_pricing, tran
 | `created_at` | `timestamptz` | `now()` | - |
 | `updated_at` | `timestamptz` | `now()` | - |
 
-**Business Logic**: Detailed time tracking for productivity analysis and accurate costing.
+**Business Logic**: Detailed time tracking for productivity analysis and accurate costing. Links to packers via task_assignments and packages via task_packages junction tables.
+
+---
+
+### task_assignments
+**Purpose**: Junction table for many-to-many relationship between tasks and packers.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `task_id` | `uuid` | - | NOT NULL, FK → task_logs(id) |
+| `packer_id` | `uuid` | - | NOT NULL, FK → profiles(id) |
+| `created_at` | `timestamptz` | `now()` | - |
+
+**Unique Constraint**: `(task_id, packer_id)`
+**Indexes**: `idx_task_assignments_task_id`, `idx_task_assignments_packer_id`
+
+---
+
+### task_packages
+**Purpose**: Junction table linking tasks to order packages.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `task_id` | `uuid` | - | NOT NULL, FK → task_logs(id) |
+| `order_package_id` | `uuid` | - | NOT NULL, FK → order_packages(id) |
+| `created_at` | `timestamptz` | `now()` | - |
+
+**Unique Constraint**: `(task_id, order_package_id)`
+**Indexes**: `idx_task_packages_task_id`, `idx_task_packages_order_package_id`
+
+
+
+
+
+
+
+
+
+
+
+
 
 ---
 
@@ -409,6 +466,236 @@ units_of_measure ──1:N─→ order_package_materials, supplier_pricing, tran
 | `updated_at` | `timestamptz` | `now()` | - |
 
 **Standard Units**: `Pce` (pieces), `m2` (square meters), `kg` (kilograms), `m` (meters), `hour`, `trip`
+
+---
+
+### packer_sessions
+**Purpose**: Session management for packers tracking their workflow state across orders.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `packer_id` | `uuid` | - | FK → profiles(id) |
+| `order_id` | `uuid` | - | FK → orders(id) |
+| `order_name` | `text` | - | - |
+| `client_name` | `text` | - | - |
+| `project_lead_name` | `text` | - | - |
+| `team_selected` | `boolean` | `false` | - |
+| `attendance_completed` | `boolean` | `false` | - |
+| `packaging_started` | `boolean` | `false` | - |
+| `session_active` | `boolean` | `true` | - |
+| `created_at` | `timestamptz` | `now()` | - |
+| `updated_at` | `timestamptz` | `now()` | - |
+
+**Business Logic**: Tracks packer workflow states during order processing, enabling resumption of work and progress tracking.
+
+---
+
+### services
+**Purpose**: Catalog of available services that can be applied to packages.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `service` | `text` | - | NOT NULL |
+| `tag_id` | `uuid` | - | NOT NULL, FK → tags(id) |
+
+**Relationships**: 
+- `tag_id` → `tags.id`
+- One-to-many with `order_package_services`
+
+---
+
+### order_package_services
+**Purpose**: Services applied to specific order packages with results tracking.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `order_package_id` | `uuid` | - | NOT NULL, FK → order_packages(id) |
+| `service_id` | `uuid` | - | NOT NULL, FK → services(id) |
+| `is_final` | `boolean` | `false` | NOT NULL |
+| `result` | `jsonb` | - | - |
+| `created_at` | `timestamptz` | `now()` | - |
+
+**Business Logic**: Tracks services applied to packages (e.g., waterproofing, gas protection) with flexible result storage.
+
+---
+
+### package_info
+**Purpose**: Detailed package dimension and weight specifications.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `internal_length` | `numeric` | - | - |
+| `internal_width` | `numeric` | - | - |
+| `internal_height` | `numeric` | - | - |
+| `external_length` | `numeric` | - | - |
+| `external_width` | `numeric` | - | - |
+| `external_height` | `numeric` | - | - |
+| `center_of_gravity` | `boolean` | - | - |
+| `quantity` | `integer` | - | - |
+| `box_type_id` | `uuid` | - | NOT NULL, FK → materials(id) |
+| `packing_type_id` | `uuid` | - | NOT NULL, FK → packing_types(id) |
+| `tare` | `numeric` | - | - |
+| `net_weight` | `numeric` | - | - |
+| `gross_weight` | `numeric` | - | - |
+
+**Business Logic**: Stores comprehensive package specifications. Referenced by order_packages for original and final states.
+
+---
+
+### package_items
+**Purpose**: Individual items contained within a package.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `order_package_id` | `uuid` | - | NOT NULL, FK → order_packages(id) |
+| `quantity` | `integer` | - | - |
+| `designation` | `varchar` | - | - |
+| `dimensions` | `jsonb` | - | - |
+
+---
+
+### beam
+**Purpose**: Beam specifications for package reinforcement.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `quantity` | `numeric` | - | - |
+| `type` | `uuid` | - | FK → materials(id) |
+| `width` | `numeric` | - | - |
+| `thickness` | `numeric` | - | - |
+| `space` | `numeric` | - | - |
+
+---
+
+### securing_template
+**Purpose**: Templates for package securing configurations.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `quantity` | `integer` | - | - |
+| `type_id` | `uuid` | - | FK → materials(id) |
+| `thickness` | `numeric` | - | - |
+| `horizontal_bar` | `uuid` | - | FK → beam(id) |
+| `vertical_bar` | `uuid` | - | FK → beam(id) |
+| `skids` | `integer` | - | - |
+
+---
+
+### order_package_securing
+**Purpose**: Securing configurations applied to specific package sides.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `order_package_id` | `uuid` | - | NOT NULL, FK → order_packages(id) |
+| `securing_template_id` | `uuid` | - | NOT NULL, FK → securing_template(id) |
+| `securing_side` | `securing_side` | - | NOT NULL, ENUM (big_sides/small_sides/lid/base) |
+| `is_final` | `boolean` | - | NOT NULL |
+| `created_at` | `timestamptz` | `now()` | - |
+
+**Unique Constraint**: `(order_package_id, securing_side, is_final)`
+
+---
+
+
+
+
+
+
+
+
+
+
+
+
+
+---
+
+### media
+**Purpose**: Central storage for all media files (images, documents) with notes.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `image_url` | `text` | - | - |
+| `notes` | `text` | - | - |
+| `created_at` | `timestamptz` | `now()` | - |
+
+---
+
+### order_media
+**Purpose**: Junction table linking media to orders.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `order_id` | `uuid` | - | NOT NULL, FK → orders(id) |
+| `media_id` | `uuid` | - | NOT NULL, FK → media(id) |
+
+**Unique Constraint**: `(order_id, media_id)`
+
+---
+
+### task_media
+**Purpose**: Junction table linking media to task logs.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `task_id` | `uuid` | - | NOT NULL, FK → task_logs(id) |
+| `media_id` | `uuid` | - | NOT NULL, FK → media(id) |
+
+**Unique Constraint**: `(task_id, media_id)`
+
+---
+
+### order_package_media
+**Purpose**: Junction table linking media to order packages.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `order_package_id` | `uuid` | - | NOT NULL, FK → order_packages(id) |
+| `media_id` | `uuid` | - | NOT NULL, FK → media(id) |
+
+**Unique Constraint**: `(order_package_id, media_id)`
+
+---
+
+### securing_media
+**Purpose**: Junction table linking media to securing configurations.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `securing_id` | `uuid` | - | NOT NULL, FK → order_package_securing(id) |
+| `media_id` | `uuid` | - | NOT NULL, FK → media(id) |
+
+**Unique Constraint**: `(securing_id, media_id)`
+
+---
+
+### service_media
+**Purpose**: Junction table linking media to order package services.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `service_id` | `uuid` | - | NOT NULL, FK → order_package_services(id) |
+| `media_id` | `uuid` | - | NOT NULL, FK → media(id) |
+
+**Unique Constraint**: `(service_id, media_id)`
+
+
+
+
 
 ---
 
@@ -809,7 +1096,8 @@ const { data: userRole } = await supabase.rpc('get_user_role');
 - **Dimensions**: `{width: 100, height: 50, depth: 30}` (cm)
 - **Attributes**: Material-specific properties
 - **Contact Info**: Flexible supplier/client contact storage
-- **Team Arrays**: `["uuid1", "uuid2", "uuid3"]` for order_teams
+- **Service Results**: Flexible storage for service outcomes
+- **Package Item Dimensions**: Flexible dimensional data
 
 ### Timestamp Conventions
 - All timestamps use `timestamptz` (timezone-aware)
@@ -822,6 +1110,10 @@ const { data: userRole } = await supabase.rpc('get_user_role');
 - **Package Status**: design → approved → in_production → packed → delivered
 - **Packer Status**: available → busy → unavailable
 - **User Status**: active → blocked → banned
+
+### Custom Types
+- **material_type**: ENUM (standard, dimensional, gas)
+- **securing_side**: ENUM (big_sides, small_sides, lid, base)
 
 ---
 

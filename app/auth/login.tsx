@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Alert, KeyboardAvoidingView, Platform, ScrollView, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
@@ -15,6 +15,9 @@ export default function LoginScreen() {
   const [errorAlert, setErrorAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
   const { user, profile, loading: authLoading, signIn } = useAuth();
   const router = useRouter();
+  const { width, height } = useWindowDimensions();
+  const isLandscape = width > height;
+  const isCompact = isLandscape && height < 450; // optimize for phone landscape heights (e.g., 390-430)
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -85,93 +88,113 @@ export default function LoginScreen() {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-gray-50">
+    <SafeAreaView className="flex-1 bg-primary-50" edges={['top','bottom','left','right']}>
       <KeyboardAvoidingView 
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         className="flex-1"
       >
-        <View className="flex-1 justify-center px-6">
-          {/* Header */}
-          <View className="items-center mb-12">
-            <Text className="text-3xl font-bold text-gray-900 mb-2">
-              IPAC Operations
-            </Text>
-            <Text className="text-gray-600 text-lg">
-              Industrial Packaging Management
-            </Text>
-          </View>
-
-          {/* Error Alert */}
-          <ErrorAlert
-            visible={errorAlert.visible}
-            title={errorAlert.title}
-            message={errorAlert.message}
-            onClose={() => setErrorAlert({visible: false, title: ''})}
-            autoDismiss={true}
-          />
-
-          {/* Login Form */}
-          <View className="space-y-6">
-            <View>
-              <Text className="text-gray-700 text-base font-medium mb-2">
-                Username
+        <ScrollView
+          className="flex-1"
+          contentContainerStyle={{
+            flexGrow: 1,
+            justifyContent: 'center',
+            alignItems: 'center',
+            paddingHorizontal: 24, // px-6
+            paddingVertical: 16,   // slightly tighter vertical padding for landscape
+            minHeight: '100%'
+          }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View
+            className={`w-full bg-white rounded-lg xs:rounded-xl md:rounded-2xl ${isCompact ? 'p-3 max-w-md' : 'max-w-2xl p-3 xs:p-4 md:p-6'} shadow-lg border border-gray-200`}
+            style={{ maxHeight: Math.max(320, height - 40) }}
+          >
+            {/* Header */}
+            <View className={`${isCompact ? 'mb-2' : 'mb-3 xs:mb-4 md:mb-6'} items-center`}>
+              <Text className={`${isCompact ? 'text-lg' : 'text-xl xs:text-2xl md:text-3xl'} font-bold text-gray-900 mb-1 md:mb-2`}>
+                IPAC Operations
               </Text>
-              <TextInput
-                className="bg-white border border-gray-300 rounded-lg px-4 py-3 text-base"
-                placeholder="Enter your username"
-                value={username}
-                onChangeText={setUsername}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
+              {!isCompact && (
+                <Text className="text-gray-600 text-sm xs:text-base md:text-lg text-center">
+                  Industrial Packaging Management
+                </Text>
+              )}
             </View>
 
-            <View>
-              <Text className="text-gray-700 text-base font-medium mb-2">
-                Password
-              </Text>
-              <View className="relative">
+            {/* Error Alert */}
+            <ErrorAlert
+              visible={errorAlert.visible}
+              title={errorAlert.title}
+              message={errorAlert.message}
+              onClose={() => setErrorAlert({visible: false, title: ''})}
+              autoDismiss={true}
+            />
+
+            {/* Login Form */}
+            <View className={isCompact ? 'space-y-4' : 'space-y-6'}>
+              <View>
+                <Text className={`${isCompact ? 'text-xs' : 'text-xs xs:text-sm md:text-base'} text-gray-700 font-medium mb-2`}>
+                  Username
+                </Text>
                 <TextInput
-                  className="bg-white border border-gray-300 rounded-lg px-4 py-3 pr-12 text-base"
-                  placeholder="Enter your password"
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry={!showPassword}
+                  className={`bg-white border border-gray-300 rounded-lg px-3 md:px-4 ${isCompact ? 'py-2' : 'py-3'} text-base`}
+                  placeholder="Enter your username"
+                  value={username}
+                  onChangeText={setUsername}
+                  autoCapitalize="none"
+                  autoCorrect={false}
                 />
-                <TouchableOpacity
-                  className="absolute right-3 top-3"
-                  onPress={() => setShowPassword(!showPassword)}
-                >
-                  {showPassword ? (
-                    <EyeOff size={20} color="#6B7280" />
-                  ) : (
-                    <Eye size={20} color="#6B7280" />
-                  )}
-                </TouchableOpacity>
               </View>
-            </View>
 
-            <TouchableOpacity
-              className={`bg-primary-500 rounded-lg py-4 items-center ${loading ? 'opacity-50' : ''}`}
-              onPress={handleLogin}
-              disabled={loading}
-            >
-              <Text className="text-white text-lg font-semibold">
-                {loading ? 'Signing In...' : 'Sign In'}
-              </Text>
-            </TouchableOpacity>
+              <View>
+                <Text className={`${isCompact ? 'text-xs' : 'text-xs xs:text-sm md:text-base'} text-gray-700 font-medium mb-2`}>
+                  Password
+                </Text>
+                <View className="relative">
+                  <TextInput
+                    className={`bg-white border border-gray-300 rounded-lg px-3 md:px-4 ${isCompact ? 'py-2' : 'py-3'} pr-12 text-base`}
+                    placeholder="Enter your password"
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry={!showPassword}
+                  />
+                  <TouchableOpacity
+                    className={`absolute right-3 ${isCompact ? 'top-2.5' : 'top-3'}`}
+                    onPress={() => setShowPassword(!showPassword)}
+                  >
+                    {showPassword ? (
+                      <EyeOff size={20} color="#6B7280" />
+                    ) : (
+                      <Eye size={20} color="#6B7280" />
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                className={`bg-primary-500 rounded-lg ${isCompact ? 'py-3' : 'py-3 md:py-4'} items-center ${loading ? 'opacity-50' : ''}`}
+                onPress={handleLogin}
+                disabled={loading}
+              >
+                <Text className={`${isCompact ? 'text-base' : 'text-sm xs:text-base md:text-lg'} text-white font-semibold`}>
+                  {loading ? 'Signing In...' : 'Sign In'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Footer */}
-          <View className="mt-12 items-center">
-            <Text className="text-gray-500 text-sm">
-              IPAC Operations Management System
-            </Text>
-            <Text className="text-gray-400 text-xs mt-1">
-              Version 1.0.0
-            </Text>
-          </View>
-        </View>
+          {!isCompact && (
+            <View className="mt-4 md:mt-6 items-center">
+              <Text className="text-gray-500 text-[11px] xs:text-xs md:text-sm">
+                IPAC Operations Management System
+              </Text>
+              <Text className="text-gray-400 text-[10px] xs:text-[11px] md:text-xs mt-1">
+                Version 1.0.0
+              </Text>
+            </View>
+          )}
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
