@@ -197,6 +197,13 @@ export default function PackerDashboard() {
           // Don't block navigation for this error, just log it
         } else {
           console.log('Team lead assigned successfully:', projectLead);
+          // Also update order.project_lead_id and ensure status is in_progress
+          const { error: updateLeadError } = await db.updateProjectLead(selectedOrder, projectLead);
+          if (updateLeadError) {
+            console.warn('Project lead update (orders table) failed:', updateLeadError);
+          } else {
+            console.log('Order updated with project lead and status set to in_progress (if pending).');
+          }
         }
       }
 
@@ -266,7 +273,6 @@ export default function PackerDashboard() {
       year: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
-      second: '2-digit',
       hour12: false
     });
   };
@@ -296,7 +302,7 @@ export default function PackerDashboard() {
                 <Text className="text-white text-xs">Sign Out</Text>
               </TouchableOpacity>
             </View>
-            <View className="flex-row justify-between items-center">
+            <View className="flex-row justify-between items-center mt-1">
               <Text className="text-primary-100 text-xs">Welcome, {profile?.full_name}</Text>
               <Text className="text-white text-xs font-medium">{getCurrentTime()}</Text>
             </View>
@@ -312,7 +318,7 @@ export default function PackerDashboard() {
               </Text>
             </View>
             <View className="flex-row items-center space-x-3">
-              <Text className="text-white text-xs font-medium">
+              <Text className={`text-white text-xs font-medium ${isCompact ? 'me-2' : ''}`}>
                 {getCurrentTime()}
               </Text>
               <TouchableOpacity 
@@ -347,12 +353,12 @@ export default function PackerDashboard() {
 
       {/* Main Content */}
       <View className={`flex-1 ${isCompact ? 'p-3' : 'p-4'}`}>
-        <View className={`${isPortraitStack ? 'flex-col space-y-3' : (isCompact ? 'flex-row space-x-3' : 'flex-row space-x-4')} flex-1`}>
+        <View className={`${isPortraitStack ? 'flex-col gap-y-3' : (isCompact ? 'flex-row gap-x-3' : 'flex-row gap-x-4')} flex-1`}>
           {/* Left Column - Select File */}
           <View className="flex-1 bg-white rounded-lg shadow-sm">
             <View className={`bg-primary-500 ${isCompact ? 'px-3 py-2' : 'px-4 py-3'} rounded-t-lg`}>
               <Text className={`${isCompact ? 'text-sm' : 'text-base'} text-white font-semibold`}>
-                📁 Select File
+                Select File
               </Text>
             </View>
             
@@ -421,35 +427,34 @@ export default function PackerDashboard() {
                   const isSelected = selectedPackers.includes(packer.id);
                   const isProjectLead = projectLead === packer.id;
                   const canBeProjectLead = isSelected && packer.is_available;
+
+                  const cardCls = `${isCompact ? 'p-2' : 'p-3'} mb-2 rounded-lg border flex-row items-center justify-between ${
+                    isSelected
+                      ? 'bg-primary-50 border-primary-500'
+                      : !packer.is_available
+                      ? 'bg-gray-100 border-gray-300 opacity-50'
+                      : 'bg-gray-50 border-gray-200'
+                  }`;
                   
                   return (
-                    <View
+                    <TouchableOpacity
                       key={packer.id}
-                      className={`flex-row items-center justify-between ${isCompact ? 'py-2' : 'py-3'} border-b border-gray-100 ${
-                        !packer.is_available ? 'opacity-50' : ''
-                      }`}
+                      onPress={() => packer.is_available && togglePackerSelection(packer.id)}
+                      activeOpacity={packer.is_available ? 0.7 : 1}
+                      disabled={!packer.is_available}
+                      className={cardCls}
                     >
-                      <TouchableOpacity 
-                        onPress={() => togglePackerSelection(packer.id)}
-                        className="flex-row items-center flex-1"
-                        activeOpacity={packer.is_available ? 0.7 : 1}
-                        disabled={!packer.is_available}
-                      >
-                        <View className={`w-6 h-6 rounded border-2 mr-3 items-center justify-center ${
+                      <View className="flex-row items-center flex-1">
+                        <View className={`w-4 h-4 rounded mr-3 ${
                           isSelected
-                            ? 'bg-primary-500 border-primary-500'
+                            ? 'bg-primary-500'
                             : packer.is_available
-                            ? 'border-gray-300'
-                            : 'border-gray-200 bg-gray-100'
-                        }`}>
-                          {isSelected && (
-                            <Text className="text-white text-xs">✓</Text>
-                          )}
-                        </View>
-                        
+                            ? 'bg-gray-300'
+                            : 'bg-gray-200'
+                        }`} />
                         <View className="flex-1">
                           <Text className={`font-medium ${
-                            packer.is_available ? 'text-gray-800' : 'text-gray-400'
+                            isSelected ? 'text-primary-700' : (packer.is_available ? 'text-gray-900' : 'text-gray-400')
                           }`}>
                             {packer.full_name}
                           </Text>
@@ -464,8 +469,7 @@ export default function PackerDashboard() {
                             </Text>
                           )}
                         </View>
-                      </TouchableOpacity>
-                      
+                      </View>
                       <TouchableOpacity 
                         onPress={() => toggleProjectLead(packer.id)}
                         activeOpacity={canBeProjectLead ? 0.7 : 1}
@@ -483,7 +487,7 @@ export default function PackerDashboard() {
                           )}
                         </View>
                       </TouchableOpacity>
-                    </View>
+                    </TouchableOpacity>
                   );
                 })
               )}

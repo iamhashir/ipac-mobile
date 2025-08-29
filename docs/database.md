@@ -68,6 +68,10 @@ media ──N:N─→ orders, order_packages, order_package_securing, order_pack
 
 ## Tables Reference
 
+
+
+
+
 ### attendance_logs
 **Purpose**: Tracks daily attendance for packers assigned to orders with shift periods and briefing completion.
 
@@ -115,6 +119,11 @@ media ──N:N─→ orders, order_packages, order_package_securing, order_pack
 
 **Business Logic**: Critical for compliance, security monitoring, and debugging. Automatically populated by triggers and manual logging for security events.
 
+
+
+
+
+
 ---
 
 ### clients
@@ -137,6 +146,24 @@ media ──N:N─→ orders, order_packages, order_package_securing, order_pack
 **Business Logic**: Central client management for CRM and order tracking.
 
 ---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ### materials
 **Purpose**: Base materials used in packaging operations.
@@ -170,6 +197,67 @@ media ──N:N─→ orders, order_packages, order_package_securing, order_pack
 
 ---
 
+
+
+
+
+
+
+
+
+
+
+
+
+---
+---
+
+### orders
+**Purpose**: Main order entity tracking commercial and production lifecycle.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `client_id` | `uuid` | - | NOT NULL, FK → clients(id) |
+| `order_name` | `text` | - | NOT NULL |
+| `description` | `text` | - | - |
+| `commercial_status` | `text` | `'draft'` | NOT NULL, CHECK (draft/quoted/approved/invoiced/paid) |
+| `production_status` | `text` | `'pending'` | NOT NULL, CHECK (pending/in_progress/completed/on_hold) |
+| `created_by` | `uuid` | - | FK → profiles(id) |
+| `project_lead_id` | `uuid` | - | FK → profiles(id) |
+| `start_date` | `timestamptz` | - | - |
+| `completion_date` | `timestamptz` | - | - |
+| `total_estimated_cost` | `numeric` | - | - |
+| `total_actual_cost` | `numeric` | - | - |
+| `total_transportation_cost` | `numeric` | `0.0` | - |
+| `created_at` | `timestamptz` | `now()` | - |
+| `updated_at` | `timestamptz` | `now()` | - |
+
+**Business Logic**: Central order management with dual status tracking (commercial vs. production). Project lead assignment enables delegation and responsibility tracking.
+
+---
+
+### order_packages
+**Purpose**: Individual packages within an order with detailed specifications.
+
+| Column | Type | Default | Constraints |
+|--------|------|---------|-------------|
+| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
+| `order_id` | `uuid` | - | NOT NULL, FK → orders(id) |
+| `package_number` | `integer` | - | NOT NULL |
+| `description` | `text` | - | - |
+| `original_pkg_info` | `uuid` | - | FK → package_info(id) |
+| `final_pkg_info` | `uuid` | - | FK → package_info(id) |
+| `status` | `text` | `'design'` | NOT NULL, CHECK (design/approved/in_production/packed/delivered) |
+| `quantity` | `integer` | `1` | CHECK (> 0) |
+| `boxes_completed` | `integer` | `0` | - |
+| `created_at` | `timestamptz` | `now()` | - |
+| `updated_at` | `timestamptz` | `now()` | - |
+
+**Business Logic**: Core packaging entity linking to package_info for detailed specifications. Original and final states are tracked through separate package_info references.
+
+---
+
 ### order_package_materials
 **Purpose**: Specific materials used in each package with calculated and actual quantities/costs.
 
@@ -195,26 +283,6 @@ media ──N:N─→ orders, order_packages, order_package_securing, order_pack
 
 ---
 
-### order_packages
-**Purpose**: Individual packages within an order with detailed specifications.
-
-| Column | Type | Default | Constraints |
-|--------|------|---------|-------------|
-| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
-| `order_id` | `uuid` | - | NOT NULL, FK → orders(id) |
-| `package_number` | `integer` | - | NOT NULL |
-| `description` | `text` | - | - |
-| `original_pkg_info` | `uuid` | - | FK → package_info(id) |
-| `final_pkg_info` | `uuid` | - | FK → package_info(id) |
-| `status` | `text` | `'design'` | NOT NULL, CHECK (design/approved/in_production/packed/delivered) |
-| `quantity` | `integer` | `1` | CHECK (> 0) |
-| `boxes_completed` | `integer` | `0` | - |
-| `created_at` | `timestamptz` | `now()` | - |
-| `updated_at` | `timestamptz` | `now()` | - |
-
-**Business Logic**: Core packaging entity linking to package_info for detailed specifications. Original and final states are tracked through separate package_info references.
-
----
 
 ### order_team_members
 **Purpose**: Junction table for team assignments linking orders to assigned packers using proper relational design.
@@ -233,31 +301,6 @@ media ──N:N─→ orders, order_packages, order_package_securing, order_pack
 - `UNIQUE(order_id, packer_id)` prevents duplicate assignments
 
 **Business Logic**: Proper relational approach using junction table for many-to-many relationship between orders and packers. Provides better query performance, referential integrity, and easier complex operations. Triggers automatically update packer status when team assignments change. The `is_team_lead` flag enables temporary team lead permissions for specific orders.
-
----
-
-### orders
-**Purpose**: Main order entity tracking commercial and production lifecycle.
-
-| Column | Type | Default | Constraints |
-|--------|------|---------|-------------|
-| `id` | `uuid` | `gen_random_uuid()` | PRIMARY KEY |
-| `client_id` | `uuid` | - | NOT NULL, FK → clients(id) |
-| `order_name` | `text` | - | NOT NULL |
-| `description` | `text` | - | - |
-| `commercial_status` | `text` | `'draft'` | NOT NULL, CHECK (draft/quoted/approved/invoiced/paid) |
-| `production_status` | `text` | `'pending'` | NOT NULL, CHECK (pending/in_progress/completed/on_hold) |
-| `created_by` | `uuid` | - | FK → profiles(id) |
-| `project_lead_id` | `uuid` | - | FK → profiles(id) |
-| `start_date` | `timestamptz` | - | - |
-| `completion_date` | `timestamptz` | - | - |
-| `total_estimated_cost` | `numeric` | - | - |
-| `total_actual_cost` | `numeric` | - | - |
-| `total_transportation_cost` | `numeric` | `0.0` | - |
-| `created_at` | `timestamptz` | `now()` | - |
-| `updated_at` | `timestamptz` | `now()` | - |
-
-**Business Logic**: Central order management with dual status tracking (commercial vs. production). Project lead assignment enables delegation and responsibility tracking.
 
 ---
 
@@ -372,7 +415,12 @@ media ──N:N─→ orders, order_packages, order_package_securing, order_pack
 
 
 
+--- Task related tables ---
 
+How to have these tables integrated to the app: 
+
+- interface
+- create the table task_logs 
 
 ### task_logs
 **Purpose**: Time tracking for specific packaging tasks.
@@ -420,6 +468,7 @@ media ──N:N─→ orders, order_packages, order_package_securing, order_pack
 **Unique Constraint**: `(task_id, order_package_id)`
 **Indexes**: `idx_task_packages_task_id`, `idx_task_packages_order_package_id`
 
+--- End of Task related tables ---
 
 
 

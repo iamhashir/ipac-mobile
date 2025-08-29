@@ -60,7 +60,6 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
   return (
     <View
       className="flex-row border-b border-x-2 border-gray-200"
-      style={{ minWidth: 800 }}
     >
       {/* Name column */}
       <View className="w-[14.3%] p-3 border-r border-gray-300 justify-center">

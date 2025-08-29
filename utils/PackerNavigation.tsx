@@ -6,7 +6,7 @@ export const usePackerNavigation = () => {
   const router = useRouter();
   const { session, canAccessAttendance, canAccessPackaging } = usePackerSession();
 
-  const navigateToStep = (step: 'dashboard' | 'attendance' | 'packaging-dossier') => {
+  const navigateToStep = (step: 'dashboard' | 'attendance' | 'packing-report') => {
     switch (step) {
       case 'dashboard':
         // Always allow going back to dashboard
@@ -31,7 +31,7 @@ export const usePackerNavigation = () => {
         router.push('/(packer)/attendance');
         break;
 
-      case 'packaging-dossier':
+      case 'packing-report':
         if (!canAccessPackaging()) {
           let message = 'You must complete the following steps first:\n';
           
@@ -61,7 +61,7 @@ export const usePackerNavigation = () => {
           );
           return false;
         }
-        router.push('/(packer)/packaging-dossier');
+        router.push('/(packer)/packing-report');
         break;
 
       default:
@@ -71,23 +71,23 @@ export const usePackerNavigation = () => {
     return true;
   };
 
-  const getNextStep = (): 'attendance' | 'packaging-dossier' | null => {
+  const getNextStep = (): 'attendance' | 'packing-report' | null => {
     if (!canAccessAttendance()) {
       return null; // Stay on dashboard
     }
     if (!session?.attendance_completed) {
       return 'attendance';
     }
-    return 'packaging-dossier';
+    return 'packing-report';
   };
 
-  const canNavigateToStep = (step: 'dashboard' | 'attendance' | 'packaging-dossier'): boolean => {
+  const canNavigateToStep = (step: 'dashboard' | 'attendance' | 'packing-report'): boolean => {
     switch (step) {
       case 'dashboard':
         return true; // Always can go back to dashboard
       case 'attendance':
         return canAccessAttendance();
-      case 'packaging-dossier':
+      case 'packing-report':
         return canAccessPackaging();
       default:
         return false;
@@ -116,10 +116,10 @@ export const usePackerNavigation = () => {
     }
 
     return {
-      currentStep: 'packaging-dossier',
+      currentStep: 'packing-report',
       stepNumber: 3,
       totalSteps: 3,
-      stepName: 'Packaging',
+      stepName: 'Packing Report',
       description: 'Package and finalize work',
     };
   };

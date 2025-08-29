@@ -20,7 +20,6 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
   return (
     <View
       className="bg-white border-b border-t border-x-2 border-gray-200"
-      style={{ minWidth: 800 }}
     >
       {/* First Header Row */}
       <View className="flex-row justify-between bg-blue-100 border-b border-gray-300">
@@ -45,7 +44,6 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
       {/* Second Header Row */}
       <View
         className="flex-row bg-blue-50 border-b border-gray-300"
-        style={{ minWidth: 800 }}
       >
         <View className="w-[14.3%] p-2 border-r border-gray-300">
           {/* Empty cell for name column */}

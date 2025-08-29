@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text } from 'react-native';
 
-export const Clock: React.FC = () => {
+interface ClockProps {
+  textClassName?: string;
+}
+
+export const Clock: React.FC<ClockProps> = ({ textClassName }) => {
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
@@ -26,7 +30,7 @@ export const Clock: React.FC = () => {
 
   return (
     <View className="flex-row items-center justify-center p-2">
-      <Text className="text-black text-sm font-medium">
+      <Text className={`${textClassName ? textClassName : 'text-black'} text-sm font-medium`}>
         {formatTime(currentTime)}
       </Text>
     </View>

@@ -38,7 +38,7 @@ export const teamLead = {
       `)
       .eq('order_id', orderId)
       .eq('is_team_lead', true)
-      .single();
+      .maybeSingle();
     
     return { data, error };
   },

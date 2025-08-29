@@ -44,7 +44,9 @@ module.exports = {
         warning: '#f59e0b',
       },
       fontFamily: {
-        // You can add custom fonts here if needed
+        // Prefer Calibri where available; React Native will fall back to system fonts if missing
+        sans: ['Calibri', 'ui-sans-serif', 'system-ui'],
+        calibri: ['Calibri', 'ui-sans-serif', 'system-ui'],
       },
     },
   },

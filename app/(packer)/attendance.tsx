@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Alert, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
@@ -11,6 +11,7 @@ import { Clock } from '../../components/packer/attendance/Clock';
 import { ArrowLeft } from 'lucide-react-native';
 import { NavigationButtons } from '../../components/NavigationButtons';
 import { ErrorAlert } from '../../components/ui/Alert';
+import { teamLead } from '../../utils/api/teamLead';
 
 // Types based on the reference
 interface AttendancePeriod {
@@ -43,6 +44,22 @@ export default function AttendanceScreen() {
   const { profile, signOut } = useAuth();
   const router = useRouter();
   const params = useLocalSearchParams();
+  const { width, height } = useWindowDimensions();
+  const isLandscape = width > height;
+  const isCompact = isLandscape && height < 450;
+  const isPortraitPhone = !isLandscape && width < 480;
+  
+  // Guard: require team selection session before accessing attendance
+  const { session, loading: sessionLoading, canAccessAttendance, markAttendanceCompleted } = usePackerSession();
+  useEffect(() => {
+    if (!sessionLoading) {
+      if (!canAccessAttendance()) {
+        Alert.alert('Access Denied', 'Please complete team selection before accessing attendance.', [
+          { text: 'Go to Dashboard', onPress: () => router.replace('/(packer)/dashboard') }
+        ]);
+      }
+    }
+  }, [sessionLoading, canAccessAttendance]);
   
   // State management based on reference
   const [order, setOrder] = useState<Order | null>(null);
@@ -58,7 +75,6 @@ export default function AttendanceScreen() {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Parse parameters - get from session if not in params
-  const { session } = usePackerSession();
   const orderId = (params.orderId as string) || session?.order_id;
 
   useEffect(() => {
@@ -79,6 +95,14 @@ export default function AttendanceScreen() {
       }
       setOrder(orderData);
       setProjectLead(orderData.project_lead_name);
+
+      // Fallback: if order has no project_lead_name, fetch team lead from team members
+      if (!orderData.project_lead_name) {
+        const { data: leadData, error: leadError } = await teamLead.getOrderTeamLead(orderId);
+        if (!leadError && leadData?.profiles?.full_name) {
+          setProjectLead(leadData.profiles.full_name);
+        }
+      }
 
       // Load packer details
       const { data: packersResponse, error: packersError } = await db.getOrderPackers(orderId);
@@ -654,8 +678,14 @@ await loadExistingAttendance(packersResponse, initialAttendance);
 
     const saved = await saveAttendance();
     if (saved) {
+      // Mark session attendance as completed so Packaging gate allows entry
+      const marked = await markAttendanceCompleted();
+      if (!marked) {
+        Alert.alert('Error', 'Could not mark attendance as completed. Please try again or contact your team lead.');
+        return;
+      }
       router.push({
-        pathname: '/(packer)/packaging-dossier',
+        pathname: '/(packer)/packing-report',
         params: { orderId }
       });
     }
@@ -679,7 +709,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
 
   if (loading) {
     return (
-      <SafeAreaView className="flex-1 bg-gray-50">
+      <SafeAreaView className="flex-1 bg-gray-50" edges={['top','bottom','left','right']}>
         <View className="flex-1 justify-center items-center">
           <Text className="text-lg text-gray-600">Loading...</Text>
         </View>
@@ -699,32 +729,44 @@ await loadExistingAttendance(packersResponse, initialAttendance);
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-blue-100">
+    <SafeAreaView className="flex-1 bg-primary-50" edges={['top','bottom','left','right']}>
       {/* Header */}
-      <View className="flex-row justify-between items-center p-4">
-        <TouchableOpacity 
-          onPress={() => router.back()}
-          className="flex-row items-center"
-        >
-          <ArrowLeft size={24} color="#000" />
-          <Text className="ml-2 text-lg font-semibold">Back</Text>
-        </TouchableOpacity>
-        
-        <Text className="text-2xl font-semibold">Attendance Sheet & Tool Box</Text>
-        
-        <View className="flex-row items-center gap-4">
-          <Clock />
-          <TouchableOpacity 
-            onPress={handleSignOut}
-            className="bg-blue-500 px-3 py-1 rounded"
-          >
-            <Text className="text-white text-sm">Sign Out</Text>
-          </TouchableOpacity>
-        </View>
+      <View className={`${isCompact ? 'px-3 py-2' : 'px-4 py-3'} bg-primary-500`}>
+        {isPortraitPhone ? (
+          <View className="space-y-1">
+            <View className="flex-row justify-between items-center">
+              <TouchableOpacity onPress={() => router.back()} className="flex-row items-center">
+                <ArrowLeft size={20} color="#fff" />
+                <Text className="ml-2 text-white text-sm font-semibold">Back</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleSignOut} className="px-2 py-1 bg-primary-600 rounded">
+                <Text className="text-white text-xs">Sign Out</Text>
+              </TouchableOpacity>
+            </View>
+            <View className="flex-row justify-between items-center">
+              <Text className="text-white text-lg font-bold">Attendance Sheet & Tool Box</Text>
+              <Clock textClassName="text-white" />
+            </View>
+          </View>
+        ) : (
+          <View className="flex-row justify-between items-center">
+            <TouchableOpacity onPress={() => router.back()} className="flex-row items-center">
+              <ArrowLeft size={24} color="#fff" />
+              <Text className={`${isCompact ? 'ml-2 text-white text-sm font-semibold' : 'ml-2 text-white text-base font-semibold'}`}>Back</Text>
+            </TouchableOpacity>
+            <Text className={`${isCompact ? 'text-white text-lg font-bold' : 'text-white text-xl font-bold'}`}>Attendance Sheet & Tool Box</Text>
+            <View className="flex-row items-center gap-4">
+              <Clock textClassName="text-white" />
+              <TouchableOpacity onPress={handleSignOut} className="bg-primary-600 px-3 py-1 rounded">
+                <Text className="text-white text-sm">Sign Out</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
       </View>
 
       {/* Navigation Buttons */}
-      <NavigationButtons currentScreen="attendance" />
+      <NavigationButtons currentScreen="attendance" iconsOnly={isCompact} />
 
       {/* Error Alert */}
       <ErrorAlert
@@ -736,10 +778,10 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       />
 
       {/* Main Content */}
-      <View className="flex-1 mx-4 mb-4">
-        <View className="bg-white rounded-lg shadow-md flex-1">
-          <View className="bg-blue-500 px-4 py-3 rounded-t-lg">
-            <Text className="text-white text-xl font-medium">
+      <ScrollView className="flex-1" contentContainerStyle={{ paddingHorizontal: isCompact ? 12 : 16, paddingBottom: 16 }}>
+        <View className="bg-white rounded-lg shadow-md">
+          <View className="bg-primary-500 px-4 py-3 rounded-t-lg">
+            <Text className={`${isCompact ? 'text-white text-lg font-medium' : 'text-white text-xl font-medium'}`}>
               Mark Attendance
             </Text>
           </View>
@@ -816,12 +858,12 @@ await loadExistingAttendance(packersResponse, initialAttendance);
                   ? 'text-gray-500'
                   : 'text-white'
               }`}>
-                {saving ? 'Saving Attendance...' : 'Continue to Packaging Dossier'}
+{saving ? 'Saving Attendance...' : 'Continue to Packing Report'}
               </Text>
             </TouchableOpacity>
           </View>
         </View>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }

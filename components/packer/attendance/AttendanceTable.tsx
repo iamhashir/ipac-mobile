@@ -1,5 +1,5 @@
 import React from "react";
-import { View, ScrollView } from "react-native";
+import { View, ScrollView, useWindowDimensions } from "react-native";
 import { AttendanceTableHeader } from "./AttendanceTableHeader";
 import { AttendanceRow } from "./AttendanceRow";
 
@@ -54,13 +54,18 @@ export const AttendanceTable: React.FC<AttendanceTableProps> = ({
   onEndWork,
   onRecordNewAttendance,
 }) => {
+  const { width } = useWindowDimensions();
+  const minTableWidth = 800; // fits the column layout
+  const tableWidth = Math.max(minTableWidth, Math.floor(width - 32));
+
   return (
-    <View className="flex-1" style={{ minWidth: 800 }}>
-      <ScrollView className="p-10"
-        showsHorizontalScrollIndicator={false} 
-        contentContainerStyle={{ minWidth: '100%' }}
+    <View className="flex-1">
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ paddingHorizontal: width < 900 ? 12 : 16 }}
       >
-        <View style={{ minWidth: 800 }} className="rounded-md">
+        <View style={{ width: tableWidth }} className="rounded-md">
           <ScrollView showsVerticalScrollIndicator={false} className="rounded-md border-3 border-gray-300">
             <AttendanceTableHeader 
               isAfternoon={isAfternoon}
@@ -69,7 +74,7 @@ export const AttendanceTable: React.FC<AttendanceTableProps> = ({
               onBulkTimeToggle={onBulkTimeToggle}
             />
             {names.map((name) => (
-                <AttendanceRow
+              <AttendanceRow
                 key={name}
                 name={name}
                 attendance={attendance[name] || {

@@ -133,11 +133,11 @@ export default function LoginScreen() {
             {/* Login Form */}
             <View className={isCompact ? 'space-y-4' : 'space-y-6'}>
               <View>
-                <Text className={`${isCompact ? 'text-xs' : 'text-xs xs:text-sm md:text-base'} text-gray-700 font-medium mb-2`}>
+                <Text className={`text-xs xs:text-sm md:text-base text-gray-700 font-medium mb-2 ms-1`}>
                   Username
                 </Text>
                 <TextInput
-                  className={`bg-white border border-gray-300 rounded-lg px-3 md:px-4 ${isCompact ? 'py-2' : 'py-3'} text-base`}
+                  className={`bg-white border border-gray-300 rounded-lg px-3 md:px-4 py-3 text-base`}
                   placeholder="Enter your username"
                   value={username}
                   onChangeText={setUsername}
@@ -147,19 +147,19 @@ export default function LoginScreen() {
               </View>
 
               <View>
-                <Text className={`${isCompact ? 'text-xs' : 'text-xs xs:text-sm md:text-base'} text-gray-700 font-medium mb-2`}>
+                <Text className={`text-xs xs:text-sm md:text-base text-gray-700 font-medium my-2 ms-1`}>
                   Password
                 </Text>
                 <View className="relative">
                   <TextInput
-                    className={`bg-white border border-gray-300 rounded-lg px-3 md:px-4 ${isCompact ? 'py-2' : 'py-3'} pr-12 text-base`}
+                    className={`bg-white border border-gray-300 rounded-lg px-3 md:px-4 py-3 pr-12 text-base`}
                     placeholder="Enter your password"
                     value={password}
                     onChangeText={setPassword}
                     secureTextEntry={!showPassword}
                   />
                   <TouchableOpacity
-                    className={`absolute right-3 ${isCompact ? 'top-2.5' : 'top-3'}`}
+                    className={`absolute right-3 top-3.5`}
                     onPress={() => setShowPassword(!showPassword)}
                   >
                     {showPassword ? (
@@ -172,7 +172,7 @@ export default function LoginScreen() {
               </View>
 
               <TouchableOpacity
-                className={`bg-primary-500 rounded-lg ${isCompact ? 'py-3' : 'py-3 md:py-4'} items-center ${loading ? 'opacity-50' : ''}`}
+                className={`bg-primary-500 rounded-lg xs:mt-5 ${isCompact ? 'py-2' : 'py-3 xs:py-2 md:py-4'} items-center ${loading ? 'opacity-50' : ''}`}
                 onPress={handleLogin}
                 disabled={loading}
               >
