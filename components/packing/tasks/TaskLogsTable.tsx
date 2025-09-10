@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, Modal } from 'react-native';
 
-interface Assignment { profiles?: { full_name?: string | null } | null; packer_id?: string }
+interface Assignment { profiles?: { full_name?: string | null } | null; packer_id?: string; task_status?: string }
 interface LogRow {
   id: string;
   start_time: string;
@@ -15,6 +15,7 @@ interface TaskLogsTableProps {
   rows: LogRow[];
   onPause?: (logId: string) => void;
   onFinish?: (logId: string) => void;
+  onRestart?: (logId: string) => void;
   onRowPress?: (logId: string) => void;
 }
 
@@ -38,12 +39,17 @@ const formatDuration = (startIso: string, endIso: string | null, durationMinutes
   } catch { return '—'; }
 };
 
-const TaskLogsTable: React.FC<TaskLogsTableProps> = ({ rows, onPause, onFinish, onRowPress }) => {
+const TaskLogsTable: React.FC<TaskLogsTableProps> = ({ rows, onPause, onFinish, onRestart, onRowPress }) => {
   const [packersModal, setPackersModal] = useState<{ open: boolean; names: string[] }>({ open: false, names: []});
 
   const openPackers = (assignments?: Assignment[]) => {
     const names = (assignments || []).map(a => a?.profiles?.full_name || '—');
     setPackersModal({ open: true, names });
+  };
+
+  const isTaskCompleted = (row: LogRow) => {
+    return row.end_time !== null || 
+           (row.task_assignments || []).every(a => a?.task_status === 'completed');
   };
 
   return (
@@ -57,30 +63,68 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({ rows, onPause, onFinish, 
       </View>
 
       {/* Rows */}
-      {rows.map((r) => (
-        <TouchableOpacity key={r.id} className="flex-row items-center px-3 py-2 border-x border-b border-gray-200 bg-white" onPress={() => onRowPress?.(r.id)} activeOpacity={0.7}>
-          <Text className="w-2/5 text-gray-800" numberOfLines={1}>{r.tasks?.name || '—'}</Text>
-          <Text className="w-1/5 text-gray-800">{formatTime(r.start_time)}</Text>
-          <Text className="w-1/5 text-gray-800">{formatTime(r.end_time)}</Text>
-          <Text className="w-1/5 text-gray-800">{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
+      {rows.map((r) => {
+        const completed = isTaskCompleted(r);
+        const rowStyle = completed 
+          ? "flex-row items-center px-3 py-2 border-x border-b border-gray-200 bg-gray-100"
+          : "flex-row items-center px-3 py-2 border-x border-b border-gray-200 bg-white";
+        const textStyle = completed ? "text-gray-500" : "text-gray-800";
+        
+        if (completed) {
+          // Completed: row not clickable, restart remains prominent
+          return (
+            <View key={r.id} className={rowStyle}>
+              <Text className={`w-2/5 ${textStyle}`} numberOfLines={1}>{r.tasks?.name || '—'}</Text>
+              <Text className={`w-1/5 ${textStyle}`}>{formatTime(r.start_time)}</Text>
+              <Text className={`w-1/5 ${textStyle}`}>{formatTime(r.end_time)}</Text>
+              <Text className={`w-1/5 ${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
 
-          {/* Action buttons (no headers) */}
-          <View className="flex-row ml-2">
-            <TouchableOpacity
-              className="px-2 py-1 rounded bg-blue-100 mr-2"
-              onPress={() => openPackers(r.task_assignments)}
-            >
-              <Text className="text-blue-800 text-sm">{(r.task_assignments || []).length} Packers</Text>
-            </TouchableOpacity>
-            <TouchableOpacity className="px-2 py-1 rounded bg-yellow-100 mr-2" onPress={() => onPause?.(r.id)}>
-              <Text className="text-yellow-800 text-sm">Pause</Text>
-            </TouchableOpacity>
-            <TouchableOpacity className="px-2 py-1 rounded bg-green-600" onPress={() => onFinish?.(r.id)}>
-              <Text className="text-white text-sm">Finish</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      ))}
+              {/* Action buttons */}
+              <View className="flex-row ml-2">
+                <TouchableOpacity
+                  className="px-2 py-1 rounded bg-blue-100 mr-2"
+                  onPress={() => openPackers(r.task_assignments)}
+                >
+                  <Text className="text-blue-800 text-sm">{(r.task_assignments || []).length} Packers</Text>
+                </TouchableOpacity>
+                {/* Restart only */}
+                <TouchableOpacity 
+                  className="px-2 py-1 rounded bg-blue-600"
+                  onPress={() => onRestart?.(r.id)}
+                >
+                  <Text className="text-white text-sm font-semibold">Restart</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          );
+        }
+        
+        // Active: row clickable
+        return (
+          <TouchableOpacity key={r.id} className={rowStyle} onPress={() => onRowPress?.(r.id)} activeOpacity={0.7}>
+            <Text className={`w-2/5 ${textStyle}`} numberOfLines={1}>{r.tasks?.name || '—'}</Text>
+            <Text className={`w-1/5 ${textStyle}`}>{formatTime(r.start_time)}</Text>
+            <Text className={`w-1/5 ${textStyle}`}>{formatTime(r.end_time)}</Text>
+            <Text className={`w-1/5 ${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
+
+            {/* Action buttons */}
+            <View className="flex-row ml-2">
+              <TouchableOpacity
+                className="px-2 py-1 rounded bg-blue-100 mr-2"
+                onPress={() => openPackers(r.task_assignments)}
+              >
+                <Text className="text-blue-800 text-sm">{(r.task_assignments || []).length} Packers</Text>
+              </TouchableOpacity>
+              <TouchableOpacity className="px-2 py-1 rounded bg-yellow-100 mr-2" onPress={() => onPause?.(r.id)}>
+                <Text className="text-yellow-800 text-sm">Pause</Text>
+              </TouchableOpacity>
+              <TouchableOpacity className="px-2 py-1 rounded bg-green-600" onPress={() => onFinish?.(r.id)}>
+                <Text className="text-white text-sm">Finish</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        );
+      })}
 
       {/* Packers modal */}
       <Modal visible={packersModal.open} transparent animationType="fade" onRequestClose={() => setPackersModal({ open: false, names: []})}>

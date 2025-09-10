@@ -64,8 +64,8 @@ export default function Index() {
     console.log('🏠 Index: User has profile, role:', userRole);
     
     if (userRole === 'admin' || userRole === 'director' || userRole === 'sales') {
-      console.log('🏠 Index: Redirecting to admin dashboard');
-      router.replace('/(admin)/dashboard');
+      console.log('🏠 Index: Redirecting to admin home');
+      router.replace('/(admin)/home');
     } else if (userRole === 'packer') {
       console.log('🏠 Index: Redirecting to packer dashboard');
       router.replace('/(packer)/dashboard');

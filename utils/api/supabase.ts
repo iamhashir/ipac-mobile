@@ -783,6 +783,26 @@ export const db = {
     return { data, error };
   },
 
+  // Upload image to Supabase storage bucket 'order_media'.
+  // Returns path and publicUrl (if bucket is public).
+  uploadOrderPackageImage: async (orderPackageId, fileUri) => {
+    try {
+      const resp = await fetch(fileUri);
+      const blob = await resp.blob();
+      const extGuess = (blob && blob.type && blob.type.includes('png')) ? 'png' : 'jpg';
+      const filename = `${orderPackageId}/${Date.now()}.${extGuess}`;
+      const { data, error } = await supabase
+        .storage
+        .from('order_media')
+        .upload(filename, blob, { contentType: blob.type || 'image/jpeg', upsert: true });
+      if (error) return { data: null, error };
+      const { data: pub } = await supabase.storage.from('order_media').getPublicUrl(filename);
+      return { data: { path: data?.path || filename, publicUrl: pub?.publicUrl || null }, error: null };
+    } catch (e) {
+      return { data: null, error: e };
+    }
+  },
+
   getAllPackingTypes: async () => {
     const { data, error } = await supabase
       .from('packing_types')
@@ -989,6 +1009,100 @@ export const db = {
     return { data, error };
   },
 
+  // Finish a task without RPC: compute minutes on client and persist end_time + duration_minutes
+  finishTaskLog: async (taskLogId: string) => {
+    const nowIso = new Date().toISOString();
+    // 1) fetch the current row to compute delta
+    const { data: row, error: fetchErr } = await supabase
+      .from('task_logs')
+      .select('id, start_time, restart_time, duration_minutes')
+      .eq('id', taskLogId)
+      .single();
+    if (fetchErr || !row) return { data: null, error: fetchErr };
+
+    const start = row.restart_time ? new Date(row.restart_time) : new Date(row.start_time);
+    const now = new Date();
+    const deltaMin = Math.max(0, Math.floor((now.getTime() - start.getTime()) / 60000));
+    const current = typeof row.duration_minutes === 'number' ? row.duration_minutes : 0;
+    const newTotal = current + deltaMin;
+
+    // 2) update end_time and duration_minutes atomically
+    const { data, error } = await supabase
+      .from('task_logs')
+      .update({ end_time: nowIso, duration_minutes: newTotal })
+      .eq('id', taskLogId)
+      .select('id, end_time, duration_minutes')
+      .single();
+    return { data, error };
+  },
+
+  // Restart a completed task: check assigned packers availability, then
+  // clear end_time, set restart_time, bump update_counter, and set assignments to in_progress
+  restartTaskLog: async (taskLogId: string) => {
+    // 1) find assigned packers for this task
+    const { data: assignedRows, error: assignedErr } = await supabase
+      .from('task_assignments')
+      .select('packer_id')
+      .eq('task_id', taskLogId);
+    if (assignedErr) return { data: null, error: assignedErr };
+    const assignedIds = (assignedRows || []).map((r: any) => r.packer_id).filter(Boolean);
+
+    // 2) check if any assigned packer is busy on another task
+    if (assignedIds.length > 0) {
+      const { data: busyRows, error: busyErr } = await supabase
+        .from('task_assignments')
+        .select('packer_id, task_id')
+        .in('packer_id', assignedIds)
+        .eq('task_status', 'in_progress')
+        .neq('task_id', taskLogId);
+      if (busyErr) return { data: null, error: busyErr };
+      if ((busyRows || []).length > 0) {
+        return { data: { canRestart: false }, error: null };
+      }
+    }
+
+    // 3) bump update_counter and set restart_time/end_time
+    const { data: curr, error: readErr } = await supabase
+      .from('task_logs')
+      .select('update_counter')
+      .eq('id', taskLogId)
+      .single();
+    if (readErr) return { data: null, error: readErr };
+
+    const nextCounter = (curr?.update_counter || 0) + 1;
+
+    // Try ISO timestamp first; if the column is numeric on this project, fall back to epoch seconds
+    let updErr: any = null;
+    {
+      const { error } = await supabase
+        .from('task_logs')
+        .update({ restart_time: new Date().toISOString(), end_time: null, update_counter: nextCounter })
+        .eq('id', taskLogId);
+      updErr = error;
+    }
+
+    if (updErr && updErr.code === '22P02') {
+      // Column is likely numeric; use epoch seconds
+      const epochSec = Math.floor(Date.now() / 1000);
+      const { error: fallbackErr } = await supabase
+        .from('task_logs')
+        .update({ restart_time: epochSec, end_time: null, update_counter: nextCounter })
+        .eq('id', taskLogId);
+      if (fallbackErr) return { data: null, error: fallbackErr };
+    } else if (updErr) {
+      return { data: null, error: updErr };
+    }
+
+    // 4) flip all assignments on this task to in_progress
+    const { error: statusErr } = await supabase
+      .from('task_assignments')
+      .update({ task_status: 'in_progress' })
+      .eq('task_id', taskLogId);
+    if (statusErr) return { data: null, error: statusErr };
+
+    return { data: { canRestart: true }, error: null };
+  },
+
   // Compute busy packers: any packer with an assignment to a task_log that has no end_time (in progress)
   getBusyPackerIds: async () => {
     const { data, error } = await supabase
@@ -1049,6 +1163,76 @@ export const db = {
     }
 
     return { data: { task_log_id: logId }, error: null };
+  },
+
+  // Task Management Functions (implementing rule-based behavior)
+  
+  // Check if a task can be resumed
+  canResumeTask: async (taskLogId) => {
+    const { data, error } = await supabase
+      .rpc('can_resume_task', { task_log_id: taskLogId });
+    return { data, error };
+  },
+
+  // Resume a completed task (checks packer availability first)
+  resumeTask: async (taskLogId) => {
+    const { data, error } = await supabase
+      .rpc('resume_task', { task_log_id: taskLogId });
+    return { data, error };
+  },
+
+  // Complete a task properly (updates assignments and duration)
+  completeTask: async (taskLogId) => {
+    const { data, error } = await supabase
+      .rpc('complete_task', { task_log_id: taskLogId });
+    return { data, error };
+  },
+
+  // Pause a task (records pause duration)
+  pauseTask: async (taskLogId) => {
+    const { data, error } = await supabase
+      .rpc('pause_task', { task_log_id: taskLogId });
+    return { data, error };
+  },
+
+  // Resume from pause (adds pause duration to task log)
+  unpauseTask: async (taskLogId, pauseDurationSeconds = null) => {
+    const { data, error } = await supabase
+      .rpc('unpause_task', { 
+        task_log_id: taskLogId, 
+        pause_duration_seconds: pauseDurationSeconds 
+      });
+    return { data, error };
+  },
+
+  // Get comprehensive task status (for UI state management)
+  getTaskStatusView: async (taskLogIds = null) => {
+    let query = supabase.from('task_status_view').select('*');
+    
+    if (taskLogIds && taskLogIds.length > 0) {
+      query = query.in('task_log_id', taskLogIds);
+    }
+    
+    const { data, error } = await query.order('start_time', { ascending: false });
+    return { data, error };
+  },
+
+  // Get active tasks for order packages (for task tab persistence)
+  getActiveTasksForPackages: async (orderPackageIds) => {
+    if (!orderPackageIds || orderPackageIds.length === 0) return { data: [], error: null };
+    
+    const { data, error } = await supabase
+      .from('task_status_view')
+      .select('*')
+      .neq('overall_status', 'completed')
+      .in('task_log_id', 
+        supabase
+          .from('task_packages')
+          .select('task_log_id')
+          .in('order_package_id', orderPackageIds)
+      );
+    
+    return { data, error };
   },
 };
 

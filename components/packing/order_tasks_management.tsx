@@ -4,7 +4,7 @@ import TabLayout, { TabDefinition } from './TabLayout';
 import SimpleSelect from './tasks/SimpleSelect';
 import TaskAssignmentHeader from './tasks/TaskAssignmentHeader';
 import TaskLogsTable from './tasks/TaskLogsTable';
-import { db } from '../../utils/api/supabase';
+import { db, supabase } from '../../utils/api/supabase';
 
 interface OrderTasksManagementProps {
   orderId: string;
@@ -47,6 +47,30 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
       await refreshLogs();
     };
     init();
+
+    // Realtime: subscribe to task_logs changes for live updates
+    const channel = supabase
+      .channel('task-logs-realtime')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'task_logs',
+      }, async (_payload) => {
+        await refreshLogs();
+        await refreshBusyStatus();
+      })
+      .subscribe();
+
+    // Fallback polling every 5s in case websocket can't connect
+    const poll = setInterval(() => {
+      refreshLogs();
+      refreshBusyStatus();
+    }, 5000);
+
+    return () => {
+      clearInterval(poll);
+      try { supabase.removeChannel(channel); } catch {}
+    };
   }, [orderId]);
 
   const refreshLogs = async () => {
@@ -111,10 +135,8 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                   const now = Date.now();
                   const paused = pauseStartMap[id] != null;
                   if (!paused) {
-                    // Pause: set assignments to paused and record start
                     await db.updateTaskAssignmentsStatus(id, 'paused');
                     setPauseStartMap(prev => ({ ...prev, [id]: now }));
-                    await db.incrementTaskLogCounter(id, {});
                   } else {
                     // Resume: set to in_progress and add pause seconds
                     const deltaSec = Math.max(0, Math.floor((now - (pauseStartMap[id] || now)) / 1000));
@@ -123,14 +145,36 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                     const copy = { ...pauseStartMap }; delete copy[id]; setPauseStartMap(copy);
                   }
                   await refreshLogs();
+                  await refreshBusyStatus();
                 }}
                 onFinish={async (id) => {
-                  // Complete: set assignments completed only (no task_logs update)
-                  await db.updateTaskAssignmentsStatus(id, 'completed');
-                  // Close tab when completed
+                  const { error } = await db.finishTaskLog(id);
+                  if (error) {
+                    console.error('Error finishing task:', error);
+                    return;
+                  }
                   setOpenTaskIds(prev => prev.filter(x => x !== id));
                   await refreshLogs();
+                  await refreshBusyStatus();
                   setActiveKey('overview');
+                  await refreshLogs();
+                  await refreshBusyStatus();
+                  setActiveKey('overview');
+                }}
+                onRestart={async (id) => {
+                  const { data, error } = await db.restartTaskLog(id);
+                  if (error) {
+                    console.error('Error restarting task:', error);
+                    return;
+                  }
+                  if (!data?.canRestart) {
+                    Alert.alert('Packers Busy', 'Please wait for packers to be available or create a new task with available packers.');
+                    return;
+                  }
+                  if (!openTaskIds.includes(id)) setOpenTaskIds(prev => [...prev, id]);
+                  await refreshLogs();
+                  await refreshBusyStatus();
+                  setActiveKey(`task:${id}`);
                 }}
               />
             </View>
@@ -297,18 +341,6 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
               <View className="border border-gray-300 rounded-md bg-white px-2 py-1">
                 <Text className="text-gray-700">{log?.notes || '—'}</Text>
               </View>
-              <View className="flex-row mt-2">
-                <TouchableOpacity
-                  className="bg-primary-600 px-3 py-1 rounded"
-                  onPress={async () => {
-                    // For simplicity, bump counter without changing notes here; extend as needed.
-                    await db.incrementTaskLogCounter(id, {});
-                    await refreshLogs();
-                  }}
-                >
-                  <Text className="text-white">Bump update counter</Text>
-                </TouchableOpacity>
-              </View>
             </View>
 
             {/* Controls */}
@@ -321,7 +353,6 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                   if (!paused) {
                     await db.updateTaskAssignmentsStatus(id, 'paused');
                     setPauseStartMap(prev => ({ ...prev, [id]: Date.now() }));
-                    await db.incrementTaskLogCounter(id, {});
                   } else {
                     const now = Date.now();
                     const deltaSec = Math.max(0, Math.floor((now - (pauseStartMap[id] || now)) / 1000));
@@ -330,6 +361,7 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                     const copy = { ...pauseStartMap }; delete copy[id]; setPauseStartMap(copy);
                   }
                   await refreshLogs();
+                  await refreshBusyStatus();
                 }}
               >
                 <Text className="text-yellow-800">{pauseStartMap[id] ? 'Resume' : 'Pause'}</Text>
@@ -338,7 +370,12 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
               <TouchableOpacity
                 className="px-3 py-2 rounded bg-green-600"
                 onPress={async () => {
-                  await db.updateTaskAssignmentsStatus(id, 'completed');
+                  // Use the new finishTaskLog function that properly calculates duration
+                  const { error } = await db.finishTaskLog(id);
+                  if (error) {
+                    console.error('Error finishing task:', error);
+                    return;
+                  }
                   setOpenTaskIds(prev => prev.filter(x => x !== id));
                   await refreshLogs();
                   setActiveKey('overview');

@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text } from 'react-native';
+import { View, Text, TouchableOpacity, Alert } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import OrderPackingInfo, { BoxInfoDetails } from './order_packing_info';
 import OrderPackingDimensions, { DimensionsTriple } from './order_packing_dimensions';
 import OrderPackingItems from './order_packing_items';
@@ -30,9 +31,65 @@ interface BoxDetailsTabProps {
 }
 
 const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId }) => {
+  const askSource = async () => {
+    Alert.alert('Attach image', 'Choose source', [
+      { text: 'Gallery', onPress: pickFromGallery },
+      { text: 'Camera', onPress: takePhoto },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const pickFromGallery = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Media library access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadAsset(res.assets[0].uri);
+    }
+  };
+
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Camera access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadAsset(res.assets[0].uri);
+    }
+  };
+
+  const uploadAsset = async (uri: string) => {
+    try {
+      const { db } = await import('../../utils/api/supabase');
+      const { data, error } = await db.uploadOrderPackageImage(orderPackageId, uri);
+      if (error) {
+        Alert.alert('Upload failed', 'Could not upload image to storage.');
+      } else {
+        Alert.alert('Uploaded', 'Image uploaded successfully.');
+      }
+    } catch (e) {
+      Alert.alert('Upload error', 'Unexpected error while uploading.');
+    }
+  };
+
   return (
     <View className="bg-white rounded-b-lg p-4">
-      <Text className="text-lg font-semibold text-gray-800">Box #{packageNumber ?? '—'}</Text>
+      <View className="flex-row items-center justify-between">
+        <Text className="text-lg font-semibold text-gray-800">Box #{packageNumber ?? '—'}</Text>
+        <View className="flex-row gap-2">
+          <TouchableOpacity onPress={askSource} className="bg-primary-600 px-3 py-1 rounded">
+            <Text className="text-white text-sm">Attach images</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => { /* Placeholder - no action yet */ }} className="bg-gray-700 px-3 py-1 rounded">
+            <Text className="text-white text-sm">Mark box as completed</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
       {description ? (
         <Text className="text-gray-600 mt-2">{description}</Text>
       ) : (

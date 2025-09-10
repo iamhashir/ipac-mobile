@@ -728,6 +728,12 @@ await loadExistingAttendance(packersResponse, initialAttendance);
     // Handle manual time entry if needed in the future
   };
 
+  // Derived: whether at least one packer is marked present
+  const hasPresentPackers = packers.some(name => {
+    const packerAttendance = attendance[name];
+    return packerAttendance?.morning.present === true || packerAttendance?.afternoon.present === true;
+  });
+
   return (
     <SafeAreaView className="flex-1 bg-primary-50" edges={['top','bottom','left','right']}>
       {/* Header */}
@@ -816,24 +822,9 @@ await loadExistingAttendance(packersResponse, initialAttendance);
 
           {/* Footer with Submit Button */}
           <View className="p-4 bg-gray-50 border-t border-gray-200 rounded-b-lg">
-            {!toolboxCompleted && (
+            {!toolboxCompleted && hasPresentPackers && (
               <TouchableOpacity
                 onPress={() => {
-                  // Check if at least one packer is marked as present
-                  const hasPresentPackers = packers.some(name => {
-                    const packerAttendance = attendance[name];
-                    return packerAttendance?.morning.present === true || packerAttendance?.afternoon.present === true;
-                  });
-
-                  if (!hasPresentPackers) {
-                    setErrorAlert({
-                      visible: true, 
-                      title: 'Attendance Required', 
-                      message: 'Please mark at least one packer as present before confirming toolbox briefing.'
-                    });
-                    return;
-                  }
-
                   setToolboxCompleted(true);
                 }}
                 className="mb-4 py-3 px-6 rounded-lg bg-orange-500"

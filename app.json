@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "IPAC Operations App",
+    "name": "IPAC",
     "slug": "ipac-operations-app",
     "version": "1.0.0",
     "orientation": "default",
@@ -17,6 +17,7 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.ipacoperationsapp.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -30,10 +31,17 @@
       "backgroundColor": "#ffffff"
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      "expo-dev-client"
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "062cda24-3592-4de1-9d03-c22f89ccef94"
+      }
     }
   }
 }
