@@ -140,11 +140,12 @@ export const auth = {
 export const db = {
   // Get user profile with role
   getUserProfile: async (userId) => {
-    const { data, error } = await supabase
+    // Try explicit relationship alias first to avoid PostgREST rel-name ambiguities
+    let { data, error } = await supabase
       .from('profiles')
       .select(`
         *,
-        roles (
+        roles:role_id (
           id,
           name,
           can_block_users,
@@ -156,9 +157,33 @@ export const db = {
         )
       `)
       .eq('id', userId)
-      .single();
+      .maybeSingle();
+
+    // Fallback: use constraint-qualified join if the alias fails
+    if (error) {
+      const q2 = await supabase
+        .from('profiles')
+        .select(`
+          *,
+          roles:roles!profiles_role_id_fkey (
+            id,
+            name,
+            can_block_users,
+            can_unblock_users,
+            can_ban_users,
+            can_reset_passwords,
+            can_delete_profiles,
+            can_manage_roles
+          )
+        `)
+        .eq('id', userId)
+        .maybeSingle();
+      data = q2.data as any;
+      error = q2.error as any;
+    }
     
-    return { data, error };
+    // Ensure we always return a single object or null
+    return { data: (data as any) || null, error };
   },
 
   // Get available orders for packer selection (including in_progress orders)
@@ -732,15 +757,50 @@ export const db = {
     const materialIds = Array.from(new Set((mats || []).map((r: any) => r.material_id).filter(Boolean)));
     if (!materialIds.length) return { data: [], error: null };
 
-    // Step 2: fetch all variants for these materials
-    const { data: variants, error: varErr } = await supabase
-      .from('material_variants')
-      .select('id, variant_name, material_id')
-      .in('material_id', materialIds)
-      .order('variant_name');
+    // Step 2: fetch all variants for these materials, including the material's default unit
+    let variants: any = null;
+    let varErr: any = null;
+    // Try selecting with materials' unit if available
+    {
+      const r = await supabase
+        .from('material_variants')
+        .select(`
+          id,
+          variant_name,
+          material_id,
+          materials:material_id (
+            id,
+            unit_id,
+            units_of_measure:unit_id ( id, name )
+          )
+        `)
+        .in('material_id', materialIds)
+        .order('variant_name');
+      variants = r.data;
+      varErr = r.error;
+    }
+
+    // Fallback: if that failed (e.g., materials has no unit_id), select minimal variant fields
+    if (varErr) {
+      const r2 = await supabase
+        .from('material_variants')
+        .select('id, variant_name, material_id')
+        .in('material_id', materialIds)
+        .order('variant_name');
+      variants = r2.data;
+      varErr = r2.error;
+    }
+
     if (varErr) return { data: null, error: varErr };
 
-    const items = (variants || []).map((v: any) => ({ id: v.id, value: v.id, label: v.variant_name, material_id: v.material_id }));
+    const items = (variants || []).map((v: any) => ({
+      id: v.id,
+      value: v.id,
+      label: v.variant_name,
+      material_id: v.material_id,
+      unit_id: v?.materials?.unit_id || null,
+      unit_name: v?.materials?.units_of_measure?.name || null,
+    }));
     return { data: items, error: null };
   },
 
@@ -755,12 +815,61 @@ export const db = {
   },
 
   addOrderPackageMaterial: async (payload) => {
-    const { data, error } = await supabase
+    // Build three shapes to tolerate schema differences across environments
+    const legacy: any = {
+      order_package_id: payload.order_package_id,
+      material_variant_id: payload.material_variant_id,
+      material_type: payload.material_type, // NOT NULL on live schema (e.g., 'Accessories')
+      is_final: payload.is_final ?? false, // NOT NULL boolean
+      quantity: (typeof payload.quantity === 'number' && isFinite(payload.quantity))
+        ? payload.quantity
+        : (typeof payload.quantity_calculated === 'number' && isFinite(payload.quantity_calculated) ? payload.quantity_calculated : null),
+      unit_id: payload.unit_id,
+      length: (typeof payload.length === 'number' && isFinite(payload.length)) ? payload.length : null,
+      width: (typeof payload.width === 'number' && isFinite(payload.width)) ? payload.width : null,
+      comment: payload.comment ?? payload.notes ?? null,
+      item_used: payload.item_used ?? false,
+    };
+
+    const canonical: any = {
+      order_package_id: payload.order_package_id,
+      material_variant_id: payload.material_variant_id,
+      quantity_calculated: (typeof payload.quantity_calculated === 'number' && isFinite(payload.quantity_calculated))
+        ? payload.quantity_calculated
+        : (typeof payload.quantity === 'number' && isFinite(payload.quantity) ? payload.quantity : 0),
+      unit_id: payload.unit_id,
+      cost_at_calculation: (typeof payload.cost_at_calculation === 'number' && isFinite(payload.cost_at_calculation))
+        ? payload.cost_at_calculation
+        : 0,
+      quantity_actual: (typeof payload.quantity_actual === 'number' && isFinite(payload.quantity_actual)) ? payload.quantity_actual : null,
+      cost_actual: (typeof payload.cost_actual === 'number' && isFinite(payload.cost_actual)) ? payload.cost_actual : null,
+      usage_details: payload.usage_details ?? null,
+      notes: payload.notes ?? payload.comment ?? null,
+    };
+
+    // 1) Try legacy shape first (it matches what readers expect in this codebase)
+    let { data, error } = await supabase
+      .from('order_package_materials')
+      .insert(legacy)
+      .select('id')
+      .single();
+    if (!error) return { data, error: null };
+
+    // 2) Try canonical schema next
+    const q2 = await supabase
+      .from('order_package_materials')
+      .insert(canonical)
+      .select('id')
+      .single();
+    if (!q2.error) return { data: q2.data, error: null };
+
+    // 3) Last resort: try the raw payload we were given
+    const q3 = await supabase
       .from('order_package_materials')
       .insert(payload)
       .select('id')
       .single();
-    return { data, error };
+    return { data: q3.data, error: q3.error };
   },
 
   updateOrderPackageMaterial: async (id, fields) => {
@@ -948,6 +1057,33 @@ export const db = {
     return { data, error };
   },
 
+  // Fetch order_package_ids linked to a task log
+  getTaskPackages: async (taskLogId: string) => {
+    const { data, error } = await supabase
+      .from('task_packages')
+      .select('order_package_id')
+      .eq('task_log_id', taskLogId);
+    if (error) return { data: null, error };
+    const ids = (data || []).map((r: any) => r.order_package_id).filter(Boolean);
+    return { data: ids, error: null };
+  },
+
+  // Link additional order packages to an existing task log
+  addTaskPackages: async (taskLogId: string, orderPackageIds: string[]) => {
+    if (!orderPackageIds || orderPackageIds.length === 0) return { data: [], error: null };
+    // Filter out already linked ids
+    const { data: existing } = await supabase
+      .from('task_packages')
+      .select('order_package_id')
+      .eq('task_log_id', taskLogId);
+    const existingSet = new Set((existing || []).map((r: any) => r.order_package_id));
+    const toInsert = orderPackageIds.filter(id => id && !existingSet.has(id));
+    if (toInsert.length === 0) return { data: [], error: null };
+    const rows = toInsert.map(opId => ({ task_log_id: taskLogId, order_package_id: opId }));
+    const { data, error } = await supabase.from('task_packages').insert(rows).select('order_package_id');
+    return { data, error };
+  },
+
   getTaskLogById: async (id) => {
     const { data, error } = await supabase
       .from('task_logs')
@@ -1103,15 +1239,23 @@ export const db = {
     return { data: { canRestart: true }, error: null };
   },
 
-  // Compute busy packers: any packer with an assignment to a task_log that has no end_time (in progress)
+  // Compute busy packers from ACTIVE task logs only (end_time IS NULL).
+  // Treat both 'in_progress' and 'paused' assignments as busy.
   getBusyPackerIds: async () => {
     const { data, error } = await supabase
-      .from('task_assignments')
-      .select('packer_id, task_status')
-      .eq('task_status', 'in_progress');
+      .from('task_logs')
+      .select('id, end_time, task_assignments(packer_id, task_status)')
+      .is('end_time', null);
     if (error) return { data: null, error };
-    const busy = Array.from(new Set((data || []).map((r: any) => r.packer_id).filter(Boolean)));
-    return { data: busy, error: null };
+    const busySet = new Set<string>();
+    (data || []).forEach((log: any) => {
+      (log.task_assignments || []).forEach((a: any) => {
+        if (a && ['in_progress', 'paused'].includes(a.task_status) && a.packer_id) {
+          busySet.add(a.packer_id);
+        }
+      });
+    });
+    return { data: Array.from(busySet), error: null };
   },
 
   addTaskAssignments: async (taskId, packerIds) => {

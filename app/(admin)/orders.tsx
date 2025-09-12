@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Search, Filter, Eye, Edit3, CheckCircle, Plus } from 'lucide-react-native';
 import { supabase } from '../../utils/api/supabase';
-import AddOrderModal from './components/AddOrderModal';
+const AddOrderModal = lazy(() => import('./components/AddOrderModal'));
 
 interface Order {
   id: string;
@@ -167,6 +167,11 @@ export default function OrdersPage() {
             <Plus size={16} color="white" />
             <Text className="ml-2 text-white font-medium">Add Order</Text>
           </TouchableOpacity>
+          {showAddModal && (
+            <Suspense fallback={<View className="p-4"><Text>Loading form...</Text></View>}>
+              <AddOrderModal visible={showAddModal} onClose={() => setShowAddModal(false)} />
+            </Suspense>
+          )}
         </View>
         
         {/* Search Bar */}

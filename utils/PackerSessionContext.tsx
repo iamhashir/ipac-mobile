@@ -58,12 +58,15 @@ export const PackerSessionProvider: React.FC<PackerSessionProviderProps> = ({ ch
   const [session, setSession] = useState<PackerSession | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Load existing session on mount
+  // Load existing session on mount when profile becomes available
   useEffect(() => {
     if (profile?.id) {
       loadExistingSession();
+    } else if (profile === null) {
+      // Profile is explicitly null (user not authenticated), stop loading
+      setLoading(false);
     }
-  }, [profile?.id]);
+  }, [profile?.id, profile]);
 
   const loadExistingSession = async () => {
     if (!profile?.id) return;

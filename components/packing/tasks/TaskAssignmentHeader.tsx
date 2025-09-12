@@ -11,11 +11,15 @@ const TaskAssignmentHeader: React.FC<TaskAssignmentHeaderProps> = ({ availableCo
   return (
     <View className="mx-4 mt-4 mb-2">
       <View className="flex-row items-center justify-between">
-        <Text className="text-lg font-semibold text-gray-800">Task Assignment Section</Text>
+        <Text className="text-lg font-semibold text-gray-800">Task Assignment</Text>
         <View className="flex-row items-center">
-          <Text className="text-gray-700 mr-4">{availableCount} packers available</Text>
-          <Text className="text-gray-700 mr-4">{busyCount} packers busy</Text>
-          <TouchableOpacity className="bg-primary-600 px-3 py-1 rounded" onPress={onBreakPress}>
+          <View className="flex-row items-center mr-3 bg-green-100 px-2 py-1 rounded-full">
+            <Text className="text-green-700 font-medium text-xs">{availableCount} available</Text>
+          </View>
+          <View className="flex-row items-center mr-3 bg-amber-100 px-2 py-1 rounded-full">
+            <Text className="text-amber-700 font-medium text-xs">{busyCount} busy</Text>
+          </View>
+          <TouchableOpacity className="bg-primary-600 px-3 py-1 rounded-md" onPress={onBreakPress}>
             <Text className="text-white">Break</Text>
           </TouchableOpacity>
         </View>

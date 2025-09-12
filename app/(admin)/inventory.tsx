@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, TextInput, Alert, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Search, Plus, Package, Building2, Tag as TagIcon, DollarSign, Settings } from 'lucide-react-native';
@@ -17,15 +17,13 @@ import {
   materialTagOperations
 } from '../../utils/api/inventory';
 
-import {
-  MaterialCard,
-  MaterialForm,
-  VariantManagement,
-  SupplierCard,
-  TagManagement
-} from '../../components/inventory/InventoryComponents';
+import { MaterialCard, SupplierCard, TagManagement } from '../../components/inventory/InventoryComponents';
 
-import { SupplierForm } from '../../components/inventory/InventoryForms';
+// Lazy-load heavy forms/panels used conditionally
+const MaterialForm = React.lazy(() => import('../../components/inventory/InventoryComponents').then(m => ({ default: m.MaterialForm })));
+const VariantManagement = React.lazy(() => import('../../components/inventory/InventoryComponents').then(m => ({ default: m.VariantManagement })));
+const SupplierForm = React.lazy(() => import('../../components/inventory/InventoryForms').then(m => ({ default: m.SupplierForm })));
+
 import { ConfirmModal } from '../../components/ui/ConfirmModal';
 
 // Tab types
@@ -595,30 +593,34 @@ export default function InventoryPage() {
       {/* Material Form Modal */}
       <Modal visible={showMaterialForm} animationType="slide" presentationStyle="pageSheet">
         <SafeAreaView className="flex-1">
-          <MaterialForm
-            material={selectedMaterial || undefined}
-            units={units}
-            tags={tags}
-            onSave={selectedMaterial ? handleUpdateMaterial : handleCreateMaterial}
-            onCancel={() => {
-              setShowMaterialForm(false);
-              setSelectedMaterial(null);
-            }}
-          />
+          <Suspense fallback={<View className="p-4"><Text>Loading material form...</Text></View>}>
+            <MaterialForm
+              material={selectedMaterial || undefined}
+              units={units}
+              tags={tags}
+              onSave={selectedMaterial ? handleUpdateMaterial : handleCreateMaterial}
+              onCancel={() => {
+                setShowMaterialForm(false);
+                setSelectedMaterial(null);
+              }}
+            />
+          </Suspense>
         </SafeAreaView>
       </Modal>
 
       {/* Supplier Form Modal */}
       <Modal visible={showSupplierForm} animationType="slide" presentationStyle="pageSheet">
         <SafeAreaView className="flex-1">
-          <SupplierForm
-            supplier={selectedSupplier || undefined}
-            onSave={selectedSupplier ? handleUpdateSupplier : handleCreateSupplier}
-            onCancel={() => {
-              setShowSupplierForm(false);
-              setSelectedSupplier(null);
-            }}
-          />
+          <Suspense fallback={<View className="p-4"><Text>Loading supplier form...</Text></View>}>
+            <SupplierForm
+              supplier={selectedSupplier || undefined}
+              onSave={selectedSupplier ? handleUpdateSupplier : handleCreateSupplier}
+              onCancel={() => {
+                setShowSupplierForm(false);
+                setSelectedSupplier(null);
+              }}
+            />
+          </Suspense>
         </SafeAreaView>
       </Modal>
 
@@ -626,15 +628,17 @@ export default function InventoryPage() {
       <Modal visible={showVariantManagement} animationType="slide" presentationStyle="pageSheet">
         <SafeAreaView className="flex-1">
           {selectedMaterial && (
-            <VariantManagement
-              material={selectedMaterial}
-              suppliers={suppliers}
-              units={units}
-              onClose={() => {
-                setShowVariantManagement(false);
-                setSelectedMaterial(null);
-              }}
-            />
+            <Suspense fallback={<View className="p-4"><Text>Loading variants...</Text></View>}>
+              <VariantManagement
+                material={selectedMaterial}
+                suppliers={suppliers}
+                units={units}
+                onClose={() => {
+                  setShowVariantManagement(false);
+                  setSelectedMaterial(null);
+                }}
+              />
+            </Suspense>
           )}
         </SafeAreaView>
       </Modal>

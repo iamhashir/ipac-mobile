@@ -56,10 +56,11 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({ rows, onPause, onFinish, 
     <View>
       {/* Header */}
       <View className="flex-row bg-gray-100 px-3 py-2 rounded-t-md border border-gray-200 mt-2">
-        <Text className="w-2/5 font-semibold text-gray-700">Tasks log</Text>
-        <Text className="w-1/5 font-semibold text-gray-700">Start time</Text>
-        <Text className="w-1/5 font-semibold text-gray-700">End time</Text>
-        <Text className="w-1/5 font-semibold text-gray-700">Duration</Text>
+        <Text style={{ flex: 2.5 }} className="font-semibold text-gray-700">Tasks log</Text>
+        <Text style={{ flex: 1 }} className="font-semibold text-gray-700">Start time</Text>
+        <Text style={{ flex: 1 }} className="font-semibold text-gray-700">End time</Text>
+        <Text style={{ flex: 1 }} className="font-semibold text-gray-700">Duration</Text>
+        <Text style={{ flex: 1.5 }} className="font-semibold text-gray-700">Actions</Text>
       </View>
 
       {/* Rows */}
@@ -74,25 +75,25 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({ rows, onPause, onFinish, 
           // Completed: row not clickable, restart remains prominent
           return (
             <View key={r.id} className={rowStyle}>
-              <Text className={`w-2/5 ${textStyle}`} numberOfLines={1}>{r.tasks?.name || '—'}</Text>
-              <Text className={`w-1/5 ${textStyle}`}>{formatTime(r.start_time)}</Text>
-              <Text className={`w-1/5 ${textStyle}`}>{formatTime(r.end_time)}</Text>
-              <Text className={`w-1/5 ${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
+              <Text style={{ flex: 2.5 }} className={`${textStyle}`} numberOfLines={1}>{r.tasks?.name || '—'}</Text>
+              <Text style={{ flex: 1 }} className={`${textStyle}`}>{formatTime(r.start_time)}</Text>
+              <Text style={{ flex: 1 }} className={`${textStyle}`}>{formatTime(r.end_time)}</Text>
+              <Text style={{ flex: 1 }} className={`${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
 
               {/* Action buttons */}
-              <View className="flex-row ml-2">
+              <View style={{ flex: 1.5 }} className="flex-row">
                 <TouchableOpacity
                   className="px-2 py-1 rounded bg-blue-100 mr-2"
                   onPress={() => openPackers(r.task_assignments)}
                 >
                   <Text className="text-blue-800 text-sm">{(r.task_assignments || []).length} Packers</Text>
                 </TouchableOpacity>
-                {/* Restart only */}
+                {/* Resume only */}
                 <TouchableOpacity 
                   className="px-2 py-1 rounded bg-blue-600"
                   onPress={() => onRestart?.(r.id)}
                 >
-                  <Text className="text-white text-sm font-semibold">Restart</Text>
+                  <Text className="text-white text-sm font-semibold">Resume</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -102,13 +103,13 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({ rows, onPause, onFinish, 
         // Active: row clickable
         return (
           <TouchableOpacity key={r.id} className={rowStyle} onPress={() => onRowPress?.(r.id)} activeOpacity={0.7}>
-            <Text className={`w-2/5 ${textStyle}`} numberOfLines={1}>{r.tasks?.name || '—'}</Text>
-            <Text className={`w-1/5 ${textStyle}`}>{formatTime(r.start_time)}</Text>
-            <Text className={`w-1/5 ${textStyle}`}>{formatTime(r.end_time)}</Text>
-            <Text className={`w-1/5 ${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
+            <Text style={{ flex: 2.5 }} className={`${textStyle}`} numberOfLines={1}>{r.tasks?.name || '—'}</Text>
+            <Text style={{ flex: 1 }} className={`${textStyle}`}>{formatTime(r.start_time)}</Text>
+            <Text style={{ flex: 1 }} className={`${textStyle}`}>{formatTime(r.end_time)}</Text>
+            <Text style={{ flex: 1 }} className={`${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
 
             {/* Action buttons */}
-            <View className="flex-row ml-2">
+            <View style={{ flex: 1.5 }} className="flex-row">
               <TouchableOpacity
                 className="px-2 py-1 rounded bg-blue-100 mr-2"
                 onPress={() => openPackers(r.task_assignments)}

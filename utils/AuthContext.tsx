@@ -75,13 +75,31 @@ export const AuthProvider = ({ children }) => {
         return;
       }
 
-      if (data) {
+      let profileData = data;
+
+      // Fallback: if roles relationship is missing, fetch role by role_id
+      if (profileData && !profileData.roles && profileData.role_id) {
+        try {
+          const { data: roleRow } = await supabase
+            .from('roles')
+            .select('id, name, can_block_users, can_unblock_users, can_ban_users, can_reset_passwords, can_delete_profiles, can_manage_roles')
+            .eq('id', profileData.role_id)
+            .maybeSingle();
+          if (roleRow) {
+            profileData = { ...profileData, roles: roleRow };
+          }
+        } catch (e) {
+          console.warn('⚠️ Could not load role separately:', e);
+        }
+      }
+
+      if (profileData) {
         console.log('✅ Profile loaded successfully:', {
-          name: data.full_name,
-          role: data.roles?.name,
-          status: data.status
+          name: profileData.full_name,
+          role: profileData.roles?.name,
+          status: profileData.status
         });
-        setProfile(data);
+        setProfile(profileData);
       } else {
         console.log('⚠️ No profile data returned for user');
         setProfile(null);

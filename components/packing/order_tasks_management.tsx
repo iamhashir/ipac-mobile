@@ -33,6 +33,12 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
   const [selectedPackageIds, setSelectedPackageIds] = useState<string[]>(orderPackages.length ? [orderPackages[0].id] : []);
   const [notes, setNotes] = useState<string>('');
 
+  // For detail tabs: track current task context
+  const [currentDetailTaskId, setCurrentDetailTaskId] = useState<string | null>(null);
+  const [currentDetailAssignedPackers, setCurrentDetailAssignedPackers] = useState<string[]>([]);
+  const [currentDetailPackages, setCurrentDetailPackages] = useState<string[]>([]);
+  const [detailNotesMap, setDetailNotesMap] = useState<Record<string, string>>({});
+
   useEffect(() => {
     const init = async () => {
       const { data: team } = await db.getTeamPackersForOrder(orderId);
@@ -104,6 +110,25 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
     setBusyCount(list.filter(x => busySet.has(x.id)).length);
   };
 
+  // When switching to a task detail tab, preload its assignments and linked packages
+  useEffect(() => {
+    if (!activeKey.startsWith('task:')) return;
+    const id = activeKey.replace('task:', '');
+    const log = (taskLogs as any[]).find(l => l.id === id);
+    if (!log) return;
+    setCurrentDetailTaskId(id);
+    const assigned = (log.task_assignments || []).map((a: any) => a.packer_id).filter(Boolean);
+    setCurrentDetailAssignedPackers(assigned);
+    setSelectedPackerIds(assigned);
+    setDetailNotesMap(prev => ({ ...prev, [id]: prev[id] ?? (log?.notes || '') }));
+    (async () => {
+      const { data: linked } = await db.getTaskPackages(id);
+      setCurrentDetailPackages(linked || []);
+      setSelectedPackageIds(linked && linked.length ? linked : (orderPackages.length ? [orderPackages[0].id] : []));
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeKey]);
+
   const tabs: TabDefinition[] = useMemo(() => {
     const overview: TabDefinition = {
       key: 'overview',
@@ -148,15 +173,13 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                   await refreshBusyStatus();
                 }}
                 onFinish={async (id) => {
-                  const { error } = await db.finishTaskLog(id);
+                  // Use server-side completion to ensure assignments, counters, and durations are correct per business rules
+                  const { error } = await db.completeTask(id);
                   if (error) {
-                    console.error('Error finishing task:', error);
+                    console.error('Error completing task:', error);
                     return;
                   }
                   setOpenTaskIds(prev => prev.filter(x => x !== id));
-                  await refreshLogs();
-                  await refreshBusyStatus();
-                  setActiveKey('overview');
                   await refreshLogs();
                   await refreshBusyStatus();
                   setActiveKey('overview');
@@ -274,6 +297,7 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                   });
                   if (!error && data?.task_log_id) {
                     await refreshLogs();
+                    await refreshBusyStatus();
                     // persist detail tab for the new task
                     setOpenTaskIds(prev => [...prev, data.task_log_id]);
                     setActiveKey(`task:${data.task_log_id}`);
@@ -328,62 +352,136 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
     const details: TabDefinition[] = openTaskIds.map((id) => {
       const log = (taskLogs as any[]).find(l => l.id === id);
       const title = log?.tasks?.name ? `Task: ${log.tasks.name}` : 'Task Detail';
+      const assignedIds = (log?.task_assignments || []).map((a: any) => a.packer_id).filter(Boolean);
+      const detailTaskTypeId = log?.task_id || null;
+      const detailNotes = detailNotesMap[id] ?? (log?.notes || '');
+
+      // Determine changes for enabling Update
+      const selectedSet = new Set(selectedPackerIds);
+      const assignedSet = new Set(assignedIds);
+      const toAddPackers = selectedPackerIds.filter(pid => !assignedSet.has(pid));
+      const toRemovePackers = assignedIds.filter(pid => !selectedSet.has(pid));
+      const toAddPackages = selectedPackageIds.filter(opId => !(currentDetailPackages || []).includes(opId));
+      const hasChanges = (toAddPackers.length + toRemovePackers.length + toAddPackages.length) > 0;
+
       return {
         key: `task:${id}`,
         title,
         content: (
           <View className="mx-4 mb-4 bg-white rounded-lg border border-gray-200 p-4">
-            <Text className="text-gray-800 font-semibold mb-2">Edit Task</Text>
-            {/* Notes editor */}
-            <View className="mt-2">
-              <Text className="text-gray-600 mb-1">Notes</Text>
-              {/* reuse simple TextInput inline */}
-              <View className="border border-gray-300 rounded-md bg-white px-2 py-1">
-                <Text className="text-gray-700">{log?.notes || '—'}</Text>
+            {/* Task type select (disabled) */}
+            <SimpleSelect
+              label="Task"
+              items={taskTypes.map(t => ({ label: t.name, value: t.id }))}
+              value={detailTaskTypeId}
+              onChange={() => {}}
+              placeholder="Select a task"
+              disabled
+            />
+
+            {/* Packers multi-select (same layout as New) */}
+            <View className="flex-row items-start mt-4">
+              <View className="flex-1">
+                <Text className="text-gray-600 mb-1">Assign/Remove Packer(s)</Text>
+                <View className="border border-gray-300 rounded-md p-2 bg-white">
+                  <ScrollView style={{ maxHeight: 160 }}>
+                    {teamPackers.map((p) => {
+                      const selected = selectedPackerIds.includes(p.id);
+                      const isBusy = busyPackerIds.has(p.id) && !assignedSet.has(p.id); // assigned are always selectable
+                      return (
+                        <TouchableOpacity
+                          key={p.id}
+                          className={`flex-row items-center justify-between px-2 py-2 border-b border-gray-100 ${isBusy ? 'opacity-60' : ''}`}
+                          onPress={() => {
+                            if (isBusy) return;
+                            setSelectedPackerIds(prev => selected ? prev.filter(pid => pid !== p.id) : [...prev, p.id]);
+                          }}
+                          activeOpacity={isBusy ? 1 : 0.7}
+                        >
+                          <Text className={`text-gray-800`}>{p.full_name || p.username}</Text>
+                          <Text className={`text-xs ${selected ? 'text-primary-700' : isBusy ? 'text-red-600' : 'text-green-700'}`}>{selected ? 'Selected' : (isBusy ? 'Busy' : assignedSet.has(p.id) ? 'Assigned' : 'Available')}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+
+                {/* Notes (editable) */}
+                <View className="mt-3">
+                  <Text className="text-gray-600 mb-1">Notes</Text>
+                  <TextInput
+                    className="border border-gray-300 rounded-md bg-white px-2 py-1"
+                    placeholder="Any special instructions..."
+                    value={detailNotes}
+                    onChangeText={(t) => setDetailNotesMap(prev => ({ ...prev, [id]: t }))}
+                    multiline
+                  />
+                </View>
+              </View>
+
+              <View className="ml-3 w-[22%]">
+                <TouchableOpacity className="bg-blue-100 px-3 py-2 rounded mb-2" onPress={() => setConsolidateOpen(true)}>
+                  <Text className="text-blue-800 text-center">Consolidate</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  className={`px-3 py-2 rounded ${hasChanges ? 'bg-green-600' : 'bg-green-300'}`}
+                  disabled={!hasChanges}
+                  onPress={async () => {
+                    // Apply packer changes
+                    if (toAddPackers.length) {
+                      await db.addTaskAssignments(id, toAddPackers);
+                    }
+                    if (toRemovePackers.length) {
+                      // Mark removed packers as completed to free them
+                      await db.updateTaskAssignmentsStatus(id, 'completed', toRemovePackers);
+                    }
+                    // Apply consolidation additions
+                    if (toAddPackages.length) {
+                      await db.addTaskPackages(id, toAddPackages);
+                    }
+                    // Increment update counter per rules and persist notes if changed
+                    const nextFields: any = {};
+                    if ((log?.notes || '') !== (detailNotesMap[id] ?? '')) nextFields.notes = (detailNotesMap[id] ?? '');
+                    await db.incrementTaskLogCounter(id, nextFields);
+
+                    await refreshLogs();
+                    await refreshBusyStatus();
+                  }}
+                >
+                  <Text className="text-white text-center">Update</Text>
+                </TouchableOpacity>
               </View>
             </View>
 
-            {/* Controls */}
-            <View className="flex-row mt-3">
-              <TouchableOpacity
-                className="px-3 py-2 rounded bg-yellow-100 mr-2"
-                onPress={async () => {
-                  // Pause/Resume toggle (same as list)
-                  const paused = pauseStartMap[id] != null;
-                  if (!paused) {
-                    await db.updateTaskAssignmentsStatus(id, 'paused');
-                    setPauseStartMap(prev => ({ ...prev, [id]: Date.now() }));
-                  } else {
-                    const now = Date.now();
-                    const deltaSec = Math.max(0, Math.floor((now - (pauseStartMap[id] || now)) / 1000));
-                    await db.updateTaskAssignmentsStatus(id, 'in_progress');
-                    await db.addPauseDuration(id, deltaSec);
-                    const copy = { ...pauseStartMap }; delete copy[id]; setPauseStartMap(copy);
-                  }
-                  await refreshLogs();
-                  await refreshBusyStatus();
-                }}
-              >
-                <Text className="text-yellow-800">{pauseStartMap[id] ? 'Resume' : 'Pause'}</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                className="px-3 py-2 rounded bg-green-600"
-                onPress={async () => {
-                  // Use the new finishTaskLog function that properly calculates duration
-                  const { error } = await db.finishTaskLog(id);
-                  if (error) {
-                    console.error('Error finishing task:', error);
-                    return;
-                  }
-                  setOpenTaskIds(prev => prev.filter(x => x !== id));
-                  await refreshLogs();
-                  setActiveKey('overview');
-                }}
-              >
-                <Text className="text-white">Finish</Text>
-              </TouchableOpacity>
-            </View>
+            {/* Consolidate modal (reused) */}
+            <Modal visible={consolidateOpen} transparent animationType="fade" onRequestClose={() => setConsolidateOpen(false)}>
+              <View className="flex-1 bg-black/30 justify-center items-center">
+                <View className="bg-white rounded-xl p-4 w-4/5 max-h-[70%]">
+                  <Text className="text-gray-800 font-semibold mb-2">Consolidate with order packages</Text>
+                  <ScrollView>
+                    {orderPackages.map((op) => {
+                      const checked = selectedPackageIds.includes(op.id);
+                      return (
+                        <TouchableOpacity key={op.id} className="flex-row items-center justify-between px-2 py-2 border-b border-gray-100"
+                          onPress={() => setSelectedPackageIds(prev => checked ? prev.filter(pid => pid !== op.id) : [...prev, op.id])}
+                        >
+                          <Text className="text-gray-800">Box #{op.package_number ?? '—'}</Text>
+                          <Text className={`text-xs ${checked ? 'text-primary-700' : 'text-gray-500'}`}>{checked ? 'Selected' : 'Tap to select'}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                  <View className="flex-row justify-end mt-3">
+                    <TouchableOpacity className="mr-3" onPress={() => setConsolidateOpen(false)}>
+                      <Text className="text-gray-700">Close</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity className="bg-primary-600 px-3 py-1 rounded" onPress={() => setConsolidateOpen(false)}>
+                      <Text className="text-white">Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            </Modal>
           </View>
         ),
       } as TabDefinition;

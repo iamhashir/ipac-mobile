@@ -17,15 +17,21 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
   const [items, setItems] = useState<any[]>([]);
   const [variants, setVariants] = useState<DropdownOption[]>([]);
   const [units, setUnits] = useState<DropdownOption[]>([]);
+  // Map of unit_id -> unit_name for quick lookup
   const unitsMap = useMemo(() => {
     const m: Record<string, string> = {};
     (units || []).forEach(u => { m[u.value] = u.label; });
     return m;
   }, [units]);
+  // Map of variant_id -> unit_id (default from material)
+  const [variantUnitIdMap, setVariantUnitIdMap] = useState<Record<string, string | null>>({});
 
   const [addOpen, setAddOpen] = useState(false);
   const [variantPickerOpen, setVariantPickerOpen] = useState(false);
   const [unitPickerOpen, setUnitPickerOpen] = useState(false);
+  const [triedSubmit, setTriedSubmit] = useState(false);
+  const [errors, setErrors] = useState<{ variant?: string; quantity?: string; unit?: string }>({});
+  const [isSaving, setIsSaving] = useState(false);
 
   // Form state
   const [formVariant, setFormVariant] = useState<string | null>(null);
@@ -49,6 +55,12 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
 
     setVariants((v || []).map((x: any) => ({ label: x.label, value: x.id || x.value })));
     setUnits((u || []).map((x: any) => ({ label: x.name || x.label, value: x.id || x.value })));
+    // Build variant -> unit map (from material's default unit)
+    const vMap: Record<string, string | null> = {};
+    (v || []).forEach((x: any) => {
+      vMap[x.id || x.value] = x.unit_id || null;
+    });
+    setVariantUnitIdMap(vMap);
     setItems(rows || []);
   };
 
@@ -65,35 +77,68 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
     setFormComment('');
     setVariantPickerOpen(false);
     setUnitPickerOpen(false);
+    setTriedSubmit(false);
+    setErrors({});
+    setIsSaving(false);
   };
 
+  const validate = () => {
+    const qtyNum = formQuantity ? Number(formQuantity) : NaN;
+    const unitId = formUnit || (formVariant ? variantUnitIdMap[formVariant] : null);
+    const nextErrs: { variant?: string; quantity?: string; unit?: string } = {};
+    if (!formVariant) nextErrs.variant = 'Item is required';
+    if (!formQuantity || !Number.isFinite(qtyNum) || qtyNum <= 0) nextErrs.quantity = 'Enter a valid quantity (> 0)';
+    if (!unitId) nextErrs.unit = 'Unit is required';
+    setErrors(nextErrs);
+    return Object.keys(nextErrs).length === 0;
+  };
+
+
   const saveNew = async () => {
-    if (!formVariant) {
-      Alert.alert('Missing item', 'Please select an accessory item');
+    setTriedSubmit(true);
+    if (!validate()) {
+      console.log('⚠️ Accessories: validation failed', errors);
       return;
     }
-    if (!formUnit) {
-      Alert.alert('Missing unit', 'Please select a unit');
-      return;
-    }
+
+    // Resolve values
+    const qtyNum = Number(formQuantity);
+    const unitIdToUse: string = formUnit || (variantUnitIdMap[formVariant as string] as string);
+
+    // Build payload matching live schema; include legacy and canonical-friendly fields
     const payload: any = {
       order_package_id: orderPackageId,
       material_variant_id: formVariant,
-      quantity: formQuantity ? Number(formQuantity) : null,
-      unit_id: formUnit,
+      material_type: 'Accessories',
+      is_final: true,
+      quantity: qtyNum,
+      unit_id: unitIdToUse,
       length: formLength ? Number(formLength) : null,
       width: formWidth ? Number(formWidth) : null,
       comment: formComment || null,
       item_used: false,
+      // also include canonical fields as no-ops to maximize compatibility
+      quantity_calculated: qtyNum,
+      cost_at_calculation: 0,
+      usage_details: null,
+      notes: formComment || null,
     };
-    const { error } = await db.addOrderPackageMaterial(payload);
-    if (error) {
-      Alert.alert('Error', 'Failed to add item');
-      return;
+
+    try {
+      setIsSaving(true);
+      console.log('➡️ Accessories: adding material', payload);
+      const { error } = await db.addOrderPackageMaterial(payload);
+      if (error) {
+        const msg = (error?.message || error?.details || error?.hint || 'Failed to add item');
+        Alert.alert('Error', String(msg));
+        return;
+      }
+      setAddOpen(false);
+      resetForm();
+      await load();
+    } finally {
+      setIsSaving(false);
     }
-    setAddOpen(false);
-    resetForm();
-    await load();
   };
 
   const markUsed = async (id: string) => {
@@ -180,13 +225,13 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
 
   return (
     <View className="mx-4 mt-4 mb-4">
-      <CollapsibleCard title="Accessories" containerClassName="border-gray-500" defaultOpen>
-        {/* Inner rectangle */}
-        <View className="w-full rounded p-3 bg-gray-100 border border-gray-400">
-          {/* Top bar: Select item label + Add item button */}
+      <CollapsibleCard title="Accessories" containerClassName="border-gray-500 bg-white" defaultOpen>
+        {/* Inner container */}
+        <View className="w-full rounded p-3 bg-gray-50 border border-gray-200">
+          {/* Top bar: title + Add item button */}
           <View className="flex-row justify-between items-center mb-2">
-            <Text className="text-gray-800 font-semibold">Select item</Text>
-            <TouchableOpacity onPress={() => setAddOpen(true)} className="bg-primary-600 px-3 py-1 rounded">
+            <Text className="text-gray-800 font-semibold">Accessory items</Text>
+            <TouchableOpacity onPress={() => setAddOpen(true)} className="bg-primary-600 px-3 py-1.5 rounded">
               <Text className="text-white text-sm">Add item</Text>
             </TouchableOpacity>
           </View>
@@ -206,16 +251,41 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
             <Text className="text-lg font-semibold text-gray-800 mb-3">Add accessory item</Text>
 
             {/* Variant Picker */}
-            <Text className="text-sm text-gray-700 mb-1">Item</Text>
-            <TouchableOpacity onPress={() => setVariantPickerOpen(v => !v)} className="border border-gray-300 rounded p-2 mb-2">
+            <Text className="text-sm text-gray-700 mb-1">Item<Text className="text-red-600">*</Text></Text>
+            <TouchableOpacity
+              onPress={() => setVariantPickerOpen(v => !v)}
+              className="border border-gray-300 rounded p-2 mb-1 bg-white"
+            >
               <Text className="text-gray-800">{variantLabelById(formVariant)}</Text>
             </TouchableOpacity>
+            {triedSubmit && errors.variant ? (
+              <Text className="text-red-600 text-xs mb-2">{errors.variant}</Text>
+            ) : <View className="mb-1" />}
             {variantPickerOpen && (
-              <View className="max-h-40 border border-gray-200 rounded mb-2">
+              <View className="max-h-40 border border-gray-200 rounded mb-2 bg-white">
                 <ScrollView>
                   {variants.map((opt) => (
-                    <TouchableOpacity key={opt.value} onPress={() => { setFormVariant(opt.value); setVariantPickerOpen(false); }} className="px-3 py-2">
-                      <Text className="text-gray-800">{opt.label}</Text>
+                    <TouchableOpacity
+                      key={opt.value}
+                      onPress={() => {
+                        setFormVariant(opt.value);
+                        setErrors((e) => ({ ...e, variant: undefined }));
+                        // Auto-assign unit from variant's material default
+                        const autoUnit = variantUnitIdMap[opt.value] || null;
+                        setFormUnit(autoUnit);
+                        setErrors((e) => ({ ...e, unit: undefined }));
+                        setVariantPickerOpen(false);
+                      }}
+                      className="px-3 py-2"
+                    >
+                      <View className="flex-row justify-between items-center">
+                        <Text className="text-gray-800">{opt.label}</Text>
+                        {variantUnitIdMap[opt.value] ? (
+                          <View className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
+                            <Text className="text-[10px] text-slate-700">{unitsMap[variantUnitIdMap[opt.value] as string] || '—'}</Text>
+                          </View>
+                        ) : null}
+                      </View>
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
@@ -223,24 +293,47 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
             )}
 
             {/* Quantity */}
-            <Text className="text-sm text-gray-700 mb-1">Quantity</Text>
-            <TextInput value={formQuantity} onChangeText={setFormQuantity} keyboardType="numeric" className="border border-gray-300 rounded p-2 mb-2" placeholder="e.g. 1" />
+            <Text className="text-sm text-gray-700 mb-1">Quantity<Text className="text-red-600">*</Text></Text>
+            <TextInput
+              value={formQuantity}
+              onChangeText={(t) => { setFormQuantity(t); setErrors((e) => ({ ...e, quantity: undefined })); }}
+              keyboardType="numeric"
+              className="border border-gray-300 rounded p-2 mb-1 bg-white"
+              placeholder="e.g. 1"
+            />
+            {triedSubmit && errors.quantity ? (
+              <Text className="text-red-600 text-xs mb-2">{errors.quantity}</Text>
+            ) : <View className="mb-1" />}
 
-            {/* Unit Picker */}
-            <Text className="text-sm text-gray-700 mb-1">Unit</Text>
-            <TouchableOpacity onPress={() => setUnitPickerOpen(v => !v)} className="border border-gray-300 rounded p-2 mb-2">
-              <Text className="text-gray-800">{formUnit ? (unitsMap[formUnit] || '—') : 'Select unit'}</Text>
-            </TouchableOpacity>
-            {unitPickerOpen && (
-              <View className="max-h-40 border border-gray-200 rounded mb-2">
-                <ScrollView>
-                  {units.map((opt) => (
-                    <TouchableOpacity key={opt.value} onPress={() => { setFormUnit(opt.value); setUnitPickerOpen(false); }} className="px-3 py-2">
-                      <Text className="text-gray-800">{opt.label}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
+            {/* Unit display (auto from material). If no default, allow manual pick as fallback */}
+            <Text className="text-sm text-gray-700 mb-1">Unit<Text className="text-red-600">*</Text></Text>
+            {formVariant && variantUnitIdMap[formVariant] ? (
+              <View className="flex-row items-center mb-2">
+                <View className="px-2 py-1 rounded bg-slate-100 border border-slate-200">
+                  <Text className="text-slate-700 text-xs">{unitsMap[variantUnitIdMap[formVariant] as string] || '—'}</Text>
+                </View>
+                <Text className="text-[10px] text-gray-500 ml-2">Auto-selected from material</Text>
               </View>
+            ) : (
+              <>
+                <TouchableOpacity onPress={() => setUnitPickerOpen(v => !v)} className="border border-gray-300 rounded p-2 mb-1 bg-white">
+                  <Text className="text-gray-800">{formUnit ? (unitsMap[formUnit] || '—') : 'Select unit'}</Text>
+                </TouchableOpacity>
+                {triedSubmit && errors.unit ? (
+                  <Text className="text-red-600 text-xs mb-2">{errors.unit}</Text>
+                ) : <View className="mb-1" />}
+                {unitPickerOpen && (
+                  <View className="max-h-40 border border-gray-200 rounded mb-2 bg-white">
+                    <ScrollView>
+                      {units.map((opt) => (
+                        <TouchableOpacity key={opt.value} onPress={() => { setFormUnit(opt.value); setErrors((e)=>({ ...e, unit: undefined })); setUnitPickerOpen(false); }} className="px-3 py-2">
+                          <Text className="text-gray-800">{opt.label}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+              </>
             )}
 
             {/* Length / Width */}
@@ -264,7 +357,7 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
                 <Text className="text-gray-800">Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={saveNew} className="px-3 py-2 rounded bg-primary-600">
-                <Text className="text-white">Save</Text>
+                <Text className="text-white">{isSaving ? 'Saving...' : 'Save'}</Text>
               </TouchableOpacity>
             </View>
           </View>

@@ -61,39 +61,55 @@ export default function PackingReportPage() {
   const [packingTypes, setPackingTypes] = useState<Record<string, string>>({});
   const [equipmentMap, setEquipmentMap] = useState<Record<string, string>>({}); // order_package_id -> aggregated names
 
+  // Check permissions only once when session loading is complete
   useEffect(() => {
     if (!sessionLoading) {
-      if (!canAccessAttendance()) {
-        Alert.alert('Access Denied', 'Please complete team selection first.', [
-          { text: 'Go to Dashboard', onPress: () => router.replace('/(packer)/dashboard') }
-        ]);
-        return;
-      }
-      if (!canAccessPackaging()) {
-        Alert.alert('Access Denied', 'Please complete attendance before accessing packing.', [
-          { text: 'Go to Attendance', onPress: () => router.replace('/(packer)/attendance' + (session?.order_id ? `?orderId=${session.order_id}` : '')) }
-        ]);
-        return;
+      // Only check permissions if we have a valid orderId (either from params or session)
+      if (orderId) {
+        if (!canAccessAttendance()) {
+          Alert.alert('Access Denied', 'Please complete team selection first.', [
+            { text: 'Go to Dashboard', onPress: () => router.replace('/(packer)/dashboard') }
+          ]);
+          return;
+        }
+        if (!canAccessPackaging()) {
+          Alert.alert('Access Denied', 'Please complete attendance before accessing packing.', [
+            { text: 'Go to Attendance', onPress: () => router.replace('/(packer)/attendance' + (session?.order_id ? `?orderId=${session.order_id}` : '')) }
+          ]);
+          return;
+        }
       }
     }
-  }, [sessionLoading, canAccessPackaging, canAccessAttendance, session?.order_id]);
+  }, [sessionLoading, orderId]); // Simplified dependencies to prevent infinite loops
 
+  // Load data only when orderId changes and we're not in the middle of loading
   useEffect(() => {
-    loadData();
-  }, [orderId]);
+    if (orderId && !sessionLoading) {
+      loadData();
+    }
+  }, [orderId, sessionLoading]);
 
   const loadData = async () => {
     try {
-      if (!orderId) return;
+      setLoading(true);
+      if (!orderId) {
+        console.warn('No orderId provided to loadData');
+        return;
+      }
+      
+      console.log('Loading order data for orderId:', orderId);
       const { data: orderData, error: orderErr } = await db.getOrderById(orderId);
       if (orderErr) {
+        console.error('Error loading order:', orderErr);
         Alert.alert('Error', 'Failed to load order');
         return;
       }
       setOrder(orderData);
 
+      console.log('Loading order packages...');
       const { data: pkgs, error: pkgsErr } = await db.getOrderPackages(orderId);
       if (pkgsErr) {
+        console.error('Error loading order packages:', pkgsErr);
         Alert.alert('Error', 'Failed to load order packages');
         return;
       }
@@ -144,6 +160,8 @@ export default function PackingReportPage() {
       console.error('Packing Report load error', e);
       Alert.alert('Error', 'Unexpected error while loading packing report');
     } finally {
+      // Always set loading to false, regardless of success or failure
+      console.log('loadData completed, setting loading to false');
       setLoading(false);
     }
   };
@@ -281,11 +299,34 @@ export default function PackingReportPage() {
     else router.replace('/auth/login');
   };
 
-  if (loading) {
+  // Show loading screen for session loading or data loading
+  if (sessionLoading || loading) {
     return (
       <SafeAreaView className="flex-1 bg-gray-50">
         <View className="flex-1 justify-center items-center">
-          <Text className="text-lg text-gray-600">Loading...</Text>
+          <Text className="text-lg text-gray-600">
+            {sessionLoading ? 'Checking session...' : 'Loading packing data...'}
+          </Text>
+          {orderId && (
+            <Text className="text-sm text-gray-500 mt-2">Order ID: {orderId}</Text>
+          )}
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Early return if no orderId is available
+  if (!orderId) {
+    return (
+      <SafeAreaView className="flex-1 bg-gray-50">
+        <View className="flex-1 justify-center items-center">
+          <Text className="text-lg text-red-600">No order ID provided</Text>
+          <TouchableOpacity 
+            onPress={() => router.replace('/(packer)/dashboard')} 
+            className="mt-4 bg-primary-500 px-4 py-2 rounded"
+          >
+            <Text className="text-white">Go to Dashboard</Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaView>
     );

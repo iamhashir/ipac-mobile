@@ -10,9 +10,10 @@ interface SimpleSelectProps {
   onChange: (value: string) => void;
   placeholder?: string;
   widthPercent?: number; // 0..1
+  disabled?: boolean;
 }
 
-const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChange, placeholder = 'Select...', widthPercent = 0.75 }) => {
+const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChange, placeholder = 'Select...', widthPercent = 0.75, disabled = false }) => {
   const [open, setOpen] = useState(false);
 
   const selected = items.find(i => i.value === value);
@@ -23,11 +24,12 @@ const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChan
     <View style={{ width: `${Math.round(widthPercent * 100)}%` }}>
       {label ? <Text className="text-gray-600 mb-1">{label}</Text> : null}
       <TouchableOpacity
-        className="border border-gray-300 rounded-md px-3 py-2 bg-white"
-        onPress={() => setOpen(true)}
-        activeOpacity={0.8}
+        className={`border border-gray-300 rounded-md px-3 py-2 ${disabled ? 'bg-gray-100 opacity-70' : 'bg-white'}`}
+        onPress={() => { if (!disabled) setOpen(true); }}
+        activeOpacity={disabled ? 1 : 0.8}
         {...({ title: tooltip } as any)}
         accessibilityLabel={tooltip}
+        disabled={disabled}
       >
         <Text className="text-gray-800">{selectedText}</Text>
       </TouchableOpacity>
