@@ -6,8 +6,8 @@
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "scheme": "ipac-operations-app",
+  "newArchEnabled": false,
+  "scheme": "ipac-operations-app",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",

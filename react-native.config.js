@@ -6,6 +6,11 @@ module.exports = {
         ios: null,
       },
     },
+    'react-native-worklets-core': {
+      platforms: {
+        android: null,
+        ios: null,
+      },
+    },
   },
 };
-
