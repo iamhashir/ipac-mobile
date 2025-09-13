@@ -21,6 +21,7 @@ export default function LoginScreen() {
 
   // Redirect if already authenticated
   useEffect(() => {
+    // Only redirect from login if we fully know where to go
     if (!authLoading && user && profile) {
       const userRole = profile.roles?.name;
       if (userRole === 'admin' || userRole === 'director' || userRole === 'sales') {

@@ -1,5 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import Constants from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
 // Get environment variables
 const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl || process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -12,12 +14,16 @@ if (!supabaseUrl || !supabaseAnonKey) {
 // Create Supabase client
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
+    // Use AsyncStorage on native; omit on web to use localStorage automatically
+    ...(Platform.OS !== 'web' ? { storage: AsyncStorage } : {}),
     // Enable automatic session refresh
     autoRefreshToken: true,
-    // Persist session in local storage
+    // Persist session across app restarts
     persistSession: true,
-    // Set custom storage key
-    storageKey: 'ipac-operations-auth',
+    // For Expo/Web, don't parse URL for auth params
+    detectSessionInUrl: false,
+    // Rotate storage key to avoid stale sessions after key/token migration
+    storageKey: 'ipac-operations-auth-v2',
   },
 });
 
@@ -140,32 +146,44 @@ export const auth = {
 export const db = {
   // Get user profile with role
   getUserProfile: async (userId) => {
-    // Try explicit relationship alias first to avoid PostgREST rel-name ambiguities
-    let { data, error } = await supabase
-      .from('profiles')
-      .select(`
-        *,
-        roles:role_id (
-          id,
-          name,
-          can_block_users,
-          can_unblock_users,
-          can_ban_users,
-          can_reset_passwords,
-          can_delete_profiles,
-          can_manage_roles
-        )
-      `)
-      .eq('id', userId)
-      .maybeSingle();
-
-    // Fallback: use constraint-qualified join if the alias fails
-    if (error) {
-      const q2 = await supabase
+    console.log('🔍 getUserProfile: Starting profile lookup for userId:', userId);
+    
+    try {
+      // First, try a simple query without relationships
+      let { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select(`
-          *,
-          roles:roles!profiles_role_id_fkey (
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
+      
+      console.log('🔍 getUserProfile: Basic profile query result:', {
+        found: !!profile,
+        error: profileError?.message,
+        profileData: profile ? {
+          id: profile.id,
+          full_name: profile.full_name,
+          role_id: profile.role_id,
+          status: profile.status
+        } : null
+      });
+      
+      if (profileError) {
+        console.error('❌ getUserProfile: Error fetching profile:', profileError);
+        return { data: null, error: profileError };
+      }
+      
+      if (!profile) {
+        console.log('⚠️ getUserProfile: No profile found for user');
+        return { data: null, error: { message: 'Profile not found' } };
+      }
+      
+      // Now get the role information if role_id exists
+      if (profile.role_id) {
+        console.log('🔍 getUserProfile: Fetching role data for role_id:', profile.role_id);
+        
+        const { data: role, error: roleError } = await supabase
+          .from('roles')
+          .select(`
             id,
             name,
             can_block_users,
@@ -174,16 +192,39 @@ export const db = {
             can_reset_passwords,
             can_delete_profiles,
             can_manage_roles
-          )
-        `)
-        .eq('id', userId)
-        .maybeSingle();
-      data = q2.data as any;
-      error = q2.error as any;
+          `)
+          .eq('id', profile.role_id)
+          .maybeSingle();
+        
+        console.log('🔍 getUserProfile: Role query result:', {
+          found: !!role,
+          error: roleError?.message,
+          roleData: role
+        });
+        
+        if (role && !roleError) {
+          profile.roles = role;
+          console.log('✅ getUserProfile: Successfully attached role to profile');
+        } else {
+          console.warn('⚠️ getUserProfile: Could not fetch role, profile will have no role data');
+          console.warn('⚠️ Role error:', roleError);
+        }
+      } else {
+        console.log('⚠️ getUserProfile: Profile has no role_id');
+      }
+      
+      console.log('✅ getUserProfile: Final profile result:', {
+        id: profile.id,
+        full_name: profile.full_name,
+        role: profile.roles?.name,
+        status: profile.status
+      });
+      
+      return { data: profile, error: null };
+    } catch (error) {
+      console.error('💥 getUserProfile: Unexpected error:', error);
+      return { data: null, error: { message: 'Failed to load profile', originalError: error } };
     }
-    
-    // Ensure we always return a single object or null
-    return { data: (data as any) || null, error };
   },
 
   // Get available orders for packer selection (including in_progress orders)

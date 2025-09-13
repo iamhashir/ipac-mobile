@@ -8,6 +8,7 @@ export const AuthProvider = ({ children }) => {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
+  const [profileLoadingTimeout, setProfileLoadingTimeout] = useState(false);
 
   useEffect(() => {
     // Get initial session
@@ -22,10 +23,30 @@ export const AuthProvider = ({ children }) => {
       
       if (session?.user) {
         setUser(session.user);
-        await loadUserProfile(session.user.id);
+        
+        // Reset timeout flag when a new session user appears
+        setProfileLoadingTimeout(false);
+
+        // Set a timeout for profile loading
+        const timeoutId = setTimeout(() => {
+          console.log('⚠️ Profile loading timeout - proceeding with null profile');
+          setProfile(null);
+          setLoading(false);
+          setProfileLoadingTimeout(true);
+        }, 8000); // 8 second timeout
+        
+        try {
+          await loadUserProfile(session.user.id);
+          clearTimeout(timeoutId); // Clear timeout if profile loads successfully
+        } catch (error) {
+          console.error('💥 Profile loading failed:', error);
+          clearTimeout(timeoutId);
+          setProfile(null);
+        }
       } else {
         setUser(null);
         setProfile(null);
+        setProfileLoadingTimeout(false);
       }
       
       setLoading(false);
@@ -211,6 +232,7 @@ export const AuthProvider = ({ children }) => {
     isProjectLead,
     hasPermission,
     getUserRole,
+    profileLoadingTimeout,
   };
 
   return (
