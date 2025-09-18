@@ -9,31 +9,27 @@ export default function PackerLayout() {
   const router = useRouter();
 
   useEffect(() => {
-    if (!loading) {
-      if (!user) {
-        console.log('🔒 Packer layout: No user, redirecting to login');
-        router.replace('/auth/login');
-        return;
-      }
-      
-      if (!profile) {
-        console.log('🔒 Packer layout: No profile, redirecting to login');
-        router.replace('/auth/login');
-        return;
-      }
-      
-      const userRole = profile.roles?.name;
-      if (userRole !== 'packer') {
-        console.log('🔒 Packer layout: Not a packer, redirecting');
-        router.replace('/');
-        return;
-      }
-      
-      console.log('✅ Packer layout: Access granted for', userRole);
+    if (loading) return;
+
+    if (!user) {
+      console.log('🔒 Packer layout: No user, redirecting to login');
+      router.replace('/auth/login');
+      return;
     }
+
+    if (!profile) return;
+
+    const userRole = profile.roles?.name;
+    if (userRole !== 'packer') {
+      console.log('🔒 Packer layout: Not a packer, redirecting');
+      router.replace('/');
+      return;
+    }
+
+    console.log('✅ Packer layout: Access granted for', userRole);
   }, [user, profile, loading]);
 
-  if (loading) {
+  if (loading || (user && !profile)) {
     return (
       <View className="flex-1 justify-center items-center bg-gray-50">
         <ActivityIndicator size="large" color="#3b82f6" />
@@ -42,7 +38,7 @@ export default function PackerLayout() {
     );
   }
 
-  if (!user || !profile) {
+  if (!user) {
     return (
       <View className="flex-1 justify-center items-center bg-gray-50">
         <Text className="text-gray-600">Redirecting to login...</Text>

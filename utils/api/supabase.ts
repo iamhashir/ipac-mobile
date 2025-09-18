@@ -22,6 +22,8 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     persistSession: true,
     // For Expo/Web, don't parse URL for auth params
     detectSessionInUrl: false,
+    // Keep session in sync across tabs (explicit)
+    syncSession: true,
     // Rotate storage key to avoid stale sessions after key/token migration
     storageKey: 'ipac-operations-auth-v2',
   },

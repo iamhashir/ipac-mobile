@@ -76,19 +76,53 @@ export const materialOperations = {
   // Get all materials with their units, variants, and tags
   getAll: async () => {
     try {
-      // First, get basic materials data
-      const { data, error } = await supabase
+      // Fetch minimal shapes to avoid PostgREST 400s on missing relationships
+      const { data: mats, error: matsErr } = await supabase
         .from('materials')
-        .select('*')
+        .select('id, name, description, unit_id')
         .order('name');
+      if (matsErr) return { data: null, error: matsErr };
 
-      if (error) {
-        console.error('Error fetching materials:', error);
-        return { data: null, error };
+      const matIds = (mats || []).map((m: any) => m.id);
+      let variants: any[] = [];
+      if (matIds.length) {
+        const { data: vars, error: varsErr } = await supabase
+          .from('material_variants')
+          .select('id, material_id, variant_name, attributes, created_at')
+          .in('material_id', matIds);
+        if (varsErr) return { data: null, error: varsErr };
+        variants = vars || [];
       }
 
-      // For now, return simple data - we can enhance with joins later
-      return { data, error };
+      const { data: units, error: unitsErr } = await supabase
+        .from('units_of_measure')
+        .select('id, name, description');
+      if (unitsErr) return { data: null, error: unitsErr };
+      const unitMap = new Map((units || []).map((u: any) => [u.id, u]));
+
+      const { data: matsTags, error: tagsErr } = await supabase
+        .from('material_tags')
+        .select('material_id, tag_id, tags(id, name)');
+      if (tagsErr) return { data: null, error: tagsErr };
+      const tagsByMat = new Map<string, any[]>([]);
+      (matsTags || []).forEach((r: any) => {
+        const arr = tagsByMat.get(r.material_id) || [];
+        arr.push(r.tags);
+        tagsByMat.set(r.material_id, arr);
+      });
+
+      // Assemble
+      const materialRows = (mats || []).map((m: any) => ({
+        id: m.id,
+        name: m.name,
+        description: m.description,
+        unit_id: m.unit_id,
+        unit: m.unit_id ? unitMap.get(m.unit_id) || null : null,
+        material_variants: variants.filter((v: any) => v.material_id === m.id),
+        material_tags: (tagsByMat.get(m.id) || []).map((t: any) => ({ tag_id: t?.id, tags: t }))
+      }));
+
+      return { data: materialRows, error: null };
     } catch (exception) {
       console.error('Exception in materialOperations.getAll:', exception);
       return { data: null, error: exception };

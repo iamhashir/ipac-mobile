@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '../utils/AuthContext';
 
 export default function Index() {
-  const { user, profile, loading, profileLoadingTimeout } = useAuth();
+  const { user, profile, loading } = useAuth();
   const router = useRouter();
   const [didNavigate, setDidNavigate] = useState(false);
 
@@ -19,8 +19,7 @@ export default function Index() {
       loading, 
       user: user?.email, 
       profile: profile?.full_name,
-      role: profile?.roles?.name,
-      profileLoadingTimeout
+      role: profile?.roles?.name
     });
     
     // Still loading auth or waiting on profile -> do nothing
@@ -54,19 +53,7 @@ export default function Index() {
       }
       return;
     }
-
-    // Fallback: user exists but profile didn't load within timeout
-    if (profileLoadingTimeout) {
-      console.log('🏠 Index: Profile timeout detected, using metadata fallback');
-      const metadataRole = user?.user_metadata?.role || user?.app_metadata?.role;
-      setDidNavigate(true);
-      if (metadataRole === 'packer') {
-        router.replace('/(packer)/dashboard');
-      } else {
-        router.replace('/(admin)/home');
-      }
-    }
-  }, [user, profile, loading, router, profileLoadingTimeout, didNavigate]);
+  }, [user, profile, loading, router, didNavigate]);
 
   // Show loading screen while checking authentication
   return (

@@ -30,7 +30,7 @@ import { ConfirmModal } from '../../components/ui/ConfirmModal';
 type TabType = 'materials' | 'suppliers' | 'tags' | 'settings';
 
 import { TopTabs } from '../../components/inventory/TopTabs';
-import { getInventoryCache, setInventoryCache } from '../../utils/cache/inventoryCache';
+import { getInventoryCache, setInventoryCache, getStaleInventoryCache } from '../../utils/cache/inventoryCache';
 
 export default function InventoryPage() {
   // State management
@@ -75,7 +75,7 @@ export default function InventoryPage() {
     try {
       // Use cached data if available and allowed
       if (useCache) {
-        const cached = getInventoryCache(60000); // 60s TTL
+        const cached = await getInventoryCache(60000); // 60s TTL
         if (cached) {
           setMaterials(cached.materials);
           setSuppliers(cached.suppliers);
@@ -94,7 +94,16 @@ export default function InventoryPage() {
       ]);
 
       if (materialsResult.error || suppliersResult.error || tagsResult.error || unitsResult.error) {
-        Alert.alert('Error', 'Failed to load inventory data');
+        // Try stale cache instead of bailing
+        const stale = await getStaleInventoryCache();
+        if (stale) {
+          setMaterials(stale.materials || []);
+          setSuppliers(stale.suppliers || []);
+          setTags(stale.tags || []);
+          setUnits(stale.units || []);
+        } else {
+          Alert.alert('Error', 'Failed to load inventory data');
+        }
         return;
       }
 

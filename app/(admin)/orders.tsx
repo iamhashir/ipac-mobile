@@ -233,14 +233,14 @@ export default function OrdersPage() {
           ))
         )}
 
-        {filteredOrders.length === 0 && (
+        {filteredOrders.length === 0 ? (
           <View className="flex-1 justify-center items-center py-12">
             <Text className="text-gray-500 text-lg">No orders found</Text>
             <Text className="text-gray-400 text-sm mt-2">
               Try adjusting your search or filters
             </Text>
           </View>
-        )}
+        ) : null}
       </ScrollView>
 
       {/* Add Order Modal */}

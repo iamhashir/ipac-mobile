@@ -1,5 +1,6 @@
 import 'react-native-url-polyfill/auto';
 import React, { useEffect } from 'react';
+import { LogBox, Platform } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider } from '../utils/AuthContext';
@@ -16,6 +17,15 @@ export default function RootLayout() {
     'Calibri-Italic': require('../assets/fonts/calibri-italic.ttf'),
     'Calibri-BoldItalic': require('../assets/fonts/calibri-bold-italic.ttf'),
   });
+
+  // Silence noisy dev-only warnings on web
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      LogBox.ignoreLogs([
+        'useNativeDriver is not supported',
+      ]);
+    }
+  }, []);
 
   // Set default Text font to Calibri-Regular once fonts are loaded
   useEffect(() => {

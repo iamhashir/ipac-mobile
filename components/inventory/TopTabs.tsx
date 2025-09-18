@@ -32,7 +32,7 @@ export function TopTabs({
             }`}
           >
             {t.label}
-            {typeof t.count === 'number' ? ` (${t.count})` : ''}
+            {typeof t.count === 'number' ? <Text className="inline text-xs"> ({t.count})</Text> : null}
           </Text>
         </TouchableOpacity>
       ))}
