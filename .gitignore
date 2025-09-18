@@ -36,3 +36,6 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+# Legacy Appwrite artifacts (remove when possible)
+functions/appwrite/
