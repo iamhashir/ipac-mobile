@@ -59,7 +59,7 @@ const TripleRowEditable: React.FC<{
   return (
     <View className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-2 mb-2 items-center justify-center">
       <Text className="text-[10px] text-green-900 mb-1 bg-green-100 text-center w-full"> {title}</Text>
-      <View className="flex-row items-end justify-center" style={{ width: '75%' }}>
+      <View className="flex-row items-end justify-between" style={{ width: '75%' }}>
         <View className="items-center">
           <Text className="text-[10px] text-gray-500">Length</Text>
           <TextInput
@@ -107,7 +107,7 @@ export interface DimensionsBoxProps {
 
 const DimensionsBox: React.FC<DimensionsBoxProps> = ({ heading, original, final, onSaveFinal }) => {
   return (
-    <View className="bg-blue-50 rounded-xl border border-gray-200 p-3 m-1" style={{ minHeight: 120, minWidth: 260 }}>
+    <View className="bg-blue-50 rounded-xl border border-gray-200 p-2 m-1 flex-1">
       <View className="px-3 py-1 rounded-full self-center mb-2">
         <Text className="text-blue-800 text-xs font-semibold text-center">{heading}</Text>
       </View>

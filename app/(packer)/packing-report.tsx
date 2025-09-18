@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, Alert, TouchableOpacity, ScrollView } from 'react-native';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
+import { View, Text, Alert, TouchableOpacity, ScrollView, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
@@ -50,6 +50,10 @@ export default function PackingReportPage() {
   const params = useLocalSearchParams();
   const { loading: sessionLoading, canAccessPackaging, canAccessAttendance, session } = usePackerSession();
   const orderId = (params.orderId as string) || session?.order_id || '';
+  
+  const scrollViewRef = useRef<ScrollView>(null);
+  const sectionRefs = useRef<{ [key: string]: number }>({});
+  const screenHeight = Dimensions.get('window').height;
 
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
@@ -264,7 +268,13 @@ export default function PackingReportPage() {
             />
 
             {/* Per-package Task Management (collapsible, white background, rounded, separated by main blue bg) */}
-            <View className="mx-4 mt-4 mb-4">
+            <View 
+              className="mx-4 mt-4 mb-4"
+              onLayout={(event) => {
+                const { y } = event.nativeEvent.layout;
+                sectionRefs.current['items'] = y;
+              }}
+            >
               <CollapsibleCard
                 title="Task Management"
                 containerClassName="bg-white border-gray-500"
@@ -280,10 +290,24 @@ export default function PackingReportPage() {
             </View>
 
             {/* Securing section */}
-            <OrderSecuringSection orderPackageId={p.id} />
+            <View
+              onLayout={(event) => {
+                const { y } = event.nativeEvent.layout;
+                sectionRefs.current['securing'] = y;
+              }}
+            >
+              <OrderSecuringSection orderPackageId={p.id} />
+            </View>
 
             {/* Accessories section */}
-            <AccessoriesSection orderPackageId={p.id} />
+            <View
+              onLayout={(event) => {
+                const { y } = event.nativeEvent.layout;
+                sectionRefs.current['accessories'] = y;
+              }}
+            >
+              <AccessoriesSection orderPackageId={p.id} />
+            </View>
           </View>
         ),
       } as TabDefinition;
@@ -334,7 +358,46 @@ export default function PackingReportPage() {
 
   return (
     <SafeAreaView className="flex-1 bg-primary-50">
-      <ScrollView>
+      <ScrollView
+        ref={scrollViewRef}
+        showsVerticalScrollIndicator={false}
+        // Gentle snapping: only nudge to a section if we're close to it
+        onScrollEndDrag={(event) => {
+          const SNAP_THRESHOLD = 120; // px
+          const { contentOffset } = event.nativeEvent;
+          const positions = Object.values(sectionRefs.current).sort((a,b)=>a-b);
+          const currentY = contentOffset.y;
+          let nearest = undefined as number | undefined;
+          let minDelta = Infinity;
+          positions.forEach((y) => {
+            const delta = Math.abs(y - currentY);
+            if (delta < minDelta) { minDelta = delta; nearest = y; }
+          });
+          if (nearest !== undefined && minDelta < SNAP_THRESHOLD) {
+            requestAnimationFrame(() => {
+              scrollViewRef.current?.scrollTo({ y: nearest as number, animated: true });
+            });
+          }
+        }}
+        onMomentumScrollEnd={(event) => {
+          const SNAP_THRESHOLD = 120; // px
+          const { contentOffset } = event.nativeEvent;
+          const positions = Object.values(sectionRefs.current).sort((a,b)=>a-b);
+          const currentY = contentOffset.y;
+          let nearest = undefined as number | undefined;
+          let minDelta = Infinity;
+          positions.forEach((y) => {
+            const delta = Math.abs(y - currentY);
+            if (delta < minDelta) { minDelta = delta; nearest = y; }
+          });
+          if (nearest !== undefined && minDelta < SNAP_THRESHOLD) {
+            requestAnimationFrame(() => {
+              scrollViewRef.current?.scrollTo({ y: nearest as number, animated: true });
+            });
+          }
+        }}
+        scrollEventThrottle={16}
+      >
         {/* Header */}
         <View className="flex-row justify-between items-center p-4 bg-primary-500">
           <TouchableOpacity onPress={handleBack} className="flex-row items-center">
@@ -362,7 +425,14 @@ export default function PackingReportPage() {
         )}
 
         {/* Tabs */}
-        <TabLayout tabs={tabs} activeKey={activeKey} onChange={setActiveKey} />
+        <View
+          onLayout={(event) => {
+            const { y } = event.nativeEvent.layout;
+            sectionRefs.current['info'] = y;
+          }}
+        >
+          <TabLayout tabs={tabs} activeKey={activeKey} onChange={setActiveKey} />
+        </View>
 
       </ScrollView>
     </SafeAreaView>

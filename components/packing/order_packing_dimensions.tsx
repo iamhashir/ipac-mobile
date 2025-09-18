@@ -31,7 +31,7 @@ const OrderPackingDimensions: React.FC<OrderPackingDimensionsProps> = ({ orderPa
   };
 
   return (
-    <View className="flex-row flex-wrap">
+    <View className="flex-row" style={{ flexWrap: 'nowrap' }}>
       <DimensionsBox
         heading="Internal Dimensions"
         original={internal?.original}

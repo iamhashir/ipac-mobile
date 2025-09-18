@@ -55,14 +55,15 @@ const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, or
   };
 
   return (
-    <View className="flex-row flex-wrap">
-      <TwoTierEditableCard label="Quantity" original={original?.quantity ?? null} final={final?.quantity ?? null} type="number" onChange={(v) => save({ quantity: v })} width={160} />
-      <TwoTierEditableCard label="S.E.I" original={original?.sei ?? null} final={final?.sei ?? null} type="select" selectItems={packTypes} onChange={(v) => save({ packing_type_id: v })} width={200} finalSelectValue={finalPackingTypeId || null} defaultSelectValue={originalPackingTypeId || null} />
-      <TwoTierEditableCard label="Box Type" original={original?.boxType ?? null} final={final?.boxType ?? null} type="select" selectItems={materials} onChange={(v) => save({ box_type_id: v })} width={200} finalSelectValue={finalBoxTypeId || null} defaultSelectValue={originalBoxTypeId || null} />
-      <TwoTierEditableCard label="Tare" original={original?.tare ?? null} final={final?.tare ?? null} type="number" onChange={(v) => save({ tare: v })} width={160} />
-      <TwoTierEditableCard label="Net Weight" original={original?.netWeight ?? null} final={final?.netWeight ?? null} type="number" onChange={(v) => save({ net_weight: v })} width={160} />
-      <TwoTierEditableCard label="Gross Weight" original={original?.grossWeight ?? null} final={final?.grossWeight ?? null} type="number" onChange={(v) => save({ gross_weight: v })} width={160} />
-      <TwoTierEditableCard label="Center of Gravity" original={original?.centerOfGravity ?? null} final={final?.centerOfGravity ?? null} type="switch" onChange={(v) => save({ center_of_gravity: !!v })} width={200} />
+    <View className="flex-row" style={{ flexWrap: 'nowrap' }}>
+      {/* Use flex to ensure all 7 cards stay on one line and fill parent width */}
+      <TwoTierEditableCard label="Quantity" original={original?.quantity ?? null} final={final?.quantity ?? null} type="number" onChange={(v) => save({ quantity: v })} flex={1} />
+      <TwoTierEditableCard label="S.E.I" original={original?.sei ?? null} final={final?.sei ?? null} type="select" selectItems={packTypes} onChange={(v) => save({ packing_type_id: v })} flex={1} finalSelectValue={finalPackingTypeId || null} defaultSelectValue={originalPackingTypeId || null} />
+      <TwoTierEditableCard label="Box Type" original={original?.boxType ?? null} final={final?.boxType ?? null} type="select" selectItems={materials} onChange={(v) => save({ box_type_id: v })} flex={1.3} finalSelectValue={finalBoxTypeId || null} defaultSelectValue={originalBoxTypeId || null} />
+      <TwoTierEditableCard label="Tare" original={original?.tare ?? null} final={final?.tare ?? null} type="number" onChange={(v) => save({ tare: v })} flex={1.2} />
+      <TwoTierEditableCard label="Net Weight" original={original?.netWeight ?? null} final={final?.netWeight ?? null} type="number" onChange={(v) => save({ net_weight: v })} flex={1.3} />
+      <TwoTierEditableCard label="Gross Weight" original={original?.grossWeight ?? null} final={final?.grossWeight ?? null} type="number" onChange={(v) => save({ gross_weight: v })} flex={1.3} />
+      <TwoTierEditableCard label="Center of Gravity" original={original?.centerOfGravity ?? null} final={final?.centerOfGravity ?? null} type="switch" onChange={(v) => save({ center_of_gravity: !!v })} flex={1} />
     </View>
   );
 };

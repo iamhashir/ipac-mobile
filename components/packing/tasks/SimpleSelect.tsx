@@ -11,9 +11,10 @@ interface SimpleSelectProps {
   placeholder?: string;
   widthPercent?: number; // 0..1
   disabled?: boolean;
+  centerText?: boolean;
 }
 
-const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChange, placeholder = 'Select...', widthPercent = 0.75, disabled = false }) => {
+const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChange, placeholder = 'Select...', widthPercent = 0.75, disabled = false, centerText = false }) => {
   const [open, setOpen] = useState(false);
 
   const selected = items.find(i => i.value === value);
@@ -31,7 +32,7 @@ const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChan
         accessibilityLabel={tooltip}
         disabled={disabled}
       >
-        <Text className="text-gray-800">{selectedText}</Text>
+        <Text className={`text-gray-800 ${centerText ? 'text-center' : ''}`}>{selectedText}</Text>
       </TouchableOpacity>
 
       <Modal visible={open} animationType="slide" transparent onRequestClose={() => setOpen(false)}>
