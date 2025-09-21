@@ -361,42 +361,6 @@ export default function PackingReportPage() {
       <ScrollView
         ref={scrollViewRef}
         showsVerticalScrollIndicator={false}
-        // Gentle snapping: only nudge to a section if we're close to it
-        onScrollEndDrag={(event) => {
-          const SNAP_THRESHOLD = 120; // px
-          const { contentOffset } = event.nativeEvent;
-          const positions = Object.values(sectionRefs.current).sort((a,b)=>a-b);
-          const currentY = contentOffset.y;
-          let nearest = undefined as number | undefined;
-          let minDelta = Infinity;
-          positions.forEach((y) => {
-            const delta = Math.abs(y - currentY);
-            if (delta < minDelta) { minDelta = delta; nearest = y; }
-          });
-          if (nearest !== undefined && minDelta < SNAP_THRESHOLD) {
-            requestAnimationFrame(() => {
-              scrollViewRef.current?.scrollTo({ y: nearest as number, animated: true });
-            });
-          }
-        }}
-        onMomentumScrollEnd={(event) => {
-          const SNAP_THRESHOLD = 120; // px
-          const { contentOffset } = event.nativeEvent;
-          const positions = Object.values(sectionRefs.current).sort((a,b)=>a-b);
-          const currentY = contentOffset.y;
-          let nearest = undefined as number | undefined;
-          let minDelta = Infinity;
-          positions.forEach((y) => {
-            const delta = Math.abs(y - currentY);
-            if (delta < minDelta) { minDelta = delta; nearest = y; }
-          });
-          if (nearest !== undefined && minDelta < SNAP_THRESHOLD) {
-            requestAnimationFrame(() => {
-              scrollViewRef.current?.scrollTo({ y: nearest as number, animated: true });
-            });
-          }
-        }}
-        scrollEventThrottle={16}
       >
         {/* Header */}
         <View className="flex-row justify-between items-center p-4 bg-primary-500">
