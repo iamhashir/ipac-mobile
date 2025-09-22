@@ -33,6 +33,9 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
   const [selectedPackageIds, setSelectedPackageIds] = useState<string[]>(orderPackages.length ? [orderPackages[0].id] : []);
   const [notes, setNotes] = useState<string>('');
 
+  // List of ALL boxes in this order for consolidation UI
+  const [allOrderPackages, setAllOrderPackages] = useState<{ id: string; package_number: number | null }[]>([]);
+
   // For detail tabs: track current task context
   const [currentDetailTaskId, setCurrentDetailTaskId] = useState<string | null>(null);
   const [currentDetailAssignedPackers, setCurrentDetailAssignedPackers] = useState<string[]>([]);
@@ -49,6 +52,10 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
 
       const { data: tasksList } = await db.getTasks();
       setTaskTypes((tasksList || []).map((t: any) => ({ id: t.id, name: t.name })));
+
+      // Load ALL order packages for consolidation UI (buttons)
+      const { data: allPkgs } = await db.getOrderPackages(orderId);
+      setAllOrderPackages((allPkgs || []).map((p: any) => ({ id: p.id, package_number: p.package_number ?? null })));
 
       await refreshLogs();
     };
@@ -319,19 +326,22 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
           <Modal visible={consolidateOpen} transparent animationType="fade" onRequestClose={() => setConsolidateOpen(false)}>
             <View className="flex-1 bg-black/30 justify-center items-center">
               <View className="bg-white rounded-xl p-4 w-4/5 max-h-[70%]">
-                <Text className="text-gray-800 font-semibold mb-2">Consolidate with order packages</Text>
+                <Text className="text-gray-800 font-semibold mb-3">Consolidate with boxes</Text>
                 <ScrollView>
-                  {orderPackages.map((op) => {
-                    const checked = selectedPackageIds.includes(op.id);
-                    return (
-                      <TouchableOpacity key={op.id} className="flex-row items-center justify-between px-2 py-2 border-b border-gray-100"
-                        onPress={() => setSelectedPackageIds(prev => checked ? prev.filter(id => id !== op.id) : [...prev, op.id])}
-                      >
-                        <Text className="text-gray-800">Box #{op.package_number ?? '—'}</Text>
-                        <Text className={`text-xs ${checked ? 'text-primary-700' : 'text-gray-500'}`}>{checked ? 'Selected' : 'Tap to select'}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
+                  <View className="flex-row flex-wrap">
+                    {allOrderPackages.map((op) => {
+                      const checked = selectedPackageIds.includes(op.id);
+                      return (
+                        <TouchableOpacity
+                          key={op.id}
+                          className={`px-3 py-2 m-1 rounded-md border ${checked ? 'bg-blue-50 border-blue-400' : 'bg-white border-gray-300'}`}
+                          onPress={() => setSelectedPackageIds(prev => checked ? prev.filter(id => id !== op.id) : [...prev, op.id])}
+                        >
+                          <Text className={`text-sm ${checked ? 'text-blue-800' : 'text-gray-800'}`}>Box #{op.package_number ?? '—'}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
                 </ScrollView>
                 <View className="flex-row justify-end mt-3">
                   <TouchableOpacity className="mr-3" onPress={() => setConsolidateOpen(false)}>
@@ -457,19 +467,22 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
             <Modal visible={consolidateOpen} transparent animationType="fade" onRequestClose={() => setConsolidateOpen(false)}>
               <View className="flex-1 bg-black/30 justify-center items-center">
                 <View className="bg-white rounded-xl p-4 w-4/5 max-h-[70%]">
-                  <Text className="text-gray-800 font-semibold mb-2">Consolidate with order packages</Text>
+                  <Text className="text-gray-800 font-semibold mb-3">Consolidate with boxes</Text>
                   <ScrollView>
-                    {orderPackages.map((op) => {
-                      const checked = selectedPackageIds.includes(op.id);
-                      return (
-                        <TouchableOpacity key={op.id} className="flex-row items-center justify-between px-2 py-2 border-b border-gray-100"
-                          onPress={() => setSelectedPackageIds(prev => checked ? prev.filter(pid => pid !== op.id) : [...prev, op.id])}
-                        >
-                          <Text className="text-gray-800">Box #{op.package_number ?? '—'}</Text>
-                          <Text className={`text-xs ${checked ? 'text-primary-700' : 'text-gray-500'}`}>{checked ? 'Selected' : 'Tap to select'}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
+                    <View className="flex-row flex-wrap">
+                      {allOrderPackages.map((op) => {
+                        const checked = selectedPackageIds.includes(op.id);
+                        return (
+                          <TouchableOpacity
+                            key={op.id}
+                            className={`px-3 py-2 m-1 rounded-md border ${checked ? 'bg-blue-50 border-blue-400' : 'bg-white border-gray-300'}`}
+                            onPress={() => setSelectedPackageIds(prev => checked ? prev.filter(pid => pid !== op.id) : [...prev, op.id])}
+                          >
+                            <Text className={`text-sm ${checked ? 'text-blue-800' : 'text-gray-800'}`}>Box #{op.package_number ?? '—'}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
                   </ScrollView>
                   <View className="flex-row justify-end mt-3">
                     <TouchableOpacity className="mr-3" onPress={() => setConsolidateOpen(false)}>

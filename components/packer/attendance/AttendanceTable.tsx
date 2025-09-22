@@ -56,7 +56,7 @@ export const AttendanceTable: React.FC<AttendanceTableProps> = ({
 }) => {
   const { width } = useWindowDimensions();
   const minTableWidth = 800; // fits the column layout
-  const tableWidth = Math.max(minTableWidth, Math.floor(width - 32));
+  const tableWidth = Math.max(minTableWidth, Math.floor(width - 64));
 
   return (
     <View className="flex-1">

@@ -8,7 +8,8 @@ interface GroupBoxProps {
 
 const GroupBox: React.FC<GroupBoxProps> = ({ title, children }) => {
   return (
-    <View className="bg-white rounded-xl border border-gray-400 p-3 m-1 w-full">
+    // Avoid stretching to the full container width so groups don't look elongated
+    <View className="bg-white rounded-xl border border-gray-400 p-3 m-1 self-start">
       <View className="px-3 py-1 rounded-full self-start mb-2">
         <Text className="text-blue-800 text-xs font-semibold">{title}</Text>
       </View>

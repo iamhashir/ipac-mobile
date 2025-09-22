@@ -119,7 +119,7 @@ export const usePackerNavigation = () => {
       currentStep: 'packing-report',
       stepNumber: 3,
       totalSteps: 3,
-      stepName: 'Packing Report',
+      stepName: 'Packing List',
       description: 'Package and finalize work',
     };
   };

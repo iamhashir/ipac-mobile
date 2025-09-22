@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, TouchableOpacity } from "react-native";
+import { View, Text, TouchableOpacity, useWindowDimensions } from "react-native";
 import { CheckCircle, XCircle } from "lucide-react-native";
 
 // Types
@@ -57,13 +57,16 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
   onEndWork,
   onRecordNewAttendance,
 }) => {
+  const { width } = useWindowDimensions();
+  const isMediumOrLarger = width >= 850;
+  
   return (
     <View
       className="flex-row border-b border-x-2 border-gray-200"
     >
       {/* Name column */}
       <View className="w-[14.3%] p-3 border-r border-gray-300 justify-center">
-        <Text className="font-medium text-gray-900">{name}</Text>
+        <Text className="text-lg font-medium text-gray-900">{name}</Text>
       </View>
 
       {/* Morning Presence */}
@@ -91,7 +94,7 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
                     }
                   />
                   <Text
-                    className={`ml-1 text-xs ${
+                    className={`text-md ml-1 ${
                       attendance.morning.present === true
                         ? "text-white"
                         : "text-blue-600"
@@ -121,7 +124,7 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
                     }
                   />
                   <Text
-                    className={`ml-1 text-xs ${
+                    className={`ml-1 text-md ${
                       attendance.morning.present === false
                         ? "text-white"
                         : isAfternoon
@@ -153,13 +156,13 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
                 </Text>
               ) : (
                 <Text
-                  className={`${
+                  className={`text-lg ${
                     !attendance.morning.present || isAfternoon
                       ? "text-gray-500"
                       : "text-blue-600"
                   }`}
                 >
-                  Start (Auto)
+                  Start{isMediumOrLarger ? ' (Auto)' : ''}
                 </Text>
               )}
             </View>
@@ -196,7 +199,7 @@ onPress={() => {
                   </Text>
                 ) : (
                   <Text
-                    className={`${
+                    className={`text-lg ${
                       !attendance.morning.present ||
                       !attendance.morning.startTime ||
                       isAfternoon
@@ -253,7 +256,7 @@ onPress={() => {
                     }
                   />
                   <Text
-                    className={`ml-1 text-xs ${
+                    className={`ml-1 text-md ${
                       attendance.afternoon.present === true
                         ? "text-white"
                         : isMorning
@@ -285,7 +288,7 @@ onPress={() => {
                     }
                   />
                   <Text
-                    className={`ml-1 text-xs ${
+                    className={`ml-1 text-md ${
                       attendance.afternoon.present === false
                         ? "text-white"
                         : isMorning
@@ -312,18 +315,18 @@ onPress={() => {
               }`}
             >
               {attendance.afternoon.startTime ? (
-                <Text className="text-lg font-bold text-white">
+                <Text className="font-bold text-white text-lg">
                   {attendance.afternoon.startTime}
                 </Text>
               ) : (
                 <Text
-                  className={`${
+                  className={`text-lg ${
                     !attendance.afternoon.present || isMorning
                       ? "text-gray-500"
                       : "text-blue-600"
                   }`}
                 >
-                  Start (Auto)
+                  Start{isMediumOrLarger ? ' (Auto)' : ''}
                 </Text>
               )}
             </View>
@@ -360,7 +363,7 @@ onPress={() => {
                   </Text>
                 ) : (
                   <Text
-                    className={`${
+                    className={`text-lg ${
                       !attendance.afternoon.present ||
                       !attendance.afternoon.startTime ||
                       isMorning

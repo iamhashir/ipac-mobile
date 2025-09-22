@@ -223,7 +223,9 @@ export const PackerSessionProvider: React.FC<PackerSessionProviderProps> = ({ ch
   };
 
   const canAccessPackaging = (): boolean => {
-    return session?.team_selected === true && session?.attendance_completed === true;
+    // Allow all packers to access packing list after team selection
+    // Only team leaders need to complete attendance marking
+    return session?.team_selected === true;
   };
 
   const value: PackerSessionContextType = {

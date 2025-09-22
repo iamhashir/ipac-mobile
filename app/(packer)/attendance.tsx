@@ -849,7 +849,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
                   ? 'text-gray-500'
                   : 'text-white'
               }`}>
-{saving ? 'Saving Attendance...' : 'Continue to Packing Report'}
+{saving ? 'Saving Attendance...' : 'Continue to Packing List'}
               </Text>
             </TouchableOpacity>
           </View>

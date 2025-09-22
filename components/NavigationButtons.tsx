@@ -96,7 +96,7 @@ export const NavigationButtons: React.FC<NavigationButtonsProps> = ({ currentScr
         className={baseBtnCls(packagingAllowed)}
       >
         <PackageIcon size={iconOnly ? 18 : (isCompact ? 14 : 16)} color={packagingAllowed ? '#ffffff' : '#6b7280'} />
-        {!iconOnly && <Text className={baseTextCls(packagingAllowed)}> Packing Report</Text>}
+        {!iconOnly && <Text className={baseTextCls(packagingAllowed)}> Packing List</Text>}
       </TouchableOpacity>
     </View>
   );

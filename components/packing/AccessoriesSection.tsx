@@ -65,6 +65,8 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
   };
 
   useEffect(() => {
+    // Clear old items immediately to prevent cross-box bleed while loading
+    setItems([]);
     load();
   }, [orderPackageId]);
 

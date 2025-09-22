@@ -368,7 +368,7 @@ export default function PackingReportPage() {
             <ArrowLeft size={24} color="#fff" />
             <Text className="ml-2 text-white text-base font-semibold">Back</Text>
           </TouchableOpacity>
-          <Text className="text-white text-xl font-semibold">Packing Report</Text>
+          <Text className="text-white text-xl font-semibold">Packing List</Text>
           <TouchableOpacity onPress={handleSignOut} className="bg-primary-600 px-3 py-1 rounded">
             <Text className="text-white text-sm">Sign Out</Text>
           </TouchableOpacity>

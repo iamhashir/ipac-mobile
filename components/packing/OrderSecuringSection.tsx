@@ -22,6 +22,7 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps> = ({ orderPackag
   const screenWidth = Dimensions.get('window').width;
   const pageWidth = screenWidth - 32;
   const indexRef = useRef(0);
+  const [isScrolling, setIsScrolling] = useState(false);
   const [pageHeights, setPageHeights] = useState<Record<Side, number>>({
     big_sides: 0,
     small_sides: 0,
@@ -60,6 +61,59 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps> = ({ orderPackag
     const item = materials.find(m => m.value === id);
     return item?.label || '—';
   };
+
+  const handleTabPress = (tab: Side, index: number) => {
+    if (isScrolling) return; // Prevent conflicts during scrolling
+    
+    setActiveTab(tab);
+    indexRef.current = index;
+    setIsScrolling(true);
+    
+    requestAnimationFrame(() => {
+      scrollViewRef.current?.scrollTo({ 
+        x: index * pageWidth, 
+        animated: true 
+      });
+      
+      // Reset scrolling flag after animation
+      setTimeout(() => setIsScrolling(false), 300);
+    });
+  };
+
+  // Add keyboard navigation support for web
+  useEffect(() => {
+    const currentTabs = [
+      { key: 'big_sides', label: 'Big Sides' },
+      { key: 'small_sides', label: 'Small Sides' },
+      { key: 'lid', label: 'Lid' },
+      { key: 'base', label: 'Base' },
+    ];
+    
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault();
+        const currentIndex = currentTabs.findIndex(tab => tab.key === activeTab);
+        let newIndex;
+        
+        if (event.key === 'ArrowLeft') {
+          newIndex = Math.max(0, currentIndex - 1);
+        } else {
+          newIndex = Math.min(currentTabs.length - 1, currentIndex + 1);
+        }
+        
+        if (newIndex !== currentIndex && newIndex >= 0) {
+          console.log(`Keyboard navigation: ${currentTabs[currentIndex]?.label} -> ${currentTabs[newIndex]?.label}`);
+          handleTabPress(currentTabs[newIndex].key as Side, newIndex);
+        }
+      }
+    };
+
+    // Only add keyboard listener on web platforms
+    if (typeof window !== 'undefined') {
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+    }
+  }, [activeTab, isScrolling]);
 
   const renderSideContent = (side: Side) => {
     const orig = bySide[side].original;
@@ -130,26 +184,37 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps> = ({ orderPackag
     { key: 'base', label: 'Base' },
   ];
 
-  const handleTabPress = (tab: Side, index: number) => {
-    setActiveTab(tab);
-    requestAnimationFrame(() => {
-      scrollViewRef.current?.scrollTo({ x: index * (screenWidth - 32), animated: true });
-    });
-  };
-
   return (
     <View className="mt-2 mb-6 border border-blue-200 rounded-lg mx-4 bg-blue-50">
       <Text className="text-blue-800 font-semibold text-lg px-4 pt-4">Securing</Text>
       
       {/* Tabs header */}
       <View className="flex-row items-end gap-6 px-4 mt-2 border-b border-blue-200">
-        {tabs.map((tab, index) => (
-          <TouchableOpacity key={tab.key} onPress={() => handleTabPress(tab.key, index)} activeOpacity={0.8}>
-            <View className={`${activeTab === tab.key ? 'bg-white border border-blue-300 border-b-0 rounded-t-xl px-4 py-2 -mb-[1px]' : 'px-4 pb-2'}`}>
-              <Text className={`${activeTab === tab.key ? 'text-blue-700 font-semibold' : 'text-blue-600/70'}`}>{tab.label}</Text>
-            </View>
-          </TouchableOpacity>
-        ))}
+        {tabs.map((tab, index) => {
+          const isActive = activeTab === tab.key;
+          return (
+            <TouchableOpacity 
+              key={tab.key} 
+              onPress={() => handleTabPress(tab.key, index)} 
+              activeOpacity={0.8}
+              disabled={isScrolling}
+            >
+              <View className={`transition-all duration-200 ${
+                isActive 
+                  ? 'bg-white border border-blue-300 border-b-0 rounded-t-xl px-4 py-2 -mb-[1px] shadow-sm' 
+                  : 'px-4 pb-2 hover:bg-blue-100/50 rounded-t-lg'
+              }`}>
+                <Text className={`transition-all duration-200 ${
+                  isActive 
+                    ? 'text-blue-700 font-semibold' 
+                    : 'text-blue-600/70 hover:text-blue-600'
+                }`}>
+                  {tab.label}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       {/* Carousel content */}
@@ -159,26 +224,85 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps> = ({ orderPackag
           horizontal
           pagingEnabled
           showsHorizontalScrollIndicator={false}
+          decelerationRate="fast"
+          snapToInterval={pageWidth}
+          snapToAlignment="start"
+          bounces={true}
+          bouncesZoom={false}
+          alwaysBounceHorizontal={false}
+          onScrollBeginDrag={() => {
+            setIsScrolling(true);
+          }}
           onScroll={(event) => {
             const { contentOffset } = event.nativeEvent;
-            const index = Math.round(contentOffset.x / pageWidth);
-            if (indexRef.current !== index && index >= 0 && index < tabs.length) {
-              indexRef.current = index;
-              setActiveTab(tabs[index].key);
+            const progress = contentOffset.x / pageWidth;
+            const index = Math.round(progress);
+            
+            // Only update if we're close to a snap position
+            if (Math.abs(progress - index) < 0.1 && index >= 0 && index < tabs.length) {
+              if (indexRef.current !== index) {
+                indexRef.current = index;
+                setActiveTab(tabs[index].key);
+              }
             }
           }}
           onMomentumScrollEnd={(event) => {
             const { contentOffset } = event.nativeEvent;
-            const index = Math.round(contentOffset.x / pageWidth);
-            if (index >= 0 && index < tabs.length) {
-              indexRef.current = index;
-              setActiveTab(tabs[index].key);
+            let targetIndex = Math.round(contentOffset.x / pageWidth);
+            
+            // Ensure we're within bounds
+            targetIndex = Math.max(0, Math.min(targetIndex, tabs.length - 1));
+            
+            const targetX = targetIndex * pageWidth;
+            const offset = Math.abs(contentOffset.x - targetX);
+            
+            console.log(`Momentum end - Offset: ${contentOffset.x.toFixed(2)}, Target: ${targetX}, Delta: ${offset.toFixed(2)}, Index: ${targetIndex}`);
+            
+            // Force exact positioning if we're off by more than 1 pixel
+            if (offset > 1) {
+              console.log(`Correcting position from ${contentOffset.x.toFixed(2)} to ${targetX}`);
+              scrollViewRef.current?.scrollTo({ 
+                x: targetX, 
+                animated: true 
+              });
+            }
+            
+            // Update state
+            indexRef.current = targetIndex;
+            setActiveTab(tabs[targetIndex].key);
+            setIsScrolling(false);
+          }}
+          onScrollEndDrag={(event) => {
+            const { contentOffset, velocity } = event.nativeEvent;
+            
+            console.log(`Scroll end drag - Velocity: ${velocity.x.toFixed(2)}, Offset: ${contentOffset.x.toFixed(2)}`);
+            
+            // For low velocity or incomplete swipes, snap to nearest page
+            if (Math.abs(velocity.x) < 1.0) {
+              const progress = contentOffset.x / pageWidth;
+              const targetIndex = Math.round(progress);
+              const clampedIndex = Math.max(0, Math.min(targetIndex, tabs.length - 1));
+              const targetX = clampedIndex * pageWidth;
+              
+              // Only correct if we're noticeably off position
+              if (Math.abs(contentOffset.x - targetX) > 5) {
+                console.log(`Low velocity snap: ${contentOffset.x.toFixed(2)} -> ${targetX}`);
+                scrollViewRef.current?.scrollTo({ 
+                  x: targetX, 
+                  animated: true 
+                });
+              }
+              
+              indexRef.current = clampedIndex;
+              setActiveTab(tabs[clampedIndex].key);
             }
           }}
           scrollEventThrottle={16}
+          contentContainerStyle={{ flexDirection: 'row' }}
         >
           {tabs.map(tab => (
             <View key={tab.key} className="py-4"
+              style={{ width: pageWidth }}
               onLayout={(e)=>{
                 const h = e.nativeEvent.layout.height;
                 setPageHeights(prev => ({ ...prev, [tab.key]: h }));
@@ -188,6 +312,24 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps> = ({ orderPackag
             </View>
           ))}
         </ScrollView>
+      </View>
+      
+      {/* Carousel position indicators */}
+      <View className="flex-row justify-center items-center py-2 gap-2">
+        {tabs.map((tab, index) => {
+          const isActive = activeTab === tab.key;
+          return (
+            <TouchableOpacity
+              key={`indicator-${tab.key}`}
+              onPress={() => handleTabPress(tab.key, index)}
+              className="p-1"
+            >
+              <View className={`w-2 h-2 rounded-full transition-all duration-200 ${
+                isActive ? 'bg-blue-500 scale-110' : 'bg-blue-300'
+              }`} />
+            </TouchableOpacity>
+          );
+        })}
       </View>
     </View>
   );
