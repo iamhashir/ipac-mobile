@@ -60,6 +60,7 @@ export default function PackerLayout() {
       <Stack.Screen name="dashboard" />
       <Stack.Screen name="attendance" />
       <Stack.Screen name="packing-report" />
+      <Stack.Screen name="settings" />
     </Stack>
   );
 }

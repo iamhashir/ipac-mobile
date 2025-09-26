@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, Modal, TextInput, ScrollView, Alert } from 'react-native';
 import CollapsibleCard from './common/CollapsibleCard';
 import { db } from '../../utils/api/supabase';
-import { Check, X } from 'lucide-react-native';
+import { Check, X, ChevronDown } from 'lucide-react-native';
 
 interface AccessoriesSectionProps {
   orderPackageId: string;
@@ -204,20 +204,20 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
         <View className="flex-row gap-2">
           <TouchableOpacity
             onPress={() => markUsed(row.id)}
-            className={`px-2 py-1 rounded ${row.item_used ? 'bg-green-600' : 'bg-green-500'}`}
+            className={`px-2 py-1 rounded bg-green-50 border border-green-600`}
           >
             <View className="flex-row items-center">
-              <Check size={18} color="#fff" />
-              <Text className="text-white text-xs ml-1">Use</Text>
+              <Check size={18} color="#15803d" />
+              <Text className="text-green-700 text-xs ml-1">Use</Text>
             </View>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => removeRow(row.id)}
-            className="px-2 py-1 rounded bg-red-500"
+            className="px-2 py-1 rounded bg-red-50 border border-red-600"
           >
             <View className="flex-row items-center">
-              <X size={18} color="#fff" />
-              <Text className="text-white text-xs ml-1">Remove</Text>
+              <X size={18} color="#ff0000" />
+              <Text className="text-red-800 text-xs ml-1">Remove</Text>
             </View>
           </TouchableOpacity>
         </View>
@@ -233,8 +233,8 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
           {/* Top bar: title + Add item button */}
           <View className="flex-row justify-between items-center mb-2">
             <Text className="text-gray-800 font-semibold">Accessory items</Text>
-            <TouchableOpacity onPress={() => setAddOpen(true)} className="bg-primary-600 px-3 py-1.5 rounded">
-              <Text className="text-white text-sm">Add item</Text>
+            <TouchableOpacity onPress={() => setAddOpen(true)} className="bg-blue-50 border border-blue-600 px-3 py-1.5 rounded">
+              <Text className="text-blue-700 text-sm">Add item</Text>
             </TouchableOpacity>
           </View>
 
@@ -248,8 +248,16 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
 
       {/* Add Item Modal */}
       <Modal visible={addOpen} transparent animationType="fade" onRequestClose={() => setAddOpen(false)}>
-        <View className="flex-1 bg-black/40 justify-center items-center">
-          <View className="w-11/12 bg-white rounded-lg p-4">
+        <TouchableOpacity 
+          activeOpacity={1}
+          className="flex-1 bg-black/40 justify-center items-center"
+          onPress={() => { setAddOpen(false); resetForm(); }}
+        >
+          <TouchableOpacity 
+            activeOpacity={1}
+            className="w-11/12 bg-white rounded-lg p-4"
+            onPress={(e) => e.stopPropagation()}
+          >
             <Text className="text-lg font-semibold text-gray-800 mb-3">Add accessory item</Text>
 
             {/* Variant Picker */}
@@ -258,7 +266,10 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
               onPress={() => setVariantPickerOpen(v => !v)}
               className="border border-gray-300 rounded p-2 mb-1 bg-white"
             >
-              <Text className="text-gray-800">{variantLabelById(formVariant)}</Text>
+              <View className="flex-row items-center justify-between">
+                <Text className="text-gray-800">{variantLabelById(formVariant)}</Text>
+                <ChevronDown size={16} color="#374151" />
+              </View>
             </TouchableOpacity>
             {triedSubmit && errors.variant ? (
               <Text className="text-red-600 text-xs mb-2">{errors.variant}</Text>
@@ -319,7 +330,10 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
             ) : (
               <>
                 <TouchableOpacity onPress={() => setUnitPickerOpen(v => !v)} className="border border-gray-300 rounded p-2 mb-1 bg-white">
-                  <Text className="text-gray-800">{formUnit ? (unitsMap[formUnit] || '—') : 'Select unit'}</Text>
+                  <View className="flex-row items-center justify-between">
+                    <Text className="text-gray-800">{formUnit ? (unitsMap[formUnit] || '—') : 'Select unit'}</Text>
+                    <ChevronDown size={16} color="#374151" />
+                  </View>
                 </TouchableOpacity>
                 {triedSubmit && errors.unit ? (
                   <Text className="text-red-600 text-xs mb-2">{errors.unit}</Text>
@@ -355,15 +369,15 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
             <TextInput value={formComment} onChangeText={setFormComment} className="border border-gray-300 rounded p-2 mb-3" placeholder="Optional notes" />
 
             <View className="flex-row justify-end gap-2">
-              <TouchableOpacity onPress={() => { setAddOpen(false); resetForm(); }} className="px-3 py-2 rounded bg-gray-200">
-                <Text className="text-gray-800">Cancel</Text>
+              <TouchableOpacity onPress={() => { setAddOpen(false); resetForm(); }} className="px-3 py-2 rounded bg-red-50 border border-red-600">
+                <Text className="text-red-800">Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={saveNew} className="px-3 py-2 rounded bg-primary-600">
-                <Text className="text-white">{isSaving ? 'Saving...' : 'Save'}</Text>
+              <TouchableOpacity onPress={saveNew} className="px-3 py-2 rounded bg-blue-50 border border-blue-600">
+                <Text className="text-blue-700">{isSaving ? 'Saving...' : 'Save'}</Text>
               </TouchableOpacity>
             </View>
-          </View>
-        </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
     </View>
   );

@@ -11,18 +11,18 @@ const fmt = (v: number | null | undefined) => (v === 0 || v ? String(v) : '—')
 
 const TripleRowReadOnly: React.FC<{ title: string; dims: DimensionsTriple | null | undefined }>
   = ({ title, dims }) => (
-  <View className="bg-white border border-gray-200 rounded-lg px-2 py-2 mb-2 items-center justify-center">
+  <View className="bg-white border border-indigo-200 rounded-lg px-2 py-2 mb-2 items-center justify-center">
     <Text className="text-[10px] text-amber-900 mb-1 bg-amber-100 text-center w-full">{title}</Text>
     <View className="flex-row items-center justify-between" style={{ width: '75%' }}>
-      <View className="items-center">
+      <View className="items-center" style={{ width: 70 }}>
         <Text className="text-[10px] text-gray-500">Length</Text>
         <Text className="text-gray-900 text-sm font-semibold text-center">{fmt(dims?.length)}</Text>
       </View>
-      <View className="items-center">
+      <View className="items-center" style={{ width: 70 }}>
         <Text className="text-[10px] text-gray-500">Width</Text>
         <Text className="text-gray-900 text-sm font-semibold text-center">{fmt(dims?.width)}</Text>
       </View>
-      <View className="items-center">
+      <View className="items-center" style={{ width: 70 }}>
         <Text className="text-[10px] text-gray-500">Height</Text>
         <Text className="text-gray-900 text-sm font-semibold text-center">{fmt(dims?.height)}</Text>
       </View>
@@ -57,13 +57,13 @@ const TripleRowEditable: React.FC<{
   };
 
   return (
-    <View className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-2 mb-2 items-center justify-center">
+    <View className="bg-gray-50 border border-indigo-200 rounded-lg px-2 py-2 mb-2 items-center justify-center">
       <Text className="text-[10px] text-green-900 mb-1 bg-green-100 text-center w-full"> {title}</Text>
-      <View className="flex-row items-end justify-between" style={{ width: '75%' }}>
+      <View className="flex-row items-center justify-between" style={{ width: '75%' }}>
         <View className="items-center">
           <Text className="text-[10px] text-gray-500">Length</Text>
           <TextInput
-            className="border border-gray-300 bg-white rounded px-2 py-1 text-center"
+            className="border border-gray-300 bg-white rounded py-1 text-center"
             defaultValue={vals.length !== null ? String(vals.length) : ''}
             onChangeText={(t) => setVals(v => ({ ...v, length: toNumberOrNull(t) }))}
             onEndEditing={saveAll}
@@ -74,7 +74,7 @@ const TripleRowEditable: React.FC<{
         <View className="items-center">
           <Text className="text-[10px] text-gray-500">Width</Text>
           <TextInput
-            className="border border-gray-300 bg-white rounded px-2 py-1 text-center"
+            className="border border-gray-300 bg-white rounded py-1 text-center"
             defaultValue={vals.width !== null ? String(vals.width) : ''}
             onChangeText={(t) => setVals(v => ({ ...v, width: toNumberOrNull(t) }))}
             onEndEditing={saveAll}
@@ -85,7 +85,7 @@ const TripleRowEditable: React.FC<{
         <View className="items-center">
           <Text className="text-[10px] text-gray-500">Height</Text>
           <TextInput
-            className="border border-gray-300 bg-white rounded px-2 py-1 text-center"
+            className="border border-gray-300 bg-white rounded py-1 text-center"
             defaultValue={vals.height !== null ? String(vals.height) : ''}
             onChangeText={(t) => setVals(v => ({ ...v, height: toNumberOrNull(t) }))}
             onEndEditing={saveAll}
@@ -107,7 +107,7 @@ export interface DimensionsBoxProps {
 
 const DimensionsBox: React.FC<DimensionsBoxProps> = ({ heading, original, final, onSaveFinal }) => {
   return (
-    <View className="bg-blue-50 rounded-xl border border-gray-200 p-2 m-1 flex-1">
+    <View className="bg-blue-50 rounded-xl border border-indigo-200 p-2 m-1 flex-1">
       <View className="px-3 py-1 rounded-full self-center mb-2">
         <Text className="text-blue-800 text-xs font-semibold text-center">{heading}</Text>
       </View>

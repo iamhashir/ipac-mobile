@@ -2,7 +2,7 @@ import React from 'react';
 import { usePackerSession } from '../utils/PackerSessionContext';
 import { View, TouchableOpacity, Text, useWindowDimensions, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
-import { LayoutDashboard, CalendarCheck, Package as PackageIcon } from 'lucide-react-native';
+import { LayoutDashboard, CalendarCheck, Package as PackageIcon, Settings as SettingsIcon } from 'lucide-react-native';
 
 interface NavigationButtonsProps {
   currentScreen: string;
@@ -97,6 +97,10 @@ export const NavigationButtons: React.FC<NavigationButtonsProps> = ({ currentScr
       >
         <PackageIcon size={iconOnly ? 18 : (isCompact ? 14 : 16)} color={packagingAllowed ? '#ffffff' : '#6b7280'} />
         {!iconOnly && <Text className={baseTextCls(packagingAllowed)}> Packing List</Text>}
+      </TouchableOpacity>
+      <TouchableOpacity onPress={() => navigateTo('settings')} className={baseBtnCls(true)}>
+        <SettingsIcon size={iconOnly ? 18 : (isCompact ? 14 : 16)} color="#ffffff" />
+        {!iconOnly && <Text className={baseTextCls(true)}> Settings</Text>}
       </TouchableOpacity>
     </View>
   );

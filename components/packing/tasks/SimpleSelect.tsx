@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, Modal, FlatList } from 'react-native';
+import { ChevronDown } from 'lucide-react-native';
 
 interface Item { label: string; value: string; labelShort?: string; tooltip?: string; }
 
@@ -32,12 +33,15 @@ const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChan
         accessibilityLabel={tooltip}
         disabled={disabled}
       >
-        <Text className={`text-gray-800 ${centerText ? 'text-center' : ''}`}>{selectedText}</Text>
+        <View className="flex-row items-center justify-between">
+          <Text className={`text-gray-800 ${centerText ? 'text-center' : ''}`}>{selectedText}</Text>
+          <ChevronDown size={16} color="#374151" />
+        </View>
       </TouchableOpacity>
 
       <Modal visible={open} animationType="slide" transparent onRequestClose={() => setOpen(false)}>
-        <View className="flex-1 justify-end bg-black/30">
-          <View className="bg-white rounded-t-2xl p-4 max-h-[60%]">
+        <TouchableOpacity className="flex-1 justify-end bg-black/30" activeOpacity={1} onPress={() => setOpen(false)}>
+          <TouchableOpacity className="bg-white rounded-t-2xl p-4 max-h-[60%]" activeOpacity={1} onPress={(e) => e.stopPropagation()}>
             <Text className="text-gray-800 font-semibold mb-2">{label || 'Select'}</Text>
             <FlatList
               data={items}
@@ -54,8 +58,8 @@ const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChan
             <TouchableOpacity onPress={() => setOpen(false)} className="mt-3 self-end">
               <Text className="text-primary-700 font-semibold">Close</Text>
             </TouchableOpacity>
-          </View>
-        </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
     </View>
   );

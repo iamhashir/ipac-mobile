@@ -1,7 +1,8 @@
-import React, { useState, useEffect, Suspense } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, TextInput, Alert, Modal } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, TextInput, Alert, Modal, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Search, Plus, Package, Building2, Tag as TagIcon, DollarSign, Settings } from 'lucide-react-native';
+import { Search, Plus, Package, Building2, Tag as TagIcon, DollarSign, Settings, RefreshCw, AlertTriangle, X, Save } from 'lucide-react-native';
+import { supabase } from '../../utils/api/supabase';
 
 // Import our inventory components and API functions
 import {
@@ -17,12 +18,10 @@ import {
   materialTagOperations
 } from '../../utils/api/inventory';
 
-import { MaterialCard, SupplierCard, TagManagement } from '../../components/inventory/InventoryComponents';
+import { MaterialCard, SupplierCard, TagManagement, MaterialForm, VariantManagement, SupplierProductModal } from '../../components/inventory/InventoryComponents';
 
-// Lazy-load heavy forms/panels used conditionally
-const MaterialForm = React.lazy(() => import('../../components/inventory/InventoryComponents').then(m => ({ default: m.MaterialForm })));
-const VariantManagement = React.lazy(() => import('../../components/inventory/InventoryComponents').then(m => ({ default: m.VariantManagement })));
-const SupplierForm = React.lazy(() => import('../../components/inventory/InventoryForms').then(m => ({ default: m.SupplierForm })));
+// Direct imports instead of lazy loading to avoid Suspense-related stalls
+import { SupplierForm } from '../../components/inventory/InventoryForms';
 
 import { ConfirmModal } from '../../components/ui/ConfirmModal';
 
@@ -30,7 +29,6 @@ import { ConfirmModal } from '../../components/ui/ConfirmModal';
 type TabType = 'materials' | 'suppliers' | 'tags' | 'settings';
 
 import { TopTabs } from '../../components/inventory/TopTabs';
-import { getInventoryCache, setInventoryCache, getStaleInventoryCache } from '../../utils/cache/inventoryCache';
 
 export default function InventoryPage() {
   // State management
@@ -44,14 +42,27 @@ export default function InventoryPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [units, setUnits] = useState<UnitOfMeasure[]>([]);
+  const [newUnitName, setNewUnitName] = useState('');
+  const [newUnitDescription, setNewUnitDescription] = useState('');
+  const [showUnitModal, setShowUnitModal] = useState(false);
+  const [savingUnit, setSavingUnit] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   
   // Modal states
   const [showMaterialForm, setShowMaterialForm] = useState(false);
   const [showSupplierForm, setShowSupplierForm] = useState(false);
   const [showVariantManagement, setShowVariantManagement] = useState(false);
+  const [showSupplierProducts, setShowSupplierProducts] = useState(false);
   const [selectedMaterial, setSelectedMaterial] = useState<Material | null>(null);
   const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
+  
+  // Price alert states
+  const [showPriceAlerts, setShowPriceAlerts] = useState(false);
+  const [priceSettings, setPriceSettings] = useState({
+    warning_days: 90,
+    alert_days: 180,
+    enabled: true
+  });
 
   // Confirm delete modal state
   const [confirmDelete, setConfirmDelete] = useState<{ visible: boolean; material: Material | null; loading: boolean }>({
@@ -60,12 +71,56 @@ export default function InventoryPage() {
     loading: false,
   });
 
-  // Load initial data
+// Load on mount and whenever tab changes
   useEffect(() => {
-    loadData(true, true);
-  }, []);
+    loadData(true);
+    loadPriceSettings();
+  }, [activeTab]);
 
-  const loadData = async (showLoader: boolean = false, useCache: boolean = true) => {
+  // Price alert functions
+  const loadPriceSettings = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('app_settings')
+        .select('value')
+        .eq('key', 'price_alert_thresholds')
+        .single();
+      
+      if (data?.value) {
+        setPriceSettings(data.value);
+      }
+    } catch (error) {
+      console.error('Error loading price settings:', error);
+    }
+  };
+
+  const savePriceSettings = async () => {
+    setLoading(true);
+    try {
+      const { error } = await supabase
+        .from('app_settings')
+        .upsert({
+          key: 'price_alert_thresholds',
+          value: priceSettings,
+          description: 'Thresholds for supplier pricing age alerts (in days)',
+          category: 'inventory'
+        }, {
+          onConflict: 'key'
+        });
+      
+      if (error) throw error;
+      
+      Alert.alert('Success', 'Price alert settings saved successfully');
+      setShowPriceAlerts(false);
+    } catch (error) {
+      console.error('Error saving price settings:', error);
+      Alert.alert('Error', 'Failed to save settings');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadData = async (showLoader: boolean = false) => {
     if (showLoader) {
       setLoading(true);
     } else {
@@ -73,19 +128,6 @@ export default function InventoryPage() {
     }
 
     try {
-      // Use cached data if available and allowed
-      if (useCache) {
-        const cached = await getInventoryCache(60000); // 60s TTL
-        if (cached) {
-          setMaterials(cached.materials);
-          setSuppliers(cached.suppliers);
-          setTags(cached.tags);
-          setUnits(cached.units);
-          if (showLoader) setLoading(false); else setRefreshing(false);
-          return;
-        }
-      }
-
       const [materialsResult, suppliersResult, tagsResult, unitsResult] = await Promise.all([
         materialOperations.getAll(),
         supplierOperations.getAll(),
@@ -94,16 +136,7 @@ export default function InventoryPage() {
       ]);
 
       if (materialsResult.error || suppliersResult.error || tagsResult.error || unitsResult.error) {
-        // Try stale cache instead of bailing
-        const stale = await getStaleInventoryCache();
-        if (stale) {
-          setMaterials(stale.materials || []);
-          setSuppliers(stale.suppliers || []);
-          setTags(stale.tags || []);
-          setUnits(stale.units || []);
-        } else {
-          Alert.alert('Error', 'Failed to load inventory data');
-        }
+        Alert.alert('Error', 'Failed to load inventory data');
         return;
       }
 
@@ -117,8 +150,6 @@ export default function InventoryPage() {
       setTags(t);
       setUnits(u);
 
-      // update cache
-      setInventoryCache({ materials: m, suppliers: s, tags: t, units: u });
     } catch (error) {
       console.error('Error loading data:', error);
       Alert.alert('Error', 'Failed to load inventory data');
@@ -312,6 +343,43 @@ export default function InventoryPage() {
     }
   };
 
+  // Unit operations (create only)
+  const handleCreateUnit = async () => {
+    const name = newUnitName.trim();
+    const description = newUnitDescription.trim();
+    if (!name) {
+      Alert.alert('Error', 'Unit name is required');
+      return;
+    }
+    // Prevent duplicates (case-insensitive)
+    if (units.some(u => u.name.toLowerCase() === name.toLowerCase())) {
+      Alert.alert('Info', 'This unit already exists');
+      return;
+    }
+    try {
+      setSavingUnit(true);
+      const payload: any = { name };
+      if (description) payload.description = description;
+      const { data, error } = await unitOperations.create(payload);
+      if (error) {
+        Alert.alert('Error', 'Failed to create unit');
+        return;
+      }
+      if (data) {
+        setUnits(prev => [...prev, data as UnitOfMeasure]);
+        setNewUnitName('');
+        setNewUnitDescription('');
+        setShowUnitModal(false);
+        Alert.alert('Success', 'Unit added');
+      }
+    } catch (e) {
+      console.error('Error creating unit:', e);
+      Alert.alert('Error', 'Failed to create unit');
+    } finally {
+      setSavingUnit(false);
+    }
+  };
+
   // Filter data based on search and tag
   const filteredMaterials = materials.filter(material => {
     const matchesSearch = material.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -336,7 +404,7 @@ export default function InventoryPage() {
     { key: 'materials' as TabType, label: 'Materials', icon: Package, count: materials.length },
     { key: 'suppliers' as TabType, label: 'Suppliers', icon: Building2, count: suppliers.length },
     { key: 'tags' as TabType, label: 'Tags', icon: TagIcon, count: tags.length },
-    { key: 'settings' as TabType, label: 'Settings', icon: Settings, count: 0 }
+    { key: 'settings' as TabType, label: 'Settings', icon: Settings }
   ];
 
   const renderTabContent = () => {
@@ -358,6 +426,8 @@ export default function InventoryPage() {
               <MaterialCard
                 key={material.id}
                 material={material}
+                suppliers={suppliers}
+                units={units}
                 onEdit={(m) => {
                   setSelectedMaterial(m);
                   setShowMaterialForm(true);
@@ -438,6 +508,10 @@ export default function InventoryPage() {
                   setShowSupplierForm(true);
                 }}
                 onDelete={handleDeleteSupplier}
+                onViewProducts={(s) => {
+                  setSelectedSupplier(s);
+                  setShowSupplierProducts(true);
+                }}
               />
             ))}
 
@@ -469,12 +543,98 @@ export default function InventoryPage() {
         return (
           <ScrollView className="flex-1 px-6 py-4">
             <View className="bg-white rounded-lg p-6">
-              <Text className="text-lg font-semibold text-gray-900 mb-4">
+              <Text className="text-xl font-bold text-gray-900 mb-6">
                 Inventory Settings
               </Text>
-              <Text className="text-gray-600">
-                Settings and configuration options coming soon.
-              </Text>
+
+              {/* System Statistics */}
+              <View className="mb-6">
+                <Text className="text-lg font-semibold text-gray-900 mb-3">
+                  System Overview
+                </Text>
+                <View className="grid grid-cols-2 gap-3">
+                  <View className="bg-blue-50 p-4 rounded-lg">
+                    <Text className="text-2xl font-bold text-blue-600">{materials.length}</Text>
+                    <Text className="text-sm text-blue-800">Total Materials</Text>
+                  </View>
+                  <View className="bg-green-50 p-4 rounded-lg">
+                    <Text className="text-2xl font-bold text-green-600">{materials.reduce((sum, m) => sum + (m.material_variants?.length || 0), 0)}</Text>
+                    <Text className="text-sm text-green-800">Total Variants</Text>
+                  </View>
+                  <View className="bg-orange-50 p-4 rounded-lg">
+                    <Text className="text-2xl font-bold text-orange-600">{suppliers.length}</Text>
+                    <Text className="text-sm text-orange-800">Total Suppliers</Text>
+                  </View>
+                  <View className="bg-purple-50 p-4 rounded-lg">
+                    <Text className="text-2xl font-bold text-purple-600">{tags.length}</Text>
+                    <Text className="text-sm text-purple-800">Total Tags</Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Units of Measure */}
+              <View className="mb-6">
+                <Text className="text-lg font-semibold text-gray-900 mb-3">
+                  Units of Measure ({units.length})
+                </Text>
+                <View className="bg-gray-50 p-4 rounded-lg">
+                  <View className="flex-row justify-end mb-3">
+                    <TouchableOpacity
+                      onPress={() => setShowUnitModal(true)}
+                      className="bg-blue-500 px-4 py-2 rounded-lg flex-row items-center"
+                    >
+                      <Plus size={16} color="white" />
+                      <Text className="ml-1 text-white font-medium">Add Unit</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View className="flex-row flex-wrap">
+                    {units.map((unit) => (
+                      <View key={unit.id} className="bg-white px-3 py-1 rounded-full mr-2 mb-2">
+                        <Text className="text-sm text-gray-700">{unit.name}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              </View>
+
+              {/* Price Alert Configuration */}
+              <View className="mb-6">
+                <Text className="text-lg font-semibold text-gray-900 mb-3">
+                  Price Alert Configuration
+                </Text>
+                <TouchableOpacity
+                  onPress={() => setShowPriceAlerts(true)}
+                  className="bg-yellow-50 p-4 rounded-lg flex-row items-center border border-yellow-200"
+                >
+                  <AlertTriangle size={20} color="#f59e0b" />
+                  <View className="ml-3 flex-1">
+                    <Text className="text-yellow-800 font-medium">Configure Price Age Alerts</Text>
+                    <Text className="text-yellow-700 text-sm mt-1">
+                      Set thresholds for price age warnings
+                    </Text>
+                    <View className="flex-row mt-2">
+                      <View className="bg-yellow-100 px-2 py-1 rounded mr-2">
+                        <Text className="text-xs text-yellow-800">Warning: {priceSettings.warning_days}d</Text>
+                      </View>
+                      <View className="bg-red-100 px-2 py-1 rounded">
+                        <Text className="text-xs text-red-800">Alert: {priceSettings.alert_days}d</Text>
+                      </View>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              </View>
+
+              {/* Actions */}
+              <View className="space-y-3">
+                <TouchableOpacity
+                  onPress={() => loadData()}
+                  className="bg-blue-50 p-4 rounded-lg flex-row items-center"
+                >
+                  <RefreshCw size={20} color="#3b82f6" />
+                  <Text className="ml-3 text-blue-700 font-medium">Refresh All Data</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </ScrollView>
         );
@@ -501,7 +661,7 @@ export default function InventoryPage() {
             Inventory Management
           </Text>
           <TouchableOpacity 
-            onPress={() => loadData(false, false)}
+onPress={() => loadData(false)}
             disabled={refreshing}
             className={`px-4 py-2 rounded-lg flex-row items-center ${refreshing ? 'bg-gray-300' : 'bg-blue-500'}`}
           >
@@ -516,20 +676,26 @@ export default function InventoryPage() {
           onChange={(key) => setActiveTab(key as any)}
         />
 
-        {/* Summary Cards under Tabs */}
-        <View className="flex-row mb-4 space-x-3 mt-3">
-          <View className="flex-1 bg-blue-50 p-3 rounded-lg">
-            <Text className="text-sm text-blue-600 font-medium">Materials</Text>
-            <Text className="text-lg font-bold text-blue-900">{materials.length}</Text>
-          </View>
-          <View className="flex-1 bg-green-50 p-3 rounded-lg">
-            <Text className="text-sm text-green-600 font-medium">Suppliers</Text>
-            <Text className="text-lg font-bold text-green-900">{suppliers.length}</Text>
-          </View>
-          <View className="flex-1 bg-purple-50 p-3 rounded-lg">
-            <Text className="text-sm text-purple-600 font-medium">Tags</Text>
-            <Text className="text-lg font-bold text-purple-900">{tags.length}</Text>
-          </View>
+        {/* Summary Card under Tabs (show only for the active tab) */}
+        <View className="mb-4 mt-3">
+          {activeTab === 'materials' && (
+            <View className="bg-blue-50 p-3 rounded-lg">
+              <Text className="text-sm text-blue-600 font-medium">Materials</Text>
+              <Text className="text-lg font-bold text-blue-900">{materials.length}</Text>
+            </View>
+          )}
+          {activeTab === 'suppliers' && (
+            <View className="bg-green-50 p-3 rounded-lg">
+              <Text className="text-sm text-green-600 font-medium">Suppliers</Text>
+              <Text className="text-lg font-bold text-green-900">{suppliers.length}</Text>
+            </View>
+          )}
+          {activeTab === 'tags' && (
+            <View className="bg-purple-50 p-3 rounded-lg">
+              <Text className="text-sm text-purple-600 font-medium">Tags</Text>
+              <Text className="text-lg font-bold text-purple-900">{tags.length}</Text>
+            </View>
+          )}
         </View>
 
         {/* Search Bar */}
@@ -602,34 +768,30 @@ export default function InventoryPage() {
       {/* Material Form Modal */}
       <Modal visible={showMaterialForm} animationType="slide" presentationStyle="pageSheet">
         <SafeAreaView className="flex-1">
-          <Suspense fallback={<View className="p-4"><Text>Loading material form...</Text></View>}>
-            <MaterialForm
-              material={selectedMaterial || undefined}
-              units={units}
-              tags={tags}
-              onSave={selectedMaterial ? handleUpdateMaterial : handleCreateMaterial}
-              onCancel={() => {
-                setShowMaterialForm(false);
-                setSelectedMaterial(null);
-              }}
-            />
-          </Suspense>
+          <MaterialForm
+            material={selectedMaterial || undefined}
+            units={units}
+            tags={tags}
+            onSave={selectedMaterial ? handleUpdateMaterial : handleCreateMaterial}
+            onCancel={() => {
+              setShowMaterialForm(false);
+              setSelectedMaterial(null);
+            }}
+          />
         </SafeAreaView>
       </Modal>
 
       {/* Supplier Form Modal */}
       <Modal visible={showSupplierForm} animationType="slide" presentationStyle="pageSheet">
         <SafeAreaView className="flex-1">
-          <Suspense fallback={<View className="p-4"><Text>Loading supplier form...</Text></View>}>
-            <SupplierForm
-              supplier={selectedSupplier || undefined}
-              onSave={selectedSupplier ? handleUpdateSupplier : handleCreateSupplier}
-              onCancel={() => {
-                setShowSupplierForm(false);
-                setSelectedSupplier(null);
-              }}
-            />
-          </Suspense>
+          <SupplierForm
+            supplier={selectedSupplier || undefined}
+            onSave={selectedSupplier ? handleUpdateSupplier : handleCreateSupplier}
+            onCancel={() => {
+              setShowSupplierForm(false);
+              setSelectedSupplier(null);
+            }}
+          />
         </SafeAreaView>
       </Modal>
 
@@ -637,20 +799,217 @@ export default function InventoryPage() {
       <Modal visible={showVariantManagement} animationType="slide" presentationStyle="pageSheet">
         <SafeAreaView className="flex-1">
           {selectedMaterial && (
-            <Suspense fallback={<View className="p-4"><Text>Loading variants...</Text></View>}>
-              <VariantManagement
-                material={selectedMaterial}
-                suppliers={suppliers}
-                units={units}
-                onClose={() => {
-                  setShowVariantManagement(false);
-                  setSelectedMaterial(null);
-                }}
-              />
-            </Suspense>
+            <VariantManagement
+              material={selectedMaterial}
+              suppliers={suppliers}
+              units={units}
+              onClose={() => {
+                setShowVariantManagement(false);
+                setSelectedMaterial(null);
+              }}
+            />
           )}
         </SafeAreaView>
       </Modal>
+      {/* Supplier Product Modal */}
+      {showSupplierProducts && selectedSupplier && (
+        <SupplierProductModal
+          visible={showSupplierProducts}
+          supplier={selectedSupplier}
+          allMaterials={materials}
+          allUnits={units}
+          onClose={() => {
+            setShowSupplierProducts(false);
+            setSelectedSupplier(null);
+          }}
+        />
+      )}
+
+      {/* Price Alert Configuration Modal */}
+      <Modal visible={showPriceAlerts} animationType="slide" transparent>
+        <View className="flex-1 bg-black bg-opacity-50 justify-center items-center p-4">
+          <View className="bg-white rounded-2xl w-full max-w-lg p-6">
+            <View className="flex-row justify-between items-center mb-6">
+              <View>
+                <Text className="text-xl font-bold text-gray-900">
+                  Price Alert Configuration
+                </Text>
+                <Text className="text-sm text-gray-600 mt-1">
+                  Set when to show price age warnings
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowPriceAlerts(false)}
+                className="p-2 rounded-full bg-gray-100"
+              >
+                <X size={20} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Warning Threshold */}
+            <View className="mb-4">
+              <Text className="text-sm font-medium text-gray-700 mb-2">
+                Warning Threshold (days)
+              </Text>
+              <View className="flex-row items-center">
+                <TextInput
+                  value={String(priceSettings.warning_days)}
+                  onChangeText={(text) => {
+                    const num = parseInt(text) || 0;
+                    setPriceSettings(prev => ({ ...prev, warning_days: num }));
+                  }}
+                  keyboardType="number-pad"
+                  className="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-gray-900"
+                />
+                <View className="ml-3 bg-yellow-100 px-3 py-2 rounded-lg">
+                  <Text className="text-yellow-700 text-sm">⚠️ Warning</Text>
+                </View>
+              </View>
+              <Text className="text-xs text-gray-500 mt-1">
+                Show warning icon when price is older than {priceSettings.warning_days} days
+              </Text>
+            </View>
+
+            {/* Alert Threshold */}
+            <View className="mb-6">
+              <Text className="text-sm font-medium text-gray-700 mb-2">
+                Alert Threshold (days)
+              </Text>
+              <View className="flex-row items-center">
+                <TextInput
+                  value={String(priceSettings.alert_days)}
+                  onChangeText={(text) => {
+                    const num = parseInt(text) || 0;
+                    setPriceSettings(prev => ({ ...prev, alert_days: num }));
+                  }}
+                  keyboardType="number-pad"
+                  className="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-gray-900"
+                />
+                <View className="ml-3 bg-red-100 px-3 py-2 rounded-lg">
+                  <Text className="text-red-700 text-sm">🚨 Alert</Text>
+                </View>
+              </View>
+              <Text className="text-xs text-gray-500 mt-1">
+                Show alert icon when price is older than {priceSettings.alert_days} days
+              </Text>
+            </View>
+
+            {/* Enable/Disable Toggle */}
+            <TouchableOpacity
+              onPress={() => setPriceSettings(prev => ({ ...prev, enabled: !prev.enabled }))}
+              className="flex-row items-center justify-between mb-6 p-3 bg-gray-50 rounded-lg"
+            >
+              <Text className="text-gray-700 font-medium">Enable Price Alerts</Text>
+              <View className={`w-12 h-6 rounded-full ${
+                priceSettings.enabled ? 'bg-blue-500' : 'bg-gray-300'
+              }`}>
+                <View className={`w-5 h-5 bg-white rounded-full mt-0.5 transition-all ${
+                  priceSettings.enabled ? 'ml-6' : 'ml-0.5'
+                }`} />
+              </View>
+            </TouchableOpacity>
+
+            {/* Status Indicators Preview */}
+            <View className="bg-gray-50 rounded-lg p-4 mb-6">
+              <Text className="text-sm font-medium text-gray-700 mb-3">Status Indicators:</Text>
+              <View className="space-y-2">
+                <View className="flex-row items-center">
+                  <View className="w-3 h-3 bg-green-500 rounded-full mr-2" />
+                  <Text className="text-sm text-gray-600">Good - Price updated within {priceSettings.warning_days} days</Text>
+                </View>
+                <View className="flex-row items-center">
+                  <View className="w-3 h-3 bg-yellow-500 rounded-full mr-2" />
+                  <Text className="text-sm text-gray-600">Warning - Price {priceSettings.warning_days}-{priceSettings.alert_days} days old</Text>
+                </View>
+                <View className="flex-row items-center">
+                  <View className="w-3 h-3 bg-red-500 rounded-full mr-2" />
+                  <Text className="text-sm text-gray-600">Alert - Price older than {priceSettings.alert_days} days</Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Action Buttons */}
+            <View className="flex-row space-x-3">
+              <TouchableOpacity
+                onPress={() => setShowPriceAlerts(false)}
+                className="flex-1 bg-gray-100 py-3 rounded-lg"
+              >
+                <Text className="text-center text-gray-700 font-medium">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={savePriceSettings}
+                disabled={loading}
+                className="flex-1 bg-blue-500 py-3 rounded-lg flex-row items-center justify-center"
+              >
+                <Save size={16} color="white" />
+                <Text className="text-center text-white font-medium ml-2">
+                  {loading ? 'Saving...' : 'Save Settings'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Add Unit of Measure Modal */}
+      <Modal visible={showUnitModal} animationType="slide" transparent>
+        <View className="flex-1 bg-black bg-opacity-50 justify-center items-center p-4">
+          <View className="bg-white rounded-2xl w-full max-w-lg p-6">
+            <View className="flex-row justify-between items-center mb-6">
+              <View>
+                <Text className="text-xl font-bold text-gray-900">Add Unit of Measure</Text>
+                <Text className="text-sm text-gray-600 mt-1">Provide a name and optional description</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowUnitModal(false)} className="p-2 rounded-full bg-gray-100">
+                <X size={20} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Unit Name */}
+            <View className="mb-4">
+              <Text className="text-sm font-medium text-gray-700 mb-2">Name *</Text>
+              <TextInput
+                value={newUnitName}
+                onChangeText={setNewUnitName}
+                placeholder="e.g., Kg, Ltr, Pcs"
+                className="border border-gray-300 rounded-lg px-4 py-2 text-gray-900"
+              />
+            </View>
+
+            {/* Description */}
+            <View className="mb-6">
+              <Text className="text-sm font-medium text-gray-700 mb-2">Description (optional)</Text>
+              <TextInput
+                value={newUnitDescription}
+                onChangeText={setNewUnitDescription}
+                placeholder="Short description"
+                multiline
+                numberOfLines={3}
+                className="border border-gray-300 rounded-lg px-4 py-2 text-gray-900"
+              />
+            </View>
+
+            {/* Actions */}
+            <View className="flex-row space-x-3">
+              <TouchableOpacity
+                onPress={() => setShowUnitModal(false)}
+                className="flex-1 bg-gray-100 py-3 rounded-lg"
+              >
+                <Text className="text-center text-gray-700 font-medium">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleCreateUnit}
+                disabled={savingUnit}
+                className="flex-1 bg-blue-500 py-3 rounded-lg flex-row items-center justify-center"
+              >
+                <Save size={16} color="white" />
+                <Text className="text-center text-white font-medium ml-2">{savingUnit ? 'Saving...' : 'Save Unit'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Confirm Delete Material Modal */}
       <ConfirmModal
         visible={confirmDelete.visible}

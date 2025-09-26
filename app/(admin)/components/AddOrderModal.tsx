@@ -92,8 +92,8 @@ export default function AddOrderModal({ visible, onClose, onOrderAdded }: AddOrd
       animationType="slide"
       onRequestClose={onClose}
     >
-      <View className="flex-1 bg-black/50 justify-center items-center p-4">
-        <View className="bg-white rounded-xl w-full max-w-md max-h-5/6">
+      <TouchableOpacity className="flex-1 bg-black/50 justify-center items-center p-4" activeOpacity={1} onPress={onClose}>
+        <TouchableOpacity className="bg-white rounded-xl w-full max-w-md max-h-5/6" activeOpacity={1} onPress={(e) => e.stopPropagation()}>
           {/* Header */}
           <View className="flex-row justify-between items-center p-6 border-b border-gray-200">
             <Text className="text-xl font-bold text-gray-900">Add New Order</Text>
@@ -196,8 +196,8 @@ export default function AddOrderModal({ visible, onClose, onOrderAdded }: AddOrd
               </Text>
             </TouchableOpacity>
           </View>
-        </View>
-      </View>
+        </TouchableOpacity>
+      </TouchableOpacity>
     </Modal>
   );
 }

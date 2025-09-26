@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, Alert } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { Camera } from 'lucide-react-native';
 import OrderPackingInfo, { BoxInfoDetails } from './order_packing_info';
 import OrderPackingDimensions, { DimensionsTriple } from './order_packing_dimensions';
 import OrderPackingItems from './order_packing_items';
@@ -82,10 +83,14 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
       <View className="flex-row items-center justify-between">
         <Text className="text-lg font-semibold text-gray-800">Box #{packageNumber ?? '—'}</Text>
         <View className="flex-row gap-2">
-          <TouchableOpacity onPress={askSource} className="bg-primary-600 px-3 py-1 rounded">
-            <Text className="text-white text-sm">Attach images</Text>
+          <TouchableOpacity 
+            onPress={askSource} 
+            accessibilityLabel="Attach images"
+            className="bg-primary-600 px-3 py-1 rounded"
+          >
+            <Camera size={18} color="#ffffff" />
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => { /* Placeholder - no action yet */ }} className="bg-gray-700 px-3 py-1 rounded">
+          <TouchableOpacity onPress={() => { /* Placeholder - no action yet */ }} className="bg-green-600 px-3 py-1 rounded">
             <Text className="text-white text-sm">Mark box as completed</Text>
           </TouchableOpacity>
         </View>

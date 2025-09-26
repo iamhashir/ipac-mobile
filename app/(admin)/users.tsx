@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Search, Plus, Edit3, Trash2, UserCheck, Clock, Shield, Crown } from 'lucide-react-native';
+import { Search, Plus, Edit3, Trash2, UserCheck } from 'lucide-react-native';
 import { supabase } from '../../utils/api/supabase';
 import { useAuth } from '../../utils/AuthContext';
 
@@ -129,19 +129,26 @@ export default function UsersPage() {
   const [error, setError] = useState<string | null>(null);
   const { user: currentUser } = useAuth();
 
+  // Create User modal state
+  const [addOpen, setAddOpen] = useState(false);
+  const [rolesList, setRolesList] = useState<string[]>([]);
+  const [formFullName, setFormFullName] = useState('');
+  const [formEmail, setFormEmail] = useState('');
+  const [formUsername, setFormUsername] = useState('');
+  const [formPassword, setFormPassword] = useState('');
+  const [formRole, setFormRole] = useState<string>('packer');
+  const [submitting, setSubmitting] = useState(false);
+
   useEffect(() => {
     const fetchUsers = async () => {
       try {
         setLoading(true);
-        
-        // Fetch users from the user_effective_permissions view which includes roles and permissions
+        // Fetch users
         const { data, error } = await supabase
           .from('user_effective_permissions')
           .select('*')
-          .not('base_role', 'eq', 'customer'); // Exclude customers from staff management
-        
+          .not('base_role', 'eq', 'customer');
         if (error) throw error;
-        
         setUsers(data || []);
       } catch (err) {
         console.error('Error fetching users:', err);
@@ -150,8 +157,23 @@ export default function UsersPage() {
         setLoading(false);
       }
     };
+
+    const fetchRoles = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('roles')
+          .select('name')
+          .order('name');
+        if (!error) {
+          const names = (data || []).map((r: any) => r.name).filter((n: string) => n !== 'customer');
+          setRolesList(names);
+          if (!names.includes(formRole) && names.length) setFormRole(names[0]);
+        }
+      } catch {}
+    };
     
     fetchUsers();
+    fetchRoles();
   }, []);
 
   const filteredUsers = users.filter(user => {
@@ -180,9 +202,9 @@ export default function UsersPage() {
           <Text className="text-2xl font-bold text-gray-900">
             User Management
           </Text>
-          <TouchableOpacity className="bg-primary-500 px-4 py-2 rounded-lg flex-row items-center">
-            <Plus size={16} color="white" />
-            <Text className="ml-2 text-white font-medium">Add User</Text>
+          <TouchableOpacity className="bg-blue-50 border border-blue-600 px-4 py-2 rounded-lg flex-row items-center" onPress={() => setAddOpen(true)}>
+            <Plus size={16} color="#1d4ed8" />
+            <Text className="ml-2 text-blue-700 font-medium">Add User</Text>
           </TouchableOpacity>
         </View>
         
@@ -272,6 +294,85 @@ export default function UsersPage() {
           </>
         )}
       </ScrollView>
+      {/* Add User Modal */}
+      <Modal visible={addOpen} transparent animationType="fade" onRequestClose={() => setAddOpen(false)}>
+        <View className="flex-1 bg-black/40 justify-center items-center">
+          <View className="w-11/12 bg-white rounded-lg p-4">
+            <Text className="text-lg font-semibold text-gray-800 mb-3">Create User</Text>
+
+            <View className="mb-2">
+              <Text className="text-sm text-gray-700 mb-1">Full name<Text className="text-red-600">*</Text></Text>
+              <TextInput value={formFullName} onChangeText={setFormFullName} placeholder="e.g. Jane Doe" className="border border-gray-300 rounded p-2 bg-white" />
+            </View>
+
+            <View className="mb-2">
+              <Text className="text-sm text-gray-700 mb-1">Email<Text className="text-red-600">*</Text></Text>
+              <TextInput value={formEmail} onChangeText={setFormEmail} autoCapitalize="none" keyboardType="email-address" placeholder="name@example.com" className="border border-gray-300 rounded p-2 bg-white" />
+            </View>
+
+            <View className="mb-2">
+              <Text className="text-sm text-gray-700 mb-1">Username</Text>
+              <TextInput value={formUsername} onChangeText={setFormUsername} autoCapitalize="none" placeholder="optional" className="border border-gray-300 rounded p-2 bg-white" />
+            </View>
+
+            <View className="mb-2">
+              <Text className="text-sm text-gray-700 mb-1">Password<Text className="text-red-600">*</Text></Text>
+              <TextInput value={formPassword} onChangeText={setFormPassword} secureTextEntry placeholder="••••••••" className="border border-gray-300 rounded p-2 bg-white" />
+            </View>
+
+            <View className="mb-3">
+              <Text className="text-sm text-gray-700 mb-1">Role<Text className="text-red-600">*</Text></Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <View className="flex-row">
+                  {rolesList.map((r) => (
+                    <TouchableOpacity key={r} onPress={() => setFormRole(r)} className={`mr-2 px-3 py-2 rounded-full ${formRole===r ? 'bg-blue-50 border border-blue-600' : 'bg-gray-100 border border-gray-300'}`}>
+                      <Text className={`${formRole===r ? 'text-blue-700' : 'text-gray-700'}`}>{r}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+            </View>
+
+            <View className="flex-row justify-end gap-2 mt-2">
+              <TouchableOpacity onPress={() => setAddOpen(false)} className="px-3 py-2 rounded bg-gray-200">
+                <Text className="text-gray-800">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                onPress={async () => {
+                  if (!formFullName || !formEmail || !formPassword || !formRole) {
+                    Alert.alert('Missing fields', 'Please fill in full name, email, password and role.');
+                    return;
+                  }
+                  try {
+                    setSubmitting(true);
+                    const { data, error } = await supabase.functions.invoke('create-user', {
+                      body: { email: formEmail, password: formPassword, full_name: formFullName, username: formUsername || null, role_name: formRole },
+                    });
+                    if (error) throw error;
+                    // Refresh list
+                    const { data: refreshed } = await supabase
+                      .from('user_effective_permissions')
+                      .select('*')
+                      .not('base_role', 'eq', 'customer');
+                    setUsers(refreshed || []);
+                    setAddOpen(false);
+                    setFormFullName(''); setFormEmail(''); setFormUsername(''); setFormPassword('');
+                    Alert.alert('Success', 'User created successfully');
+                  } catch (err: any) {
+                    Alert.alert('Error', err?.message || 'Failed to create user');
+                  } finally {
+                    setSubmitting(false);
+                  }
+                }}
+                disabled={submitting}
+                className={`px-3 py-2 rounded ${submitting ? 'bg-gray-300' : 'bg-blue-50 border border-blue-600'}`}
+              >
+                <Text className={`${submitting ? 'text-gray-600' : 'text-blue-700'}`}>{submitting ? 'Creating...' : 'Create'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

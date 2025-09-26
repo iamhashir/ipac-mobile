@@ -57,19 +57,34 @@ export const PackerSessionProvider: React.FC<PackerSessionProviderProps> = ({ ch
   const { profile } = useAuth();
   const [session, setSession] = useState<PackerSession | null>(null);
   const [loading, setLoading] = useState(true);
+  const [shouldLoadSession, setShouldLoadSession] = useState(false);
 
-  // Load existing session on mount when profile becomes available
+  // Only load session for packer role users
   useEffect(() => {
-    if (profile?.id) {
+    if (profile?.roles?.name === 'packer') {
+      setShouldLoadSession(true);
+    } else {
+      setShouldLoadSession(false);
+      setLoading(false);
+      setSession(null);
+    }
+  }, [profile?.roles?.name]);
+
+  // Load existing session on mount when profile becomes available and user is a packer
+  useEffect(() => {
+    if (shouldLoadSession && profile?.id) {
       loadExistingSession();
+    } else if (!shouldLoadSession) {
+      // Not a packer, don't load session
+      setLoading(false);
     } else if (profile === null) {
       // Profile is explicitly null (user not authenticated), stop loading
       setLoading(false);
     }
-  }, [profile?.id, profile]);
+  }, [profile?.id, profile, shouldLoadSession]);
 
   const loadExistingSession = async () => {
-    if (!profile?.id) return;
+    if (!profile?.id || !shouldLoadSession) return;
     
     setLoading(true);
     try {
@@ -77,16 +92,16 @@ export const PackerSessionProvider: React.FC<PackerSessionProviderProps> = ({ ch
       const { data, error } = await db.getActivePackerSession(profile.id);
       
       if (error) {
-        console.error('Error loading session:', error);
+        console.error('Error loading packer session:', error);
         // Set session to null on error to ensure we're in a clean state
         setSession(null);
       } else if (data) {
         setSession(data);
-        console.log('Loaded existing session:', data);
+        console.log('Loaded existing packer session:', data);
       } else {
         // No active session found - this is normal for new users or completed sessions
         setSession(null);
-        console.log('No active session found - user can start fresh');
+        console.log('No active packer session found - user can start fresh');
       }
     } catch (error) {
       console.error('Error in loadExistingSession:', error);

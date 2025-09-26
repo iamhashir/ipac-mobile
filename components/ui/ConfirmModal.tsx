@@ -29,8 +29,8 @@ export function ConfirmModal({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View className="flex-1 bg-black/50 justify-center items-center p-4">
-        <View className="bg-white rounded-xl w-full max-w-md">
+      <TouchableOpacity className="flex-1 bg-black/50 justify-center items-center p-4" activeOpacity={1} onPress={onCancel}>
+        <TouchableOpacity className="bg-white rounded-xl w-full max-w-md" activeOpacity={1} onPress={(e) => e.stopPropagation()}>
           <View className="p-5 border-b border-gray-200">
             <Text className="text-lg font-bold text-gray-900">{title}</Text>
             {description ? (
@@ -54,8 +54,8 @@ export function ConfirmModal({
               <Text className="text-white font-medium">{confirmText}</Text>
             </TouchableOpacity>
           </View>
-        </View>
-      </View>
+        </TouchableOpacity>
+      </TouchableOpacity>
     </Modal>
   );
 }

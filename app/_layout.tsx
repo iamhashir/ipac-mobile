@@ -5,6 +5,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider } from '../utils/AuthContext';
 import { PackerSessionProvider } from '../utils/PackerSessionContext';
+import { TextSizeProvider } from '../utils/TextSizeContext';
 import { Text, View, ActivityIndicator } from 'react-native';
 import { useFonts } from 'expo-font';
 import './globals.css';
@@ -53,16 +54,18 @@ export default function RootLayout() {
 
   return (
     <AuthProvider>
-      <PackerSessionProvider>
-        <StatusBar style="auto" />
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="index" />
-          <Stack.Screen name="auth" />
-          <Stack.Screen name="(admin)" />
-          <Stack.Screen name="(packer)" />
-          <Stack.Screen name="+not-found" />
-        </Stack>
-      </PackerSessionProvider>
+      <TextSizeProvider>
+        <PackerSessionProvider>
+          <StatusBar style="auto" />
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="index" />
+            <Stack.Screen name="auth" />
+            <Stack.Screen name="(admin)" />
+            <Stack.Screen name="(packer)" />
+            <Stack.Screen name="+not-found" />
+          </Stack>
+        </PackerSessionProvider>
+      </TextSizeProvider>
     </AuthProvider>
   );
 }

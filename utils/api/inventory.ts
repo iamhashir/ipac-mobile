@@ -12,14 +12,15 @@ export interface Material {
     name: string;
     description?: string;
   };
-  variants?: MaterialVariant[];
-  tags?: MaterialTag[];
+  material_variants?: MaterialVariant[];
+  material_tags?: MaterialTag[];
 }
 
 export interface MaterialVariant {
   id: string;
   material_id: string;
   variant_name: string;
+  description?: string;
   attributes?: Record<string, any>;
   created_at?: string;
   material?: Material;
@@ -32,10 +33,10 @@ export interface SupplierPricing {
   supplier_id: string;
   price: number;
   unit_id: string;
-  stock_level?: number;
+  stock_level?: number | null;
   updated_at?: string;
-  supplier?: Supplier;
-  unit?: UnitOfMeasure;
+  suppliers?: Supplier;  // API returns 'suppliers' not 'supplier'
+  units_of_measure?: UnitOfMeasure;  // API returns 'units_of_measure' not 'unit'
 }
 
 export interface Supplier {
@@ -60,7 +61,7 @@ export interface MaterialTag {
   material_id: string;
   tag_id: string;
   material?: Material;
-  tag?: Tag;
+  tags?: Tag;  // API returns 'tags' not 'tag'
 }
 
 export interface UnitOfMeasure {
@@ -85,13 +86,44 @@ export const materialOperations = {
 
       const matIds = (mats || []).map((m: any) => m.id);
       let variants: any[] = [];
+      let variantPricing: any[] = [];
       if (matIds.length) {
+        // Load variants
         const { data: vars, error: varsErr } = await supabase
           .from('material_variants')
-          .select('id, material_id, variant_name, attributes, created_at')
+          .select('id, material_id, variant_name, description, attributes, created_at')
           .in('material_id', matIds);
         if (varsErr) return { data: null, error: varsErr };
         variants = vars || [];
+        
+        // Load supplier pricing for all variants
+        const variantIds = variants.map(v => v.id);
+        if (variantIds.length > 0) {
+          const { data: pricing, error: pricingErr } = await supabase
+            .from('supplier_pricing')
+            .select(`
+              id,
+              material_variant_id,
+              price,
+              stock_level,
+              updated_at,
+              suppliers (
+                id,
+                name,
+                contact_person
+              ),
+              units_of_measure:unit_id (
+                id,
+                name,
+                description
+              )
+            `)
+            .in('material_variant_id', variantIds)
+            .order('price');
+          if (!pricingErr) {
+            variantPricing = pricing || [];
+          }
+        }
       }
 
       const { data: units, error: unitsErr } = await supabase
@@ -111,16 +143,23 @@ export const materialOperations = {
         tagsByMat.set(r.material_id, arr);
       });
 
-      // Assemble
-      const materialRows = (mats || []).map((m: any) => ({
-        id: m.id,
-        name: m.name,
-        description: m.description,
-        unit_id: m.unit_id,
-        unit: m.unit_id ? unitMap.get(m.unit_id) || null : null,
-        material_variants: variants.filter((v: any) => v.material_id === m.id),
-        material_tags: (tagsByMat.get(m.id) || []).map((t: any) => ({ tag_id: t?.id, tags: t }))
-      }));
+      // Assemble materials with variants and pricing
+      const materialRows = (mats || []).map((m: any) => {
+        const materialVariants = variants.filter((v: any) => v.material_id === m.id).map((v: any) => ({
+          ...v,
+          supplier_pricing: variantPricing.filter((p: any) => p.material_variant_id === v.id)
+        }));
+        
+        return {
+          id: m.id,
+          name: m.name,
+          description: m.description,
+          unit_id: m.unit_id,
+          unit: m.unit_id ? unitMap.get(m.unit_id) || null : null,
+          material_variants: materialVariants,
+          material_tags: (tagsByMat.get(m.id) || []).map((t: any) => ({ tag_id: t?.id, tags: t }))
+        };
+      });
 
       return { data: materialRows, error: null };
     } catch (exception) {
@@ -362,6 +401,68 @@ export const variantOperations = {
       .eq('id', id);
 
     return { data, error };
+  },
+
+  // Get variant with tags
+  getWithTags: async (variantId: string) => {
+    const { data, error } = await supabase
+      .from('material_variants')
+      .select(`
+        *,
+        material_variant_tags (
+          tag_id,
+          tags (
+            id,
+            name
+          )
+        )
+      `)
+      .eq('id', variantId)
+      .single();
+
+    return { data, error };
+  },
+
+  // Add tags to variant
+  addTags: async (variantId: string, tagIds: string[]) => {
+    const entries = tagIds.map(tagId => ({
+      material_variant_id: variantId,
+      tag_id: tagId
+    }));
+
+    const { data, error } = await supabase
+      .from('material_variant_tags')
+      .insert(entries);
+
+    return { data, error };
+  },
+
+  // Remove tags from variant
+  removeTags: async (variantId: string, tagIds?: string[]) => {
+    let query = supabase
+      .from('material_variant_tags')
+      .delete()
+      .eq('material_variant_id', variantId);
+
+    if (tagIds && tagIds.length > 0) {
+      query = query.in('tag_id', tagIds);
+    }
+
+    const { data, error } = await query;
+    return { data, error };
+  },
+
+  // Update variant tags (replace all tags)
+  updateTags: async (variantId: string, tagIds: string[]) => {
+    // First remove all existing tags
+    await variantOperations.removeTags(variantId);
+    
+    // Then add new tags if any
+    if (tagIds.length > 0) {
+      return await variantOperations.addTags(variantId, tagIds);
+    }
+    
+    return { data: null, error: null };
   }
 };
 
@@ -373,6 +474,38 @@ export const supplierOperations = {
       .from('suppliers')
       .select('*')
       .order('name');
+
+    return { data, error };
+  },
+
+  // Get all variants for a specific supplier with pricing details
+  getSupplierVariants: async (supplierId: string) => {
+    const { data, error } = await supabase
+      .from('supplier_pricing')
+      .select(`
+        id,
+        price,
+        stock_level,
+        updated_at,
+        units_of_measure:unit_id (
+          id,
+          name,
+          description
+        ),
+        material_variants:material_variant_id (
+          id,
+          variant_name,
+          description,
+          attributes,
+          materials:material_id (
+            id,
+            name,
+            description
+          )
+        )
+      `)
+      .eq('supplier_id', supplierId)
+      .order('price');
 
     return { data, error };
   },

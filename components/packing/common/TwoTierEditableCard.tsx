@@ -46,16 +46,16 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
   };
 
   return (
-    <View className={`${compact ? 'bg-blue-50 rounded-lg' : 'bg-blue-50 rounded-xl'} border border-gray-200 ${compact ? 'p-1 m-0.5' : 'p-1 m-1'}`} style={{ width: width as any, flex: flex }}>
+    <View className={`${compact ? 'bg-blue-50 rounded-lg' : 'bg-blue-50 rounded-xl'} border border-indigo-200 ${compact ? 'p-1 m-0.5' : 'p-1 m-1'}`} style={{ width: width as any, flex: flex }}>
       <View className={`${compact ? 'mb-0.5' : 'mb-1'} px-2 rounded-full self-center`}>
         <Text className={`text-blue-800 ${compact ? 'text-[10px]' : 'text-xs'} font-semibold text-center`}>{label}</Text>
       </View>
-      <View className={`bg-white border border-gray-200 rounded-lg ${compact ? 'px-1 py-0.5 mb-0.5' : 'px-1 py-1 mb-1'} items-center justify-center`}>
+      <View className={`bg-white border border-indigo-200 rounded-lg ${compact ? 'px-1 py-0.5 mb-0.5' : 'px-1 py-1 mb-1'} items-center justify-center`}>
         <Text className="text-[10px] text-amber-900 bg-amber-100 text-center w-full"> Original</Text>
         <Text className={`text-gray-900 ${compact ? 'text-xs' : 'text-sm'} font-semibold text-center w-full`} numberOfLines={2}>{formatValue(original)}</Text>
       </View>
       {/* Final row: backgrounds are semantic; switch uses full-width pressable area */}
-      <View className={`${type === 'switch' ? (val ? 'bg-green-50' : 'bg-amber-50') : 'bg-gray-50'} border border-gray-200 rounded-lg ${compact ? 'px-1 pt-0.5 pb-0.5' : 'px-1 pt-1 pb-1'} items-center justify-center`}>
+      <View className={`${type === 'switch' ? (val ? 'bg-green-50' : 'bg-amber-50') : 'bg-gray-50'} border border-indigo-200 rounded-lg ${compact ? 'px-1 pt-0.5 pb-0.5' : 'px-1 pt-1 pb-1'} items-center justify-center`}>
         <Text className="text-[10px] text-green-900 mb-1 bg-green-100 text-center w-full"> Final</Text>
         {type === 'select' ? (
           <View style={{ width: compact ? '90%' : '85%' }}>

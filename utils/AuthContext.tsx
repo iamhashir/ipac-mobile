@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { auth, db, supabase } from './api/supabase';
 
 const AuthContext = createContext({});
@@ -8,6 +8,9 @@ export const AuthProvider = ({ children }) => {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
+  const [lastAuthEvent, setLastAuthEvent] = useState(null);
+  const profileLoadingRef = useRef(false);
+  const sessionRefreshTimeoutRef = useRef(null);
 
   useEffect(() => {
     // Get initial session
@@ -17,25 +20,59 @@ export const AuthProvider = ({ children }) => {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
+      // Ignore TOKEN_REFRESHED events unless the user actually changed
+      if (event === 'TOKEN_REFRESHED' && session?.user?.id === user?.id) {
+        console.log('Token refreshed for same user, skipping profile reload');
+        setSession(session);
+        return;
+      }
+
+      // Prevent duplicate SIGNED_IN events
+      if (event === 'SIGNED_IN' && lastAuthEvent === 'SIGNED_IN' && session?.user?.id === user?.id) {
+        console.log('Duplicate SIGNED_IN event for same user, skipping');
+        return;
+      }
+
       console.log('Auth event:', event);
+      setLastAuthEvent(event);
       setSession(session);
       
       if (session?.user) {
+        const userChanged = session.user.id !== user?.id;
         setUser(session.user);
-        try {
-          await loadUserProfile(session.user.id);
-        } catch (error) {
-          console.error('💥 Profile loading failed:', error);
-          // Do not clear existing profile on transient failures
+        
+        // Only load profile if user changed or we don't have a profile yet
+        if (userChanged || !profile) {
+          // Prevent concurrent profile loading
+          if (!profileLoadingRef.current) {
+            profileLoadingRef.current = true;
+            try {
+              await loadUserProfile(session.user.id);
+            } catch (error) {
+              console.error('💥 Profile loading failed:', error);
+              // Do not clear existing profile on transient failures
+            } finally {
+              profileLoadingRef.current = false;
+            }
+          } else {
+            console.log('Profile loading already in progress, skipping');
+          }
         }
       } else {
         setUser(null);
         setProfile(null);
+        profileLoadingRef.current = false;
       }
     });
 
+    // Set up session refresh monitoring
+    setupSessionRefresh();
+
     return () => {
       subscription?.unsubscribe();
+      if (sessionRefreshTimeoutRef.current) {
+        clearTimeout(sessionRefreshTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -64,6 +101,12 @@ export const AuthProvider = ({ children }) => {
 
   const loadUserProfile = async (userId) => {
     try {
+      // Skip if we already have this user's profile
+      if (profile?.id === userId) {
+        console.log('✓ Profile already loaded for user:', userId);
+        return;
+      }
+
       console.log('👤 Loading user profile for userId:', userId);
       
       const { data, error } = await db.getUserProfile(userId);
@@ -112,6 +155,43 @@ export const AuthProvider = ({ children }) => {
       // On any error, set profile to null to prevent infinite loading
       setProfile(null);
     }
+  };
+
+  // Setup session refresh monitoring
+  const setupSessionRefresh = () => {
+    // Check session every 30 minutes
+    const checkInterval = 30 * 60 * 1000; // 30 minutes
+    
+    const checkSession = async () => {
+      try {
+        const { data: { session: currentSession }, error } = await supabase.auth.getSession();
+        
+        if (error) {
+          console.error('Session check error:', error);
+          return;
+        }
+        
+        if (currentSession) {
+          // Check if session needs refresh (expires in less than 60 minutes)
+          const expiresAt = currentSession.expires_at;
+          const now = Math.floor(Date.now() / 1000);
+          const timeUntilExpiry = expiresAt - now;
+          
+          if (timeUntilExpiry < 3600) { // Less than 60 minutes
+            console.log('Session expiring soon, refreshing...');
+            await supabase.auth.refreshSession();
+          }
+        }
+      } catch (error) {
+        console.error('Error checking session:', error);
+      }
+      
+      // Schedule next check
+      sessionRefreshTimeoutRef.current = setTimeout(checkSession, checkInterval);
+    };
+    
+    // Start checking
+    sessionRefreshTimeoutRef.current = setTimeout(checkSession, checkInterval);
   };
 
   const signIn = async (email, password) => {

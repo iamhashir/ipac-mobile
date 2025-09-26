@@ -3,28 +3,20 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
-// Get environment variables
 const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl || process.env.EXPO_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = Constants.expoConfig?.extra?.supabaseAnonKey || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+const supabasePublishableKey = Constants.expoConfig?.extra?.supabasePublishableKey || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
-if (!supabaseUrl || !supabaseAnonKey) {
+if (!supabaseUrl || !supabasePublishableKey) {
   throw new Error('Missing Supabase environment variables. Please check your .env file.');
 }
 
-// Create Supabase client
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
   auth: {
-    // Use AsyncStorage on native; omit on web to use localStorage automatically
     ...(Platform.OS !== 'web' ? { storage: AsyncStorage } : {}),
-    // Enable automatic session refresh
     autoRefreshToken: true,
-    // Persist session across app restarts
     persistSession: true,
-    // For Expo/Web, don't parse URL for auth params
     detectSessionInUrl: false,
-    // Keep session in sync across tabs (explicit)
-    syncSession: true,
-    // Rotate storage key to avoid stale sessions after key/token migration
+    // syncSession: true,
     storageKey: 'ipac-operations-auth-v2',
   },
 });
@@ -144,27 +136,59 @@ export const auth = {
   },
 };
 
+// Profile cache to reduce database queries
+const profileCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache
+
 // Helper functions for database operations
 export const db = {
-  // Get user profile with role
+  // Clear profile cache (useful when profile is updated)
+  clearProfileCache: (userId?: string) => {
+    if (userId) {
+      profileCache.delete(userId);
+    } else {
+      profileCache.clear();
+    }
+  },
+
+  // Get user profile with role (with caching)
   getUserProfile: async (userId) => {
+    // Check cache first
+    const cached = profileCache.get(userId);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      console.log('✨ getUserProfile: Using cached profile for userId:', userId);
+      return { data: cached.data, error: null };
+    }
+
     console.log('🔍 getUserProfile: Starting profile lookup for userId:', userId);
     
     try {
-      // First, try a simple query without relationships
+      // Use a single optimized query to get profile with role
       let { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('*')
+        .select(`
+          *,
+          roles (
+            id,
+            name,
+            can_block_users,
+            can_unblock_users,
+            can_ban_users,
+            can_reset_passwords,
+            can_delete_profiles,
+            can_manage_roles
+          )
+        `)
         .eq('id', userId)
         .maybeSingle();
       
-      console.log('🔍 getUserProfile: Basic profile query result:', {
+      console.log('🔍 getUserProfile: Query result:', {
         found: !!profile,
         error: profileError?.message,
         profileData: profile ? {
           id: profile.id,
           full_name: profile.full_name,
-          role_id: profile.role_id,
+          role: profile.roles?.name,
           status: profile.status
         } : null
       });
@@ -179,43 +203,13 @@ export const db = {
         return { data: null, error: { message: 'Profile not found' } };
       }
       
-      // Now get the role information if role_id exists
-      if (profile.role_id) {
-        console.log('🔍 getUserProfile: Fetching role data for role_id:', profile.role_id);
-        
-        const { data: role, error: roleError } = await supabase
-          .from('roles')
-          .select(`
-            id,
-            name,
-            can_block_users,
-            can_unblock_users,
-            can_ban_users,
-            can_reset_passwords,
-            can_delete_profiles,
-            can_manage_roles
-          `)
-          .eq('id', profile.role_id)
-          .maybeSingle();
-        
-        console.log('🔍 getUserProfile: Role query result:', {
-          found: !!role,
-          error: roleError?.message,
-          roleData: role
-        });
-        
-        if (role && !roleError) {
-          profile.roles = role;
-          console.log('✅ getUserProfile: Successfully attached role to profile');
-        } else {
-          console.warn('⚠️ getUserProfile: Could not fetch role, profile will have no role data');
-          console.warn('⚠️ Role error:', roleError);
-        }
-      } else {
-        console.log('⚠️ getUserProfile: Profile has no role_id');
-      }
+      // Cache the successful result
+      profileCache.set(userId, {
+        data: profile,
+        timestamp: Date.now()
+      });
       
-      console.log('✅ getUserProfile: Final profile result:', {
+      console.log('✅ getUserProfile: Profile loaded and cached:', {
         id: profile.id,
         full_name: profile.full_name,
         role: profile.roles?.name,
@@ -1082,20 +1076,24 @@ export const db = {
   // Task logs by order package ids (aggregated)
   getTaskLogsByOrderPackageIds: async (orderPackageIds) => {
     if (!orderPackageIds || orderPackageIds.length === 0) return { data: [], error: null };
-    // Step 1: find task_log ids via task_packages
-    const { data: tps, error: tpErr } = await supabase
-      .from('task_packages')
-      .select('task_log_id')
-      .in('order_package_id', orderPackageIds);
-    if (tpErr) return { data: null, error: tpErr };
-    const logIds = Array.from(new Set((tps || []).map((t: any) => t.task_log_id).filter(Boolean)));
-    if (logIds.length === 0) return { data: [], error: null };
-
-    // Step 2: fetch logs with task name and assignments
+    
+    // More robust approach: use inner join with task_packages to guarantee scope
     const { data, error } = await supabase
       .from('task_logs')
-      .select('id, start_time, end_time, duration_minutes, pause_duration, task_id, update_counter, notes, tasks(name), task_assignments(packer_id, task_status, profiles(full_name))')
-      .in('id', logIds)
+      .select(`
+        id, 
+        start_time, 
+        end_time, 
+        duration_minutes, 
+        pause_duration, 
+        task_id, 
+        update_counter, 
+        notes,
+        tasks(name),
+        task_assignments(packer_id, task_status, profiles(full_name)),
+        task_packages!inner(order_package_id)
+      `)
+      .in('task_packages.order_package_id', orderPackageIds)
       .order('start_time', { ascending: false });
     return { data, error };
   },
@@ -1109,6 +1107,29 @@ export const db = {
     if (error) return { data: null, error };
     const ids = (data || []).map((r: any) => r.order_package_id).filter(Boolean);
     return { data: ids, error: null };
+  },
+
+  // Get task logs specifically for a single order package
+  getTaskLogsForPackage: async (orderPackageId: string) => {
+    if (!orderPackageId) return { data: [], error: null };
+    
+    // Step 1: find task_log ids via task_packages for this specific package
+    const { data: tps, error: tpErr } = await supabase
+      .from('task_packages')
+      .select('task_log_id')
+      .eq('order_package_id', orderPackageId);
+    if (tpErr) return { data: null, error: tpErr };
+    
+    const logIds = Array.from(new Set((tps || []).map((t: any) => t.task_log_id).filter(Boolean)));
+    if (logIds.length === 0) return { data: [], error: null };
+
+    // Step 2: fetch logs with task name and assignments
+    const { data, error } = await supabase
+      .from('task_logs')
+      .select('id, start_time, end_time, duration_minutes, pause_duration, task_id, update_counter, notes, tasks(name), task_assignments(packer_id, task_status, profiles(full_name))')
+      .in('id', logIds)
+      .order('start_time', { ascending: false });
+    return { data, error };
   },
 
   // Link additional order packages to an existing task log
@@ -1289,10 +1310,21 @@ export const db = {
       .from('task_logs')
       .select('id, end_time, task_assignments(packer_id, task_status)')
       .is('end_time', null);
-    if (error) return { data: null, error };
+    
+    // Defensive error handling - always return an array, never null
+    if (error) {
+      console.warn('getBusyPackerIds error:', error);
+      return { data: [], error };
+    }
+    
+    if (!data || !Array.isArray(data)) {
+      return { data: [], error: null };
+    }
+    
     const busySet = new Set<string>();
-    (data || []).forEach((log: any) => {
-      (log.task_assignments || []).forEach((a: any) => {
+    data.forEach((log: any) => {
+      if (!log || !Array.isArray(log.task_assignments)) return;
+      log.task_assignments.forEach((a: any) => {
         if (a && ['in_progress', 'paused'].includes(a.task_status) && a.packer_id) {
           busySet.add(a.packer_id);
         }

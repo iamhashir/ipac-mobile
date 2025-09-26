@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
+import { Camera } from 'lucide-react-native';
 import { db } from '../../utils/api/supabase';
 
 interface PackingItemRow {
@@ -65,8 +66,9 @@ const OrderPackingItems: React.FC<OrderPackingItemsProps> = ({ orderPackageId, o
                     onPress={() => onAttachPics?.(it)}
                     className="px-3 py-1 rounded bg-primary-600"
                     activeOpacity={0.8}
+                    accessibilityLabel="Attach images"
                   >
-                    <Text className="text-white text-sm">Attach Pics</Text>
+                    <Camera size={18} color="#ffffff" />
                   </TouchableOpacity>
                 </View>
               ))}
