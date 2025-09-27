@@ -651,6 +651,18 @@ export const tagOperations = {
     return { data, error };
   },
 
+  // Update tag name
+  update: async (id: string, name: string) => {
+    const { data, error } = await supabase
+      .from('tags')
+      .update({ name })
+      .eq('id', id)
+      .select()
+      .single();
+
+    return { data, error };
+  },
+
   // Delete tag
   delete: async (id: string) => {
     const { data, error } = await supabase

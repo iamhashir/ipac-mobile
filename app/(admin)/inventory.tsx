@@ -46,6 +46,7 @@ export default function InventoryPage() {
   const [newUnitDescription, setNewUnitDescription] = useState('');
   const [showUnitModal, setShowUnitModal] = useState(false);
   const [savingUnit, setSavingUnit] = useState(false);
+  const [hoveredUnitId, setHoveredUnitId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   
   // Modal states
@@ -328,6 +329,21 @@ export default function InventoryPage() {
     }
   };
 
+  const handleUpdateTag = async (tag: Tag, newName: string) => {
+    try {
+      const { error } = await tagOperations.update(tag.id, newName);
+      if (error) {
+        Alert.alert('Error', 'Failed to update tag');
+        return;
+      }
+      Alert.alert('Success', 'Tag updated successfully');
+      loadData(false);
+    } catch (error) {
+      console.error('Error updating tag:', error);
+      Alert.alert('Error', 'Failed to update tag');
+    }
+  };
+
   const handleDeleteTag = async (tag: Tag) => {
     try {
       const { error } = await tagOperations.delete(tag.id);
@@ -535,6 +551,7 @@ export default function InventoryPage() {
               materials={materials}
               onCreateTag={handleCreateTag}
               onDeleteTag={handleDeleteTag}
+              onUpdateTag={handleUpdateTag}
             />
           </ScrollView>
         );
@@ -574,28 +591,51 @@ export default function InventoryPage() {
 
               {/* Units of Measure */}
               <View className="mb-6">
-                <Text className="text-lg font-semibold text-gray-900 mb-3">
-                  Units of Measure ({units.length})
-                </Text>
+                <View className="flex-row items-center justify-between mb-3">
+                  <Text className="text-lg font-semibold text-gray-900">
+                    Units of Measure ({units.length})
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => setShowUnitModal(true)}
+                    className="bg-blue-500 px-4 py-2 rounded-lg flex-row items-center"
+                  >
+                    <Plus size={16} color="white" />
+                    <Text className="ml-1 text-white font-medium">Add Unit</Text>
+                  </TouchableOpacity>
+                </View>
                 <View className="bg-gray-50 p-4 rounded-lg">
-                  <View className="flex-row justify-end mb-3">
-                    <TouchableOpacity
-                      onPress={() => setShowUnitModal(true)}
-                      className="bg-blue-500 px-4 py-2 rounded-lg flex-row items-center"
-                    >
-                      <Plus size={16} color="white" />
-                      <Text className="ml-1 text-white font-medium">Add Unit</Text>
-                    </TouchableOpacity>
-                  </View>
-
                   <View className="flex-row flex-wrap">
                     {units.map((unit) => (
-                      <View key={unit.id} className="bg-white px-3 py-1 rounded-full mr-2 mb-2">
-                        <Text className="text-sm text-gray-700">{unit.name}</Text>
+                      <View key={unit.id} className="relative mr-2 mb-2">
+                        <Pressable
+                          onHoverIn={() => setHoveredUnitId(unit.id)}
+                          onHoverOut={() => setHoveredUnitId(null)}
+                          className="bg-white px-3 py-1 rounded-full border border-gray-200"
+                        >
+                          <Text className="text-sm text-gray-700">{unit.name}</Text>
+                        </Pressable>
+                        {hoveredUnitId === unit.id && !!unit.description && (
+                          <View className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 bg-black px-2 py-1 rounded shadow-lg z-10">
+                            <Text className="text-[10px] text-white max-w-xs">
+                              {unit.description}
+                            </Text>
+                          </View>
+                        )}
                       </View>
                     ))}
                   </View>
                 </View>
+              </View>
+
+              {/* Manage Tags in Settings */}
+              <View className="mb-6">
+                <TagManagement
+                  tags={tags}
+                  materials={materials}
+                  onCreateTag={handleCreateTag}
+                  onDeleteTag={handleDeleteTag}
+                  onUpdateTag={handleUpdateTag}
+                />
               </View>
 
               {/* Price Alert Configuration */}

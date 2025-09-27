@@ -163,8 +163,10 @@ export const db = {
     console.log('🔍 getUserProfile: Starting profile lookup for userId:', userId);
     
     try {
-      // Use a single optimized query to get profile with role
-      let { data: profile, error: profileError } = await supabase
+      // Primary query with join and a timeout guard to prevent UI freeze
+      const timeoutMs = 5000;
+      const timeoutSentinel: any = Symbol('timeout');
+      const primaryPromise = supabase
         .from('profiles')
         .select(`
           *,
@@ -181,7 +183,62 @@ export const db = {
         `)
         .eq('id', userId)
         .maybeSingle();
-      
+
+      const primaryResult: any = await Promise.race([
+        primaryPromise,
+        new Promise((resolve) => setTimeout(() => resolve(timeoutSentinel), timeoutMs)),
+      ]);
+
+      let profile: any = null;
+      let profileError: any = null;
+
+      if (primaryResult === timeoutSentinel) {
+        console.warn('⏳ getUserProfile: Primary query timed out, falling back to minimal profile fetch');
+      } else {
+        profile = primaryResult?.data ?? null;
+        profileError = primaryResult?.error ?? null;
+      }
+
+      if (profileError) {
+        console.error('❌ getUserProfile: Error fetching profile:', profileError);
+        // fall through to fallback below
+      }
+
+      if (!profile) {
+        // Fallback: fetch minimal profile, then role separately
+        const { data: basic, error: basicErr } = await supabase
+          .from('profiles')
+          .select('id, full_name, username, role_id, status')
+          .eq('id', userId)
+          .maybeSingle();
+
+        if (basicErr) {
+          console.error('❌ getUserProfile: Fallback profile error:', basicErr);
+          return { data: null, error: basicErr };
+        }
+
+        let roleRow: any = null;
+        if (basic?.role_id) {
+          const { data: roleData } = await supabase
+            .from('roles')
+            .select('id, name, can_block_users, can_unblock_users, can_ban_users, can_reset_passwords, can_delete_profiles, can_manage_roles')
+            .eq('id', basic.role_id)
+            .maybeSingle();
+          roleRow = roleData || null;
+        }
+
+        const merged = { ...basic, roles: roleRow };
+        // Cache and return
+        profileCache.set(userId, { data: merged, timestamp: Date.now() });
+        console.log('✅ getUserProfile: Fallback profile loaded and cached:', {
+          id: merged.id,
+          full_name: merged.full_name,
+          role: merged.roles?.name,
+          status: merged.status,
+        });
+        return { data: merged, error: null };
+      }
+
       console.log('🔍 getUserProfile: Query result:', {
         found: !!profile,
         error: profileError?.message,
@@ -192,30 +249,20 @@ export const db = {
           status: profile.status
         } : null
       });
-      
-      if (profileError) {
-        console.error('❌ getUserProfile: Error fetching profile:', profileError);
-        return { data: null, error: profileError };
-      }
-      
-      if (!profile) {
-        console.log('⚠️ getUserProfile: No profile found for user');
-        return { data: null, error: { message: 'Profile not found' } };
-      }
-      
+
       // Cache the successful result
       profileCache.set(userId, {
         data: profile,
         timestamp: Date.now()
       });
-      
+
       console.log('✅ getUserProfile: Profile loaded and cached:', {
         id: profile.id,
         full_name: profile.full_name,
         role: profile.roles?.name,
         status: profile.status
       });
-      
+
       return { data: profile, error: null };
     } catch (error) {
       console.error('💥 getUserProfile: Unexpected error:', error);

@@ -11,6 +11,9 @@ export const AuthProvider = ({ children }) => {
   const [lastAuthEvent, setLastAuthEvent] = useState(null);
   const profileLoadingRef = useRef(false);
   const sessionRefreshTimeoutRef = useRef(null);
+  // Refs to avoid stale closures inside the auth listener
+  const lastAuthEventRef = useRef(null);
+  const userIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     // Get initial session
@@ -21,25 +24,27 @@ export const AuthProvider = ({ children }) => {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
       // Ignore TOKEN_REFRESHED events unless the user actually changed
-      if (event === 'TOKEN_REFRESHED' && session?.user?.id === user?.id) {
+      if (event === 'TOKEN_REFRESHED' && session?.user?.id === userIdRef.current) {
         console.log('Token refreshed for same user, skipping profile reload');
         setSession(session);
         return;
       }
 
-      // Prevent duplicate SIGNED_IN events
-      if (event === 'SIGNED_IN' && lastAuthEvent === 'SIGNED_IN' && session?.user?.id === user?.id) {
+      // Prevent duplicate SIGNED_IN events (use refs to avoid stale state in closure)
+      if (event === 'SIGNED_IN' && lastAuthEventRef.current === 'SIGNED_IN' && session?.user?.id === userIdRef.current) {
         console.log('Duplicate SIGNED_IN event for same user, skipping');
         return;
       }
 
       console.log('Auth event:', event);
       setLastAuthEvent(event);
+      lastAuthEventRef.current = event;
       setSession(session);
       
       if (session?.user) {
-        const userChanged = session.user.id !== user?.id;
+        const userChanged = session.user.id !== userIdRef.current;
         setUser(session.user);
+        userIdRef.current = session.user.id;
         
         // Only load profile if user changed or we don't have a profile yet
         if (userChanged || !profile) {
@@ -60,6 +65,7 @@ export const AuthProvider = ({ children }) => {
         }
       } else {
         setUser(null);
+        userIdRef.current = null;
         setProfile(null);
         profileLoadingRef.current = false;
       }
@@ -90,6 +96,7 @@ export const AuthProvider = ({ children }) => {
       
       if (session?.user) {
         setUser(session.user);
+        userIdRef.current = session.user.id;
         await loadUserProfile(session.user.id);
       }
     } catch (error) {

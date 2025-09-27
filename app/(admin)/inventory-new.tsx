@@ -592,6 +592,7 @@ export default function ComprehensiveInventory() {
               materials={materials}
               onCreateTag={handleCreateTag}
               onDeleteTag={handleDeleteTag}
+              onUpdateTag={handleUpdateTag}
             />
           </View>
         );

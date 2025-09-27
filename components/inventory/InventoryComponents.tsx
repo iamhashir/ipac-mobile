@@ -11,7 +11,8 @@ import {
   X,
   Search,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  Save
 } from 'lucide-react-native';
 
 // Import our API functions
@@ -1209,30 +1210,25 @@ export function SupplierCard({
       <View className="flex-row justify-between items-start">
         <View className="flex-1">
           <View className="flex-row items-center mb-2">
-            <Building2 size={20} color="#f59e0b" />
-            <Text className="text-lg font-semibold text-gray-900 ml-2">
+            <Text className="text-lg font-semibold text-gray-900">
               {supplier.name}
-          </Text>
+            </Text>
           </View>
-
           {supplier.contact_person && (
             <Text className="text-sm text-gray-600 mb-1">
               Contact: {supplier.contact_person}
             </Text>
           )}
-
           {supplier.email && (
             <Text className="text-sm text-gray-600 mb-1">
               Email: {supplier.email}
             </Text>
           )}
-
           {supplier.phone && (
             <Text className="text-sm text-gray-600 mb-1">
               Phone: {supplier.phone}
             </Text>
           )}
-
           {supplier.address && (
             <Text className="text-sm text-gray-600">
               {supplier.address}
@@ -1262,9 +1258,7 @@ export function SupplierCard({
                 <Text className="text-xs text-gray-600 flex-1" numberOfLines={1}>
                   {item.material_variants?.materials?.name} - {item.material_variants?.variant_name}
                 </Text>
-                <Text className="text-xs text-green-600 font-medium ml-2">
-                  ${item.price}
-                </Text>
+                <Text className="text-xs text-green-600 font-medium ml-2">{`$${item.price}`}</Text>
               </View>
             ))}
           </View>
@@ -1312,12 +1306,14 @@ export function TagManagement({
   tags, 
   materials,
   onCreateTag, 
-  onDeleteTag 
+  onDeleteTag,
+  onUpdateTag 
 }: {
   tags: Tag[];
   materials: Material[];
   onCreateTag: (name: string) => void;
   onDeleteTag: (tag: Tag) => void;
+  onUpdateTag?: (tag: Tag, newName: string) => void;
 }) {
   const [newTagName, setNewTagName] = useState('');
 
@@ -1331,6 +1327,8 @@ export function TagManagement({
   };
 
   const [confirm, setConfirm] = React.useState<{visible: boolean; tag: Tag | null}>({visible: false, tag: null});
+  const [editingTagId, setEditingTagId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState<string>('');
 
   const countForTag = (tagId: string) =>
     materials.filter(m => m.material_tags && m.material_tags.some(mt => mt.tag_id === tagId)).length;
@@ -1363,16 +1361,61 @@ export function TagManagement({
         {tags.map((tag) => (
           <View key={tag.id} className="border border-gray-200 rounded-lg p-3 mb-2 bg-gray-50">
             <View className="flex-row justify-between items-center">
-              <View className="flex-1">
-                <Text className="text-base font-semibold text-gray-900">{tag.name}</Text>
-                <Text className="text-xs text-gray-600 mt-1">Materials using this tag: {countForTag(tag.id)}</Text>
+              <View className="flex-1 pr-2">
+                {editingTagId === tag.id ? (
+                  <View className="flex-row items-center">
+                    <TextInput
+                      value={editingName}
+                      onChangeText={setEditingName}
+                      className="flex-1 border border-gray-300 rounded-lg px-2 py-1 mr-2"
+                      placeholder="Tag name"
+                    />
+                    <TouchableOpacity
+                      className="bg-green-600 px-3 py-1 rounded flex-row items-center mr-2"
+                      onPress={() => {
+                        const name = editingName.trim();
+                        if (!name) return;
+                        if (onUpdateTag) onUpdateTag(tag, name);
+                        setEditingTagId(null);
+                        setEditingName('');
+                      }}
+                    >
+                      <Save size={14} color="#fff" />
+                      <Text className="text-white text-sm font-medium ml-1">Save</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      className="bg-gray-200 px-3 py-1 rounded"
+                      onPress={() => {
+                        setEditingTagId(null);
+                        setEditingName('');
+                      }}
+                    >
+                      <Text className="text-gray-700 text-sm font-medium">Cancel</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <>
+                    <Text className="text-base font-semibold text-gray-900">{tag.name}</Text>
+                    <Text className="text-xs text-gray-600 mt-1">Materials using this tag: {countForTag(tag.id)}</Text>
+                  </>
+                )}
               </View>
-              <TouchableOpacity
-                className="bg-red-100 px-3 py-1 rounded"
-                onPress={() => setConfirm({visible: true, tag})}
-              >
-                <Text className="text-red-700 text-sm font-medium">Delete</Text>
-              </TouchableOpacity>
+              {editingTagId !== tag.id && (
+                <View className="flex-row space-x-2">
+                  <TouchableOpacity
+                    className="bg-blue-100 px-3 py-1 rounded mr-2"
+                    onPress={() => { setEditingTagId(tag.id); setEditingName(tag.name); }}
+                  >
+                    <Text className="text-blue-700 text-sm font-medium">Edit</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    className="bg-red-100 px-3 py-1 rounded"
+                    onPress={() => setConfirm({visible: true, tag})}
+                  >
+                    <Text className="text-red-700 text-sm font-medium">Delete</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
           </View>
         ))}
@@ -1460,13 +1503,11 @@ export function SupplierProductModal({
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide">
-      <View className="flex-1 bg-black bg-opacity-50">
-        <Pressable 
-          className="flex-1" 
-          onPress={onClose}
-        />
-        <View className="bg-white rounded-t-xl max-h-[85%] overflow-hidden">
+    <Modal visible={visible} transparent animationType="fade">
+      <View className="flex-1 bg-black bg-opacity-50 justify-center items-center p-4">
+        {/* backdrop click to close */}
+        <TouchableOpacity className="absolute inset-0" onPress={onClose} />
+        <View className="bg-white rounded-2xl w-full max-w-5xl max-h-[85%] overflow-hidden">
           {/* Header */}
           <View className="p-4 border-b border-gray-200 flex-row justify-between items-center">
             <View className="flex-1">
@@ -1866,13 +1907,11 @@ export function SupplierVariantManager({
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide">
-      <View className="flex-1 bg-black bg-opacity-50">
-        <Pressable 
-          className="flex-1" 
-          onPress={onClose}
-        />
-        <View className="bg-white rounded-t-xl max-h-[90%] overflow-hidden">
+    <Modal visible={visible} transparent animationType="fade">
+      <View className="flex-1 bg-black bg-opacity-50 justify-center items-center p-4">
+        {/* backdrop */}
+        <TouchableOpacity className="absolute inset-0" onPress={onClose} />
+        <View className="bg-white rounded-2xl w-full max-w-4xl max-h-[90%] overflow-hidden">
           {/* Header */}
           <View className="p-4 border-b border-gray-200 flex-row justify-between items-center">
             <View>
