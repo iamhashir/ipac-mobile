@@ -1,6 +1,14 @@
 import { supabase } from './supabase';
 
-// Types for our inventory system
+// Utility function to sanitize unit names to prevent React Native text node errors
+export function sanitizeUnitName(name: string | null | undefined): string {
+  if (!name || !name.trim() || name.trim() === '.') {
+    return 'unit';
+  }
+  return name.trim();
+}
+
+// Types
 export interface Material {
   id: string;
   name: string;
@@ -22,9 +30,11 @@ export interface MaterialVariant {
   variant_name: string;
   description?: string;
   attributes?: Record<string, any>;
+  unit_id?: string;
   created_at?: string;
   material?: Material;
   supplier_pricing?: SupplierPricing[];
+  unit?: UnitOfMeasure | null;
 }
 
 export interface SupplierPricing {
@@ -91,7 +101,7 @@ export const materialOperations = {
         // Load variants
         const { data: vars, error: varsErr } = await supabase
           .from('material_variants')
-          .select('id, material_id, variant_name, description, attributes, created_at')
+          .select('id, material_id, variant_name, description, attributes, unit_id, created_at')
           .in('material_id', matIds);
         if (varsErr) return { data: null, error: varsErr };
         variants = vars || [];
@@ -347,6 +357,11 @@ export const variantOperations = {
           name,
           description
         ),
+        units_of_measure:unit_id (
+          id,
+          name,
+          description
+        ),
         supplier_pricing (
           id,
           price,
@@ -393,14 +408,34 @@ export const variantOperations = {
     return { data, error };
   },
 
-  // Delete variant
+  // Delete variant (cascade: supplier_pricing and variant tags)
   delete: async (id: string) => {
-    const { data, error } = await supabase
-      .from('material_variants')
-      .delete()
-      .eq('id', id);
+    try {
+      // Delete supplier pricing referencing this variant
+      await supabase
+        .from('supplier_pricing')
+        .delete()
+        .eq('material_variant_id', id);
 
-    return { data, error };
+      // Delete material_variant_tags if table exists
+      try {
+        await supabase
+          .from('material_variant_tags')
+          .delete()
+          .eq('material_variant_id', id);
+      } catch (_) {
+        // ignore if table doesn't exist
+      }
+
+      const { data, error } = await supabase
+        .from('material_variants')
+        .delete()
+        .eq('id', id);
+
+      return { data, error };
+    } catch (e) {
+      return { data: null, error: e as any };
+    }
   },
 
   // Get variant with tags
@@ -497,6 +532,7 @@ export const supplierOperations = {
           variant_name,
           description,
           attributes,
+          unit_id,
           materials:material_id (
             id,
             name,

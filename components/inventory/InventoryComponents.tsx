@@ -14,6 +14,8 @@ import {
   ChevronRight,
   Save
 } from 'lucide-react-native';
+import { ConfirmModal } from '../ui/ConfirmModal';
+import { Alert as UIAlert } from '../ui/Alert';
 
 // Import our API functions
 import {
@@ -50,6 +52,9 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
   const [selectedVariant, setSelectedVariant] = useState<MaterialVariant | null>(null);
   const [showPricingForm, setShowPricingForm] = useState(false);
   const [pricingVariant, setPricingVariant] = useState<MaterialVariant | null>(null);
+  const [editPricing, setEditPricing] = useState<any | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{visible: boolean; variant: MaterialVariant | null; loading: boolean}>({ visible: false, variant: null, loading: false });
+  const [banner, setBanner] = useState<{type: 'success'|'error'|'warning'|'info'; message: string} | null>(null);
 
   const loadVariants = async () => {
     try {
@@ -65,7 +70,7 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
   }, [material.material_variants]);
 
   return (
-    <View className="bg-white rounded-lg shadow-sm border border-gray-200 mb-4 overflow-hidden">
+    <View className="relative bg-white rounded-lg shadow-sm border border-gray-200 mb-4 overflow-hidden">
       {/* Main Material Info */}
       <View className="p-4">
         <View className="flex-row justify-between items-start">
@@ -91,10 +96,12 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                 {material.description}
               </Text>
             )}
-            
+            {banner && (
+              <UIAlert type={banner.type} message={banner.message} onClose={() => setBanner(null)} />
+            )}
             <View className="flex-row items-center mb-2">
               <Text className="text-sm text-gray-500">
-                Unit: {material.unit?.name || 'No unit specified'}
+                Unit: {material.unit?.name && material.unit.name.trim() && material.unit.name.trim() !== '.' ? material.unit.name : 'No unit specified'}
               </Text>
             </View>
 
@@ -118,7 +125,7 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
           {/* Always visible action buttons */}
           <View className="flex-row items-center ml-2">
             <TouchableOpacity 
-              className="bg-blue-50 p-2 rounded-lg mr-2"
+              className="bg-blue-50 p-2 rounded-lg mr-2 border border-blue-300"
               onPress={() => {
                 onEdit(material);
               }}
@@ -127,7 +134,7 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
             </TouchableOpacity>
             
             <TouchableOpacity 
-              className="bg-red-50 p-2 rounded-lg"
+              className="bg-red-50 p-2 rounded-lg border border-red-300"
               onPress={() => {
                 if (onDelete) {
                   onDelete(material);
@@ -151,7 +158,7 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
               </Text>
               <TouchableOpacity
                 onPress={() => setShowAddVariant(true)}
-                className="bg-green-50 px-3 py-1 rounded-lg"
+                className="bg-green-50 px-3 py-1 rounded-lg border border-green-300"
               >
                 <Text className="text-green-600 text-sm font-medium">
                   Add Variant
@@ -159,7 +166,7 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
               </TouchableOpacity>
             </View>
 
-            {variants && variants.length > 0 && (
+            {variants && variants.length > 0 ? (
               <View className="flex-row flex-wrap -mx-2">
                 {variants.map((variant, index) => (
                   <View key={(variant as any).id || index} className="w-1/2 px-2 mb-3">
@@ -184,7 +191,7 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                         </View>
                         <View className="flex-row items-center">
                           <TouchableOpacity 
-                            className="bg-green-50 p-2 rounded-lg ml-2"
+                            className="bg-green-50 p-2 rounded-lg ml-2 border border-green-300"
                             onPress={() => {
                               setPricingVariant(variant);
                               setShowPricingForm(true);
@@ -193,7 +200,7 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                             <DollarSign size={14} color="#10b981" />
                           </TouchableOpacity>
                           <TouchableOpacity 
-                            className="bg-blue-50 p-2 rounded-lg ml-2"
+                            className="bg-blue-50 p-2 rounded-lg ml-2 border border-blue-300"
                             onPress={() => {
                               setSelectedVariant(variant);
                               setShowEditVariant(true);
@@ -204,29 +211,7 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                           <TouchableOpacity 
                             className="bg-red-50 p-2 rounded-lg ml-2"
                             onPress={() => {
-                              Alert.alert(
-                                'Delete Variant',
-                                `Are you sure you want to delete \"${variant.variant_name}\"?`,
-                                [
-                                  { text: 'Cancel', style: 'cancel' },
-                                  {
-                                    text: 'Delete',
-                                    style: 'destructive',
-                                    onPress: async () => {
-                                      try {
-                                        const { error } = await variantOperations.delete((variant as any).id);
-                                        if (error) {
-                                          Alert.alert('Error', 'Failed to delete variant');
-                                          return;
-                                        }
-                                        await loadVariants();
-                                      } catch (e) {
-                                        Alert.alert('Error', 'Failed to delete variant');
-                                      }
-                                    }
-                                  }
-                                ]
-                              );
+                              setConfirmDelete({ visible: true, variant, loading: false });
                             }}
                           >
                             <Trash2 size={14} color="#ef4444" />
@@ -299,7 +284,7 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                                           AED {pricing.price?.toFixed(2) || '0.00'}
                                         </Text>
                                         <Text className="text-xs text-gray-500">
-                                          {pricing.units_of_measure?.name ? `per ${pricing.units_of_measure.name}` : 'per unit'}
+                                          {pricing.units_of_measure?.name && pricing.units_of_measure.name.trim() && pricing.units_of_measure.name.trim() !== '.' ? `per ${pricing.units_of_measure.name}` : 'per unit'}
                                         </Text>
                                       </View>
                                       
@@ -318,6 +303,46 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                                           </Text>
                                         </View>
                                       )}
+                                      {/* Action buttons */}
+                                      <View className="flex-row mt-2">
+                                        <TouchableOpacity
+                                          className="bg-blue-50 py-1 px-2 rounded-lg flex-row items-center justify-center mr-2"
+                                          onPress={() => setEditPricing({ ...pricing, material_variant: variant })}
+                                        >
+                                          <Edit3 size={14} color="#3b82f6" />
+                                          <Text className="ml-1 text-blue-600 text-xs font-medium">Edit</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                          className="bg-red-50 py-1 px-2 rounded-lg flex-row items-center justify-center"
+                                          onPress={() => {
+                                            Alert.alert(
+                                              'Delete Pricing',
+                                              'Are you sure you want to delete this supplier price?',
+                                              [
+                                                { text: 'Cancel', style: 'cancel' },
+                                                {
+                                                  text: 'Delete',
+                                                  style: 'destructive',
+                                                  onPress: async () => {
+                                                    try {
+                                                      const { error } = await pricingOperations.delete((pricing as any).id);
+                                                      if (error) {
+                                                        Alert.alert('Error', 'Failed to delete pricing');
+                                                        return;
+                                                      }
+                                                      await loadVariants();
+                                                    } catch (e) {
+                                                      Alert.alert('Error', 'Failed to delete pricing');
+                                                    }
+                                                  }
+                                                }
+                                              ]
+                                            );
+                                          }}
+                                        >
+                                          <Trash2 size={14} color="#ef4444" />
+                                        </TouchableOpacity>
+                                      </View>
                                     </View>
                                     {pIndex === 0 && variant.supplier_pricing.length > 1 && (
                                       <View className="bg-green-500 px-2 py-1 rounded-full ml-2">
@@ -342,15 +367,12 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                   </View>
                 ))}
               </View>
-            )}
-            {(!variants || variants.length === 0) && (
+            ) : (
               <Text className="text-sm text-gray-500 text-center py-4">
                 No variants added yet
               </Text>
             )}
           </View>
-
-          {/* Action Buttons removed per requirements */}
         </View>
       )}
       {/* Add Variant Modal */}
@@ -368,7 +390,7 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                     const { tags, ...variantOnly } = variantData;
                     const { data, error } = await variantOperations.create(variantOnly);
                     if (error) {
-                      Alert.alert('Error', 'Failed to create variant');
+                      setBanner({ type: 'error', message: 'Failed to create variant' });
                       return;
                     }
                     
@@ -378,9 +400,10 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                     }
                     
                     setShowAddVariant(false);
+                    setBanner({ type: 'success', message: 'Variant created successfully' });
                     await loadVariants();
                   } catch (e) {
-                    Alert.alert('Error', 'Failed to create variant');
+                    setBanner({ type: 'error', message: 'Failed to create variant' });
                   }
                 }}
                 onCancel={() => setShowAddVariant(false)}
@@ -413,7 +436,7 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                       const { tags, ...variantOnly } = variantData;
                       const { error } = await variantOperations.update(selectedVariant.id, variantOnly);
                       if (error) {
-                        Alert.alert('Error', 'Failed to update variant');
+                        setBanner({ type: 'error', message: 'Failed to update variant' });
                         return;
                       }
                       
@@ -424,9 +447,10 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                       
                       setShowEditVariant(false);
                       setSelectedVariant(null);
+                      setBanner({ type: 'success', message: 'Variant updated successfully' });
                       await loadVariants();
                     } catch (e) {
-                      Alert.alert('Error', 'Failed to update variant');
+                      setBanner({ type: 'error', message: 'Failed to update variant' });
                     }
                   }}
                   onCancel={() => {
@@ -451,12 +475,13 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
             }}
           />
           <View className="flex-1 justify-center items-center p-6">
-            <View className="bg-white rounded-lg m-0 max-h-96 w-full">
+            <View className="bg-white rounded-2xl w-full max-w-2xl">
               {pricingVariant && (
                 <SupplierPricingForm
                   variant={pricingVariant}
                   suppliers={suppliers}
                   units={units}
+                  defaultUnitId={(material as any)?.unit_id || ''}
                   onSave={async (pricingData: any) => {
                     try {
                       const payload = {
@@ -467,14 +492,15 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                       };
                       const { error } = await pricingOperations.create(payload as any);
                       if (error) {
-                        Alert.alert('Error', 'Failed to add pricing');
+                        setBanner({ type: 'error', message: 'Failed to add pricing' });
                         return;
                       }
                       setShowPricingForm(false);
                       setPricingVariant(null);
+                      setBanner({ type: 'success', message: 'Pricing added successfully' });
                       await loadVariants();
                     } catch (e) {
-                      Alert.alert('Error', 'Failed to add pricing');
+                      setBanner({ type: 'error', message: 'Failed to add pricing' });
                     }
                   }}
                   onCancel={() => {
@@ -487,6 +513,77 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
           </View>
         </View>
       </Modal>
+
+      {/* Edit Supplier Pricing Modal */}
+      <Modal visible={!!editPricing} animationType="fade" transparent>
+        <View className="flex-1">
+          <Pressable className="absolute inset-0 bg-black bg-opacity-50" onPress={() => setEditPricing(null)} />
+          <View className="flex-1 justify-center items-center p-6">
+            <View className="bg-white rounded-2xl w-full max-w-2xl">
+              {editPricing && (
+                <SupplierPricingForm
+                  variant={selectedVariant || pricingVariant || material.material_variants?.[0] || ({} as any)}
+                  suppliers={suppliers}
+                  units={units}
+                  pricing={{ supplier_id: editPricing.supplier_id || editPricing.suppliers?.id, price: editPricing.price, unit_id: editPricing.unit_id || editPricing.units_of_measure?.id }}
+                  defaultUnitId={(material as any)?.unit_id || ''}
+                  onSave={async (newData: any) => {
+                    try {
+                      const { error } = await pricingOperations.update(editPricing.id, {
+                        price: newData.price,
+                        unit_id: newData.unit_id,
+                        supplier_id: newData.supplier_id,
+                      });
+                      if (error) {
+                        setBanner({ type: 'error', message: 'Failed to update pricing' });
+                        return;
+                      }
+                      setEditPricing(null);
+                      setBanner({ type: 'success', message: 'Pricing updated successfully' });
+                      await loadVariants();
+                    } catch (e) {
+                      setBanner({ type: 'error', message: 'Failed to update pricing' });
+                    }
+                  }}
+                  onCancel={() => setEditPricing(null)}
+                />
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Confirm Delete Variant */}
+      <ConfirmModal
+        visible={confirmDelete.visible}
+        title="Delete Variant"
+        description={`Are you sure you want to delete "${confirmDelete.variant?.variant_name || ''}"? This will also remove any supplier pricing for it.`}
+        confirmText="Delete"
+        cancelText="Cancel"
+        variant="danger"
+        loading={confirmDelete.loading}
+        onCancel={() => setConfirmDelete({ visible: false, variant: null, loading: false })}
+        onConfirm={async () => {
+          const target = confirmDelete.variant;
+          if (!target) return;
+          try {
+            setConfirmDelete(prev => ({ ...prev, loading: true }));
+            const id = (target as any).id;
+            const { error } = await variantOperations.delete(id);
+            if (error) {
+              setBanner({ type: 'error', message: 'Failed to delete variant' });
+            } else {
+              setVariants(prev => prev.filter(v => (v as any).id !== id));
+              setBanner({ type: 'success', message: 'Variant deleted successfully' });
+            }
+            await loadVariants();
+          } catch (e) {
+            setBanner({ type: 'error', message: 'Failed to delete variant' });
+          } finally {
+            setConfirmDelete({ visible: false, variant: null, loading: false });
+          }
+        }}
+      />
     </View>
   );
 }
@@ -510,7 +607,9 @@ export function MaterialForm({
     description: material?.description || '',
     unit_id: material?.unit_id || '',
   });
-  const [availableTags, setAvailableTags] = useState<Tag[]>(tags);
+const [availableTags, setAvailableTags] = useState<Tag[]>(tags);
+  const [unitDropdownOpen, setUnitDropdownOpen] = useState(false);
+  const [unitQuery, setUnitQuery] = useState('');
   const [newTagName, setNewTagName] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>(
     material?.material_tags?.map(mt => mt.tag_id) || []
@@ -603,43 +702,57 @@ export function MaterialForm({
           />
         </View>
 
-        {/* Unit of Measure */}
+        {/* Unit of Measure - dropdown */}
         <View className="mb-6">
-          <Text className="text-sm font-medium text-gray-700 mb-2">
-            Default Unit of Measure
-          </Text>
-          <View className="border border-gray-300 rounded-lg">
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View className="flex-row p-2">
-                <TouchableOpacity
-                  onPress={() => setFormData(prev => ({ ...prev, unit_id: '' }))}
-                  className={`px-4 py-2 rounded-lg mr-2 ${
-                    !formData.unit_id ? 'bg-gray-200' : 'bg-gray-100'
-                  }`}
-                >
-                  <Text className={`text-sm ${
-                    !formData.unit_id ? 'font-medium' : ''
-                  }`}>
-                    No Unit
-                  </Text>
-                </TouchableOpacity>
-                {units.map((unit) => (
+              <Text className="text-sm font-medium text-gray-700 mb-2">Default Unit of Measure</Text>
+          <View>
+            <TouchableOpacity
+              onPress={() => setUnitDropdownOpen(prev => !prev)}
+              className="border border-gray-300 rounded-lg px-4 py-3 flex-row items-center justify-between"
+            >
+              <Text className="text-gray-900">
+                {(() => {
+                  const unit = units.find(u => u.id === formData.unit_id);
+                  return unit?.name && unit.name.trim() && unit.name.trim() !== '.' ? unit.name : 'Select unit';
+                })()}
+              </Text>
+              <ChevronDown size={16} color="#6b7280" />
+            </TouchableOpacity>
+            {unitDropdownOpen && (
+              <View className="mt-2 bg-white border border-gray-300 rounded-lg max-h-64">
+                {/* search input */}
+                <View className="p-2 border-b border-gray-200">
+                  <TextInput
+                    value={unitQuery}
+                    onChangeText={setUnitQuery}
+                    placeholder="Type to filter units..."
+                    className="border border-gray-300 rounded px-2 py-1 text-sm"
+                  />
+                </View>
+                <ScrollView>
                   <TouchableOpacity
-                    key={unit.id}
-                    onPress={() => setFormData(prev => ({ ...prev, unit_id: unit.id }))}
-                    className={`px-4 py-2 rounded-lg mr-2 ${
-                      formData.unit_id === unit.id ? 'bg-blue-200' : 'bg-gray-100'
-                    }`}
+                    onPress={() => { setFormData(prev => ({ ...prev, unit_id: '' })); setUnitDropdownOpen(false); setUnitQuery(''); }}
+                    className="p-3 border-b border-gray-100"
                   >
-                    <Text className={`text-sm ${
-                      formData.unit_id === unit.id ? 'font-medium text-blue-800' : ''
-                    }`}>
-                      {unit.name}
-                    </Text>
+                    <Text className="text-sm text-gray-700">No Unit</Text>
                   </TouchableOpacity>
-                ))}
+                  {units
+                    .filter(u => !unitQuery.trim() || u.name.toLowerCase().includes(unitQuery.toLowerCase()))
+                    .map((unit) => (
+                    <TouchableOpacity
+                      key={unit.id}
+                      onPress={() => { setFormData(prev => ({ ...prev, unit_id: unit.id })); setUnitDropdownOpen(false); }}
+                      className="p-3 border-b border-gray-100"
+                    >
+                      <Text className="text-sm text-gray-900">{unit.name}</Text>
+                      {unit.description ? (
+                        <Text className="text-xs text-gray-500">{unit.description}</Text>
+                      ) : null}
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
               </View>
-            </ScrollView>
+            )}
           </View>
         </View>
 
@@ -776,36 +889,18 @@ export function VariantManagement({
     }
   };
 
+  const [confirmDelete, setConfirmDelete] = useState<{visible:boolean; variant: MaterialVariant | null; loading: boolean}>({visible:false, variant:null, loading:false});
+  const [banner, setBanner] = useState<{type: 'success'|'error'|'warning'|'info'; message: string} | null>(null);
+
   const handleDeleteVariant = async (variant: MaterialVariant) => {
-    Alert.alert(
-      'Delete Variant',
-      `Are you sure you want to delete "${variant.variant_name}"?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const { error } = await variantOperations.delete(variant.id);
-              if (error) {
-                Alert.alert('Error', 'Failed to delete variant');
-                return;
-              }
-              Alert.alert('Success', 'Variant deleted successfully');
-              loadVariants();
-            } catch (error) {
-              Alert.alert('Error', 'Failed to delete variant');
-              console.error('Error deleting variant:', error);
-            }
-          }
-        }
-      ]
-    );
+    setConfirmDelete({ visible: true, variant, loading: false });
   };
 
   return (
-    <View className="flex-1 bg-gray-50">
+    <View className="flex-1 bg-gray-50 relative">
+      {banner && (
+        <UIAlert type={banner.type} message={banner.message} onClose={() => setBanner(null)} />
+      )}
       {/* Header */}
       <View className="bg-white px-6 py-4 border-b border-gray-200">
         <View className="flex-row justify-between items-center">
@@ -907,7 +1002,37 @@ export function VariantManagement({
           </View>
         </View>
       )}
-    </View>
+    {/* Confirm delete variant modal for management view */}
+    <ConfirmModal
+      visible={confirmDelete.visible}
+      title="Delete Variant"
+      description={`Are you sure you want to delete "${confirmDelete.variant?.variant_name || ''}"? This will also remove any supplier pricing for it.`}
+      confirmText="Delete"
+      cancelText="Cancel"
+      variant="danger"
+      loading={confirmDelete.loading}
+      onCancel={() => setConfirmDelete({ visible: false, variant: null, loading: false })}
+      onConfirm={async () => {
+        const target = confirmDelete.variant;
+        if (!target) return;
+        try {
+          setConfirmDelete(prev => ({ ...prev, loading: true }));
+          const { error } = await variantOperations.delete(target.id);
+          if (error) {
+            setBanner({ type: 'error', message: 'Failed to delete variant' });
+          } else {
+            setVariants(prev => prev.filter(v => v.id !== target.id));
+            setBanner({ type: 'success', message: 'Variant deleted successfully' });
+          }
+          await loadVariants();
+        } catch (e) {
+          setBanner({ type: 'error', message: 'Failed to delete variant' });
+        } finally {
+          setConfirmDelete({ visible: false, variant: null, loading: false });
+        }
+      }}
+    />
+  </View>
   );
 }
 
@@ -1021,7 +1146,7 @@ function VariantCard({
                               AED {pricing.price.toFixed(2)}
                             </Text>
                             <Text className="text-xs text-gray-500">
-                              per {pricing.units_of_measure?.name}
+                              per {pricing.units_of_measure?.name && pricing.units_of_measure.name.trim() && pricing.units_of_measure.name.trim() !== '.' ? pricing.units_of_measure.name : 'unit'}
                             </Text>
                           </View>
                           
@@ -1150,14 +1275,15 @@ function VariantCard({
           >
             <View className="flex-1 justify-center items-center p-6">
               <TouchableOpacity 
-                className="bg-white rounded-lg m-6 max-h-96 w-full"
+                className="bg-white rounded-2xl w-full max-w-2xl"
                 activeOpacity={1}
                 onPress={(e) => e.stopPropagation()}
               >
-                <SupplierPricingForm
+<SupplierPricingForm
                   variant={variant}
                   suppliers={suppliers}
                   units={units}
+                  defaultUnitId={(variant as any)?.materials?.unit_id || (variant as any)?.material?.unit_id || ''}
                   onSave={handleAddPricing}
                   onCancel={() => setShowPricingForm(false)}
                 />
@@ -1634,7 +1760,7 @@ export function SupplierProductModal({
                           {formatPrice(item.price)}
                         </Text>
                         <Text className="text-sm text-gray-600">
-                          per {item.units_of_measure?.name || 'unit'}
+                          per {item.units_of_measure?.name && item.units_of_measure.name.trim() && item.units_of_measure.name.trim() !== '.' ? item.units_of_measure.name : 'unit'}
                         </Text>
                         {item.stock_level !== null && (
                           <Text className="text-sm text-blue-600 mt-1">

@@ -3,7 +3,7 @@ import { Stack, useRouter, usePathname } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
 import { View, Text, ActivityIndicator } from 'react-native';
 import { SidebarProvider, SidebarInset } from '../../components/ui/sidebar';
-const AdminSidebar = lazy(() => import('./components/AdminSidebar'));
+const AdminSidebar = lazy(() => import('../../components/admin/AdminSidebar'));
 
 export default function AdminLayout() {
   const { user, profile, loading } = useAuth();
@@ -79,7 +79,6 @@ export default function AdminLayout() {
           <Stack.Screen name="inventory-new" />
           <Stack.Screen name="reports" />
           <Stack.Screen name="settings" />
-          <Stack.Screen name="components/AdminSidebar" options={{ presentation: 'transparentModal' }} />
         </Stack>
       </SidebarInset>
     </SidebarProvider>

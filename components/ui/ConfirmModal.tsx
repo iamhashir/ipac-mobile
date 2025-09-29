@@ -1,5 +1,5 @@
 import React from 'react';
-import { Modal, View, Text, TouchableOpacity } from 'react-native';
+import { Modal, View, Text, TouchableOpacity, ScrollView } from 'react-native';
 
 interface ConfirmModalProps {
   visible: boolean;
@@ -11,6 +11,7 @@ interface ConfirmModalProps {
   loading?: boolean;
   onConfirm: () => void | Promise<void>;
   onCancel: () => void;
+  children?: React.ReactNode;
 }
 
 export function ConfirmModal({
@@ -23,6 +24,7 @@ export function ConfirmModal({
   loading = false,
   onConfirm,
   onCancel,
+  children,
 }: ConfirmModalProps) {
   const confirmBg = variant === 'danger' ? 'bg-red-600' : 'bg-blue-600';
   const confirmBgDisabled = variant === 'danger' ? 'bg-red-300' : 'bg-blue-300';
@@ -37,6 +39,12 @@ export function ConfirmModal({
               <Text className="text-gray-600 mt-2">{description}</Text>
             ) : null}
           </View>
+
+          {children ? (
+            <View className="px-5 py-3 border-b border-gray-200 max-h-64">
+              <ScrollView>{children}</ScrollView>
+            </View>
+          ) : null}
 
           <View className="flex-row p-4 space-x-3 justify-end">
             <TouchableOpacity

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
-import { Plus, Minus, X, Tag } from 'lucide-react-native';
+import { Plus, Minus, X, Tag, ChevronDown } from 'lucide-react-native';
 
 import {
   Material,
@@ -509,7 +509,8 @@ export function SupplierPricingForm({
   units,
   pricing,
   onSave, 
-  onCancel 
+  onCancel,
+  defaultUnitId,
 }: {
   variant: MaterialVariant;
   suppliers: Supplier[];
@@ -517,27 +518,27 @@ export function SupplierPricingForm({
   pricing?: any;
   onSave: (pricingData: any) => void;
   onCancel: () => void;
+  defaultUnitId?: string;
 }) {
-  const [formData, setFormData] = useState({
+const [formData, setFormData] = useState({
     supplier_id: pricing?.supplier_id || '',
     price: pricing?.price ? String(pricing.price) : '',
-    unit_id: pricing?.unit_id || '',
+    unit_id: pricing?.unit_id || defaultUnitId || '',
     material_variant_id: variant.id,
   });
+const [errors, setErrors] = useState<{ supplier_id?: string; price?: string; unit_id?: string }>({});
+  const [unitOpen, setUnitOpen] = useState(false);
+  const [unitQuery, setUnitQuery] = useState('');
+  const [supplierOpen, setSupplierOpen] = useState(false);
+  const [supplierQuery, setSupplierQuery] = useState('');
 
   const handleSave = () => {
-    if (!formData.supplier_id) {
-      Alert.alert('Error', 'Please select a supplier');
-      return;
-    }
-    if (!formData.price.trim() || isNaN(Number(formData.price))) {
-      Alert.alert('Error', 'Please enter a valid price');
-      return;
-    }
-    if (!formData.unit_id) {
-      Alert.alert('Error', 'Please select a unit of measure');
-      return;
-    }
+    const errs: any = {};
+    if (!formData.supplier_id) errs.supplier_id = 'Please select a supplier';
+    if (!formData.price.trim() || isNaN(Number(formData.price))) errs.price = 'Please enter a valid price';
+    if (!formData.unit_id) errs.unit_id = 'Please select a unit of measure';
+    setErrors(errs);
+    if (Object.keys(errs).length > 0) return;
 
     const pricingData = {
       ...formData,
@@ -548,7 +549,7 @@ export function SupplierPricingForm({
   };
 
   return (
-    <View className="bg-white rounded-lg p-6">
+    <View className="bg-white rounded-lg p-6 max-w-2xl w-full">
       <View className="mb-6">
         <Text className="text-xl font-bold text-gray-900 mb-2">
           {pricing ? 'Edit Pricing' : 'Add Supplier Pricing'}
@@ -558,32 +559,51 @@ export function SupplierPricingForm({
         </Text>
       </View>
 
-      {/* Supplier Selection */}
+      {/* Supplier Selection (dropdown with search) */}
       <View className="mb-4">
-        <Text className="text-sm font-medium text-gray-700 mb-2">
-          Supplier *
-        </Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View className="flex-row">
-            {suppliers.map((supplier) => (
-              <TouchableOpacity
-                key={supplier.id}
-                onPress={() => setFormData(prev => ({ ...prev, supplier_id: supplier.id }))}
-                className={`px-4 py-2 rounded-lg mr-2 border ${
-                  formData.supplier_id === supplier.id 
-                    ? 'bg-blue-100 border-blue-300' 
-                    : 'bg-gray-100 border-gray-300'
-                }`}
-              >
-                <Text className={`text-sm ${
-                  formData.supplier_id === supplier.id ? 'text-blue-800 font-medium' : 'text-gray-700'
-                }`}>
-                  {supplier.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </ScrollView>
+        <Text className="text-sm font-medium text-gray-700 mb-2">Supplier *</Text>
+        <View>
+          <TouchableOpacity
+            onPress={() => setSupplierOpen(prev => !prev)}
+            className="border border-gray-300 rounded-lg px-4 py-3 flex-row items-center justify-between"
+          >
+            <Text className="text-gray-900">
+              {suppliers.find(s => s.id === formData.supplier_id)?.name || 'Select supplier'}
+            </Text>
+            <ChevronDown size={16} color="#6b7280" />
+          </TouchableOpacity>
+          {supplierOpen && (
+            <View className="mt-2 bg-white border border-gray-300 rounded-lg max-h-64">
+              {/* search box */}
+              <View className="p-2 border-b border-gray-200">
+                <TextInput
+                  value={supplierQuery}
+                  onChangeText={setSupplierQuery}
+                  placeholder="Type to filter suppliers..."
+                  className="border border-gray-300 rounded px-2 py-1 text-sm"
+                  autoFocus
+                />
+              </View>
+              <ScrollView>
+                {suppliers
+                  .filter(s => !supplierQuery.trim() || s.name.toLowerCase().includes(supplierQuery.toLowerCase()))
+                  .map((s) => (
+                  <TouchableOpacity
+                    key={s.id}
+                    onPress={() => { setFormData(prev => ({ ...prev, supplier_id: s.id })); setSupplierOpen(false); }}
+                    className="p-3 border-b border-gray-100"
+                  >
+                    <Text className="text-sm text-gray-900">{s.name}</Text>
+                    {(s as any).contact_person || (s as any).phone ? (
+                      <Text className="text-xs text-gray-500">{(s as any).contact_person || ''}{(s as any).phone ? ` • ${(s as any).phone}` : ''}</Text>
+                    ) : null}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+        </View>
+        {errors.supplier_id && <Text className="text-xs text-red-600 mt-1">{errors.supplier_id}</Text>}
       </View>
 
       {/* Price */}
@@ -598,34 +618,53 @@ export function SupplierPricingForm({
           keyboardType="decimal-pad"
           className="border border-gray-300 rounded-lg px-4 py-3 text-gray-900"
         />
+        {errors.price && <Text className="text-xs text-red-600 mt-1">{errors.price}</Text>}
       </View>
 
-      {/* Unit of Measure */}
+      {/* Unit of Measure (dropdown) */}
       <View className="mb-4">
-        <Text className="text-sm font-medium text-gray-700 mb-2">
-          Unit of Measure *
-        </Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View className="flex-row">
-            {units.map((unit) => (
-              <TouchableOpacity
-                key={unit.id}
-                onPress={() => setFormData(prev => ({ ...prev, unit_id: unit.id }))}
-                className={`px-4 py-2 rounded-lg mr-2 border ${
-                  formData.unit_id === unit.id 
-                    ? 'bg-blue-100 border-blue-300' 
-                    : 'bg-gray-100 border-gray-300'
-                }`}
-              >
-                <Text className={`text-sm ${
-                  formData.unit_id === unit.id ? 'text-blue-800 font-medium' : 'text-gray-700'
-                }`}>
-                  {unit.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </ScrollView>
+        <Text className="text-sm font-medium text-gray-700 mb-2">Unit of Measure *</Text>
+        <View>
+          <TouchableOpacity
+            onPress={() => setUnitOpen(prev => !prev)}
+            className="border border-gray-300 rounded-lg px-4 py-3 flex-row items-center justify-between"
+          >
+            <Text className="text-gray-900">
+              {units.find(u => u.id === formData.unit_id)?.name || 'Select unit'}
+            </Text>
+            <ChevronDown size={16} color="#6b7280" />
+          </TouchableOpacity>
+          {unitOpen && (
+            <View className="mt-2 bg-white border border-gray-300 rounded-lg max-h-64">
+              {/* search box */}
+              <View className="p-2 border-b border-gray-200">
+                <TextInput
+                  value={unitQuery}
+                  onChangeText={setUnitQuery}
+                  placeholder="Type to filter units..."
+                  className="border border-gray-300 rounded px-2 py-1 text-sm"
+                />
+              </View>
+              <ScrollView>
+                {units
+                  .filter(u => !unitQuery.trim() || u.name.toLowerCase().includes(unitQuery.toLowerCase()))
+                  .map((unit) => (
+                  <TouchableOpacity
+                    key={unit.id}
+                    onPress={() => { setFormData(prev => ({ ...prev, unit_id: unit.id })); setUnitOpen(false); }}
+                    className="p-3 border-b border-gray-100"
+                  >
+                    <Text className="text-sm text-gray-900">{unit.name}</Text>
+                    {unit.description ? (
+                      <Text className="text-xs text-gray-500">{unit.description}</Text>
+                    ) : null}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+        </View>
+        {errors.unit_id && <Text className="text-xs text-red-600 mt-1">{errors.unit_id}</Text>}
       </View>
 
 

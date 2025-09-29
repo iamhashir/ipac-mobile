@@ -60,9 +60,11 @@ CREATE TABLE public.material_variants (
   material_id uuid NOT NULL,
   variant_name text NOT NULL,
   attributes jsonb,
+  unit_id uuid,
   created_at timestamp with time zone DEFAULT now(),
   CONSTRAINT material_variants_pkey PRIMARY KEY (id),
-  CONSTRAINT material_variants_material_id_fkey FOREIGN KEY (material_id) REFERENCES public.materials(id)
+  CONSTRAINT material_variants_material_id_fkey FOREIGN KEY (material_id) REFERENCES public.materials(id),
+  CONSTRAINT material_variants_unit_id_fkey FOREIGN KEY (unit_id) REFERENCES public.units_of_measure(id)
 );
 CREATE TABLE public.materials (
   id uuid NOT NULL DEFAULT gen_random_uuid(),

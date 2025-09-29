@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, TextInput } from 'react-nativ
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Search, Filter, Eye, Edit3, CheckCircle, Plus } from 'lucide-react-native';
 import { supabase } from '../../utils/api/supabase';
-const AddOrderModal = lazy(() => import('./components/AddOrderModal'));
+const AddOrderModal = lazy(() => import('../../components/admin/AddOrderModal'));
 
 interface Order {
   id: string;
