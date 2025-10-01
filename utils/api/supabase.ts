@@ -737,7 +737,7 @@ export const db = {
     return { data, error };
   },
 
-  // Upsert final dimensions for an order package. If finalInfoId is missing, create it (cloning original if provided)
+  // Upsert final dimensions for an order package. If finalInfoId is missing, create an EMPTY final package_info and link it.
   upsertFinalDimensions: async ({ orderPackageId, finalInfoId, originalInfoId, scope, length, width, height }) => {
     const fields: any = {};
     if (scope === 'internal') {
@@ -752,43 +752,29 @@ export const db = {
 
     let effectiveFinalId = finalInfoId as string | null | undefined;
 
+    // If there is no final package_info, create an EMPTY row and link it to the order package
     if (!effectiveFinalId) {
-      // Create final package_info by cloning from original if available
-      let base: any = {};
-      if (originalInfoId) {
-        const { data: orig } = await supabase
-          .from('package_info')
-          .select('*')
-          .eq('id', originalInfoId)
-          .single();
-        if (orig) {
-          const { id, ...rest } = orig;
-          base = { ...rest };
-        }
-      }
-      const insertPayload = { ...base, ...fields };
       const { data: created, error: createErr } = await supabase
         .from('package_info')
-        .insert(insertPayload)
+        .insert({})
         .select('id')
         .single();
       if (createErr || !created) return { data: null, error: createErr || { message: 'Failed to create final package info' } };
       effectiveFinalId = created.id;
 
-      // Update order_packages.final_pkg_info
       const { error: updErr } = await supabase
         .from('order_packages')
         .update({ final_pkg_info: effectiveFinalId })
         .eq('id', orderPackageId);
       if (updErr) return { data: null, error: updErr };
-    } else {
-      // Update existing final package_info
-      const { error: updFinalErr } = await supabase
-        .from('package_info')
-        .update(fields)
-        .eq('id', effectiveFinalId);
-      if (updFinalErr) return { data: null, error: updFinalErr };
     }
+
+    // Update the final package_info with provided fields (no cloning)
+    const { error: updFinalErr } = await supabase
+      .from('package_info')
+      .update(fields)
+      .eq('id', effectiveFinalId);
+    if (updFinalErr) return { data: null, error: updFinalErr };
 
     return { data: { final_pkg_info: effectiveFinalId }, error: null };
   },
@@ -1014,41 +1000,26 @@ export const db = {
     return { data, error };
   },
 
+  // Ensure there is a linked EMPTY final package_info for this order package
   ensureFinalPackageInfo: async ({ orderPackageId, finalInfoId, originalInfoId }) => {
     if (finalInfoId) return { data: { id: finalInfoId }, error: null };
-    if (!originalInfoId) {
-      const { data: created, error: createErr } = await supabase
-        .from('package_info')
-        .insert({})
-        .select('id')
-        .single();
-      if (createErr || !created) return { data: null, error: createErr };
-      const { error: updErr } = await supabase
-        .from('order_packages')
-        .update({ final_pkg_info: created.id })
-        .eq('id', orderPackageId);
-      if (updErr) return { data: null, error: updErr };
-      return { data: { id: created.id }, error: null };
-    }
-    const { data: orig, error: oErr } = await supabase
+
+    // Always create an EMPTY package_info row (do not clone original)
+    const { data: created, error: createErr } = await supabase
       .from('package_info')
-      .select('*')
-      .eq('id', originalInfoId)
-      .single();
-    if (oErr) return { data: null, error: oErr };
-    const { id, created_at, updated_at, ...rest } = orig || {};
-    const { data: newRow, error: nErr } = await supabase
-      .from('package_info')
-      .insert(rest || {})
+      .insert({})
       .select('id')
       .single();
-    if (nErr || !newRow) return { data: null, error: nErr };
-    const { error: linkErr } = await supabase
+    if (createErr || !created) return { data: null, error: createErr };
+
+    // Link to order_packages.final_pkg_info
+    const { error: updErr } = await supabase
       .from('order_packages')
-      .update({ final_pkg_info: newRow.id })
+      .update({ final_pkg_info: created.id })
       .eq('id', orderPackageId);
-    if (linkErr) return { data: null, error: linkErr };
-    return { data: { id: newRow.id }, error: null };
+    if (updErr) return { data: null, error: updErr };
+
+    return { data: { id: created.id }, error: null };
   },
 
   // Securing
@@ -1090,6 +1061,56 @@ export const db = {
     return { data, error };
   },
 
+  // Ensure final securing rows exist (empty) for any side that has an original
+  ensureFinalSecuringForPackage: async (orderPackageId: string) => {
+    // Load existing securing records for this package
+    const { data: rows, error } = await supabase
+      .from('order_package_securing')
+      .select('id, securing_side, is_final')
+      .eq('order_package_id', orderPackageId);
+    if (error) return { data: null, error };
+
+    const sides = ['big_sides','small_sides','lid','base'] as const;
+    const hasOriginal: Record<string, boolean> = {};
+    const hasFinal: Record<string, boolean> = {};
+    (rows || []).forEach((r: any) => {
+      if (r.is_final) hasFinal[r.securing_side] = true; else hasOriginal[r.securing_side] = true;
+    });
+
+    for (const side of sides) {
+      if (hasOriginal[side] && !hasFinal[side]) {
+        // Create empty beams
+        const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
+        const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
+        let skId: any = null;
+        if (side === 'base') {
+          const { data: sk } = await supabase.from('beam').insert({}).select('id').single();
+          skId = sk?.id || null;
+        }
+
+        // Create empty template pointing to empty beams
+        const tmplPayload: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
+        if (skId) tmplPayload.skids = skId;
+        const { data: tmpl, error: tmplErr } = await supabase
+          .from('securing_template')
+          .insert(tmplPayload)
+          .select('id')
+          .single();
+        if (tmplErr) return { data: null, error: tmplErr };
+
+        // Create final securing row
+        const { error: secErr } = await supabase
+          .from('order_package_securing')
+          .insert({ order_package_id: orderPackageId, securing_template_id: tmpl?.id, securing_side: side, is_final: true })
+          .select('id')
+          .single();
+        if (secErr) return { data: null, error: secErr };
+      }
+    }
+
+    return { data: { ensured: true }, error: null };
+  },
+
   // Packaging: fetch package items for many order_package_ids
   getPackageItemsByOrderPackageIds: async (orderPackageIds) => {
     if (!orderPackageIds || orderPackageIds.length === 0) return { data: [], error: null };
@@ -1097,6 +1118,16 @@ export const db = {
       .from('package_items')
       .select('order_package_id, designation, quantity')
       .in('order_package_id', orderPackageIds);
+    return { data, error };
+  },
+
+  // Packaging: add a single package item
+  addPackageItem: async ({ order_package_id, designation, quantity }) => {
+    const { data, error } = await supabase
+      .from('package_items')
+      .insert({ order_package_id, designation, quantity })
+      .select('id')
+      .single();
     return { data, error };
   },
 

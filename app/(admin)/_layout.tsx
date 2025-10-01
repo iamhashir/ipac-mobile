@@ -75,6 +75,7 @@ export default function AdminLayout() {
           <Stack.Screen name="dashboard" />
           <Stack.Screen name="orders" />
           <Stack.Screen name="users" />
+          <Stack.Screen name="users/[id]" />
           <Stack.Screen name="inventory" />
           <Stack.Screen name="inventory-new" />
           <Stack.Screen name="reports" />
