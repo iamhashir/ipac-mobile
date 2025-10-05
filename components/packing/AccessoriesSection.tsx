@@ -32,6 +32,8 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
   const [triedSubmit, setTriedSubmit] = useState(false);
   const [errors, setErrors] = useState<{ variant?: string; quantity?: string; unit?: string }>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [variantSearchQuery, setVariantSearchQuery] = useState('');
+  const [unitSearchQuery, setUnitSearchQuery] = useState('');
 
   // Form state
   const [formVariant, setFormVariant] = useState<string | null>(null);
@@ -52,6 +54,11 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
       db.getAllUnits(),
       db.getOrderPackageMaterials(orderPackageId),
     ] as any);
+
+    console.log('📦 Accessories: loaded variants', v?.length || 0, 'units', u?.length || 0);
+    if (!v || v.length === 0) {
+      console.warn('⚠️ No variants found with tag "accessories". Please add the "accessories" tag to materials in inventory.');
+    }
 
     setVariants((v || []).map((x: any) => ({ label: x.label, value: x.id || x.value })));
     setUnits((u || []).map((x: any) => ({ label: x.name || x.label, value: x.id || x.value })));
@@ -79,6 +86,8 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
     setFormComment('');
     setVariantPickerOpen(false);
     setUnitPickerOpen(false);
+    setVariantSearchQuery('');
+    setUnitSearchQuery('');
     setTriedSubmit(false);
     setErrors({});
     setIsSaving(false);
@@ -275,32 +284,57 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
               <Text className="text-red-600 text-xs mb-2">{errors.variant}</Text>
             ) : <View className="mb-1" />}
             {variantPickerOpen && (
-              <View className="max-h-40 border border-gray-200 rounded mb-2 bg-white">
+              <View className="max-h-60 border border-gray-200 rounded mb-2 bg-white">
+                {/* Search input */}
+                <View className="p-2 border-b border-gray-200">
+                  <TextInput
+                    value={variantSearchQuery}
+                    onChangeText={setVariantSearchQuery}
+                    placeholder="Type to search items..."
+                    className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+                    autoFocus
+                  />
+                </View>
                 <ScrollView>
-                  {variants.map((opt) => (
-                    <TouchableOpacity
-                      key={opt.value}
-                      onPress={() => {
-                        setFormVariant(opt.value);
-                        setErrors((e) => ({ ...e, variant: undefined }));
-                        // Auto-assign unit from variant's material default
-                        const autoUnit = variantUnitIdMap[opt.value] || null;
-                        setFormUnit(autoUnit);
-                        setErrors((e) => ({ ...e, unit: undefined }));
-                        setVariantPickerOpen(false);
-                      }}
-                      className="px-3 py-2"
-                    >
-                      <View className="flex-row justify-between items-center">
-                        <Text className="text-gray-800">{opt.label}</Text>
-                        {variantUnitIdMap[opt.value] ? (
-                          <View className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
-                            <Text className="text-[10px] text-slate-700">{unitsMap[variantUnitIdMap[opt.value] as string] || '—'}</Text>
+                  {variants.length === 0 ? (
+                    <View className="px-3 py-4">
+                      <Text className="text-gray-500 text-sm text-center">No items found.</Text>
+                      <Text className="text-gray-400 text-xs text-center mt-1">
+                        Make sure materials are tagged with "accessories" in inventory.
+                      </Text>
+                    </View>
+                  ) : (
+                    variants
+                      .filter((opt) => {
+                        if (!variantSearchQuery.trim()) return true;
+                        return opt.label.toLowerCase().includes(variantSearchQuery.toLowerCase());
+                      })
+                      .map((opt) => (
+                        <TouchableOpacity
+                          key={opt.value}
+                          onPress={() => {
+                            setFormVariant(opt.value);
+                            setErrors((e) => ({ ...e, variant: undefined }));
+                            // Auto-assign unit from variant's material default
+                            const autoUnit = variantUnitIdMap[opt.value] || null;
+                            setFormUnit(autoUnit);
+                            setErrors((e) => ({ ...e, unit: undefined }));
+                            setVariantPickerOpen(false);
+                            setVariantSearchQuery('');
+                          }}
+                          className="px-3 py-2 border-b border-gray-100"
+                        >
+                          <View className="flex-row justify-between items-center">
+                            <Text className="text-gray-800">{opt.label}</Text>
+                            {variantUnitIdMap[opt.value] ? (
+                              <View className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
+                                <Text className="text-[10px] text-slate-700">{unitsMap[variantUnitIdMap[opt.value] as string] || '—'}</Text>
+                              </View>
+                            ) : null}
                           </View>
-                        ) : null}
-                      </View>
-                    </TouchableOpacity>
-                  ))}
+                        </TouchableOpacity>
+                      ))
+                  )}
                 </ScrollView>
               </View>
             )}
@@ -339,13 +373,37 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
                   <Text className="text-red-600 text-xs mb-2">{errors.unit}</Text>
                 ) : <View className="mb-1" />}
                 {unitPickerOpen && (
-                  <View className="max-h-40 border border-gray-200 rounded mb-2 bg-white">
+                  <View className="max-h-60 border border-gray-200 rounded mb-2 bg-white">
+                    {/* Search input */}
+                    <View className="p-2 border-b border-gray-200">
+                      <TextInput
+                        value={unitSearchQuery}
+                        onChangeText={setUnitSearchQuery}
+                        placeholder="Type to search units..."
+                        className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+                        autoFocus
+                      />
+                    </View>
                     <ScrollView>
-                      {units.map((opt) => (
-                        <TouchableOpacity key={opt.value} onPress={() => { setFormUnit(opt.value); setErrors((e)=>({ ...e, unit: undefined })); setUnitPickerOpen(false); }} className="px-3 py-2">
-                          <Text className="text-gray-800">{opt.label}</Text>
-                        </TouchableOpacity>
-                      ))}
+                      {units
+                        .filter((opt) => {
+                          if (!unitSearchQuery.trim()) return true;
+                          return opt.label.toLowerCase().includes(unitSearchQuery.toLowerCase());
+                        })
+                        .map((opt) => (
+                          <TouchableOpacity
+                            key={opt.value}
+                            onPress={() => {
+                              setFormUnit(opt.value);
+                              setErrors((e) => ({ ...e, unit: undefined }));
+                              setUnitPickerOpen(false);
+                              setUnitSearchQuery('');
+                            }}
+                            className="px-3 py-2 border-b border-gray-100"
+                          >
+                            <Text className="text-gray-800">{opt.label}</Text>
+                          </TouchableOpacity>
+                        ))}
                     </ScrollView>
                   </View>
                 )}

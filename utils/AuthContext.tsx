@@ -287,6 +287,21 @@ export const AuthProvider = ({ children }) => {
     return profile?.roles?.name || 'unknown';
   };
 
+  // Allow consumers to manually retry profile loading if it gets stuck
+  const refreshProfile = async () => {
+    try {
+      const uid = userIdRef.current;
+      if (!uid) return false;
+      // Reset in-flight guard so we can retry
+      profileLoadingRef.current = false;
+      await loadUserProfile(uid);
+      return true;
+    } catch (e) {
+      console.error('Error refreshing profile:', e);
+      return false;
+    }
+  };
+
   const value = {
     user,
     profile,
@@ -301,6 +316,7 @@ export const AuthProvider = ({ children }) => {
     isProjectLead,
     hasPermission,
     getUserRole,
+    refreshProfile,
   };
 
   return (

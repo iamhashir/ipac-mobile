@@ -56,9 +56,15 @@ export const auth = {
     return { error };
   },
 
-  // Get current session
+  // Get current session (recover from invalid refresh tokens on RN)
   getSession: async () => {
-    const { data: { session }, error } = await supabase.auth.getSession();
+    const { data, error } = await supabase.auth.getSession();
+    const session = data?.session || null;
+    if (error && (String(error.message).includes('Invalid Refresh Token') || String(error.message).includes('Refresh Token Not Found'))) {
+      // Clear bad local session to avoid app-breaking errors and let user re-auth
+      try { await supabase.auth.signOut(); } catch (_) {}
+      return { session: null, error: null };
+    }
     return { session, error };
   },
 
@@ -789,14 +795,40 @@ export const db = {
     return { data, error };
   },
 
-  // Packaging: packing types lookup
+  // Packaging: packing types lookup (try both correct and misspelled vacuum flags; fallback if both missing)
   getPackingTypesByIds: async (ids) => {
     if (!ids || ids.length === 0) return { data: [], error: null };
-    const { data, error } = await supabase
+
+    // Attempt 1: correct column name
+    let r1 = await supabase
+      .from('packing_types')
+      .select('id, name, code, includes_vacuum_protection')
+      .in('id', ids);
+    if (!r1.error) return { data: r1.data, error: null };
+
+    // Attempt 2: some environments have a misspelled column: inlcudes_vacuum_protecton
+    const r2 = await supabase
+      .from('packing_types')
+      .select('id, name, code, inlcudes_vacuum_protecton')
+      .in('id', ids);
+    if (!r2.error) {
+      const mapped = (r2.data || []).map((t: any) => ({
+        id: t.id,
+        name: t.name,
+        code: t.code,
+        includes_vacuum_protection: !!t.inlcudes_vacuum_protecton,
+      }));
+      return { data: mapped, error: null };
+    }
+
+    // Attempt 3: fallback without flag
+    const r3 = await supabase
       .from('packing_types')
       .select('id, name, code')
       .in('id', ids);
-    return { data, error };
+    if (r3.error) return { data: null, error: r3.error };
+    const withFlag = (r3.data || []).map((t: any) => ({ ...t, includes_vacuum_protection: false }));
+    return { data: withFlag, error: null };
   },
 
   getAllMaterials: async () => {
@@ -859,6 +891,52 @@ export const db = {
         .order('variant_name');
       variants = r2.data;
       varErr = r2.error;
+    }
+
+    if (varErr) return { data: null, error: varErr };
+
+    const items = (variants || []).map((v: any) => ({
+      id: v.id,
+      value: v.id,
+      label: v.variant_name,
+      material_id: v.material_id,
+      unit_id: v?.materials?.unit_id || null,
+      unit_name: v?.materials?.units_of_measure?.name || null,
+    }));
+    return { data: items, error: null };
+  },
+
+  // Material variants filtered by material name (case-insensitive, partial match)
+  getMaterialVariantsByMaterialName: async (materialName) => {
+    // Step 1: find materials whose name includes the provided text (case-insensitive)
+    const { data: mats, error: matsErr } = await supabase
+      .from('materials')
+      .select('id, name, unit_id, units_of_measure:unit_id ( id, name )')
+      .ilike('name', `%${materialName}%`);
+    if (matsErr) return { data: null, error: matsErr };
+    const materialIds = Array.from(new Set((mats || []).map((m: any) => m.id).filter(Boolean)));
+    if (!materialIds.length) return { data: [], error: null };
+
+    // Step 2: get variants for those materials, include material unit if possible
+    let variants: any = null;
+    let varErr: any = null;
+    {
+      const r = await supabase
+        .from('material_variants')
+        .select(`
+          id,
+          variant_name,
+          material_id,
+          materials:material_id (
+            id,
+            unit_id,
+            units_of_measure:unit_id ( id, name )
+          )
+        `)
+        .in('material_id', materialIds)
+        .order('variant_name');
+      variants = r.data;
+      varErr = r.error;
     }
 
     if (varErr) return { data: null, error: varErr };
@@ -982,6 +1060,15 @@ export const db = {
     }
   },
 
+  addPackageItem: async ({ orderPackageId, designation, quantity }) => {
+    const { data, error } = await supabase
+      .from('package_items')
+      .insert({ order_package_id: orderPackageId, designation, quantity })
+      .select('id')
+      .single();
+    return { data, error };
+  },
+
   getAllPackingTypes: async () => {
     const { data, error } = await supabase
       .from('packing_types')
@@ -991,13 +1078,12 @@ export const db = {
   },
 
   updatePackageInfo: async (id, fields) => {
-    const { data, error } = await supabase
+    // Do not include non-existent columns to avoid 400 errors
+    const { error } = await supabase
       .from('package_info')
-      .update({ ...fields, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select('id')
-      .single();
-    return { data, error };
+      .update({ ...fields })
+      .eq('id', id);
+    return { data: { id }, error };
   },
 
   // Ensure there is a linked EMPTY final package_info for this order package
@@ -1016,6 +1102,26 @@ export const db = {
     const { error: updErr } = await supabase
       .from('order_packages')
       .update({ final_pkg_info: created.id })
+      .eq('id', orderPackageId);
+    if (updErr) return { data: null, error: updErr };
+
+    return { data: { id: created.id }, error: null };
+  },
+
+  // Ensure there is a linked EMPTY original package_info for this order package
+  ensureOriginalPackageInfo: async ({ orderPackageId, originalInfoId }) => {
+    if (originalInfoId) return { data: { id: originalInfoId }, error: null };
+
+    const { data: created, error: createErr } = await supabase
+      .from('package_info')
+      .insert({})
+      .select('id')
+      .single();
+    if (createErr || !created) return { data: null, error: createErr };
+
+    const { error: updErr } = await supabase
+      .from('order_packages')
+      .update({ original_pkg_info: created.id })
       .eq('id', orderPackageId);
     if (updErr) return { data: null, error: updErr };
 
@@ -1042,23 +1148,130 @@ export const db = {
   },
 
   updateSecuringTemplate: async (templateId, fields) => {
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('securing_template')
       .update({ ...fields })
-      .eq('id', templateId)
-      .select('id')
-      .single();
-    return { data, error };
+      .eq('id', templateId);
+    return { data: { id: templateId }, error };
   },
 
   updateBeam: async (beamId, fields) => {
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('beam')
       .update({ ...fields })
-      .eq('id', beamId)
+      .eq('id', beamId);
+    return { data: { id: beamId }, error };
+  },
+
+  // Ensure the securing_template (and beams) for a given side are not shared by other sides.
+  // If shared, clone beams + template and re-link the current side to the new template.
+  ensureUniqueTemplateForSide: async (orderPackageId: string, side: string, isFinal: boolean) => {
+    // 1) Fetch this side's securing row with template + beams
+    const { data: secRows, error: secErr } = await supabase
+      .from('order_package_securing')
+      .select(`
+        id,
+        securing_template_id,
+        securing_template:securing_template(
+          id, quantity, type_id, thickness,
+          horizontal_bar:beam!securing_template_horizontal_bar_fkey(id, quantity, type, width, thickness, space),
+          vertical_bar:beam!securing_template_vertical_bar_fkey(id, quantity, type, width, thickness, space),
+          skids:beam!securing_template_skids_fkey(id, quantity, type, width, thickness, space)
+        )
+      `)
+      .eq('order_package_id', orderPackageId)
+      .eq('securing_side', side)
+      .eq('is_final', isFinal)
+      .limit(1);
+    if (secErr || !secRows || !secRows.length) return { data: null, error: secErr };
+    const current = secRows[0] as any;
+    const tmplId = current.securing_template_id;
+
+    // If for any reason there is no template linked yet, create an empty one and link it
+    if (!tmplId) {
+      // Create empty beams
+      const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
+      const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
+      let skId: any = null;
+      if (side === 'base') { const { data: sk } = await supabase.from('beam').insert({}).select('id').single(); skId = sk?.id || null; }
+      const tmplPayload: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
+      if (skId) tmplPayload.skids = skId;
+      const { data: newEmpty, error: newErr } = await supabase
+        .from('securing_template')
+        .insert(tmplPayload)
+        .select('id')
+        .single();
+      if (newErr || !newEmpty) return { data: null, error: newErr };
+      const { error: linkErr } = await supabase
+        .from('order_package_securing')
+        .update({ securing_template_id: newEmpty.id })
+        .eq('id', current.id);
+      if (linkErr) return { data: null, error: linkErr };
+      return { data: { id: newEmpty.id, created: true }, error: null };
+    }
+
+    // 2) Count how many rows reference this template id
+    const { data: others, error: countErr } = await supabase
+      .from('order_package_securing')
+      .select('id, securing_side')
+      .eq('securing_template_id', tmplId);
+    if (countErr) return { data: null, error: countErr };
+    if ((others || []).length <= 1) return { data: { id: tmplId, unchanged: true }, error: null };
+
+    // 3) Clone beams
+    const cloneBeam = async (b: any) => {
+      if (!b?.id) return null;
+      const { data: nb, error: bErr } = await supabase
+        .from('beam')
+        .insert({
+          quantity: b.quantity ?? null,
+          type: b.type ?? null,
+          width: b.width ?? null,
+          thickness: b.thickness ?? null,
+          space: b.space ?? null,
+        })
+        .select('id')
+        .single();
+      if (bErr) throw bErr;
+      return nb?.id || null;
+    };
+
+    let hbId: string | null = null; let vbId: string | null = null; let skId: string | null = null;
+    try {
+      hbId = await cloneBeam(current.securing_template?.horizontal_bar);
+      vbId = await cloneBeam(current.securing_template?.vertical_bar);
+      if (side === 'base' && current.securing_template?.skids) {
+        skId = await cloneBeam(current.securing_template?.skids);
+      }
+    } catch (e) {
+      return { data: null, error: e };
+    }
+
+    // 4) Clone template
+    const tmplPayload: any = {
+      quantity: current.securing_template?.quantity ?? null,
+      type_id: current.securing_template?.type_id ?? null,
+      thickness: current.securing_template?.thickness ?? null,
+      horizontal_bar: hbId,
+      vertical_bar: vbId,
+    };
+    if (skId) tmplPayload.skids = skId;
+
+    const { data: newTmpl, error: tmplErr } = await supabase
+      .from('securing_template')
+      .insert(tmplPayload)
       .select('id')
       .single();
-    return { data, error };
+    if (tmplErr || !newTmpl) return { data: null, error: tmplErr };
+
+    // 5) Relink this side to new template
+    const { error: updErr } = await supabase
+      .from('order_package_securing')
+      .update({ securing_template_id: newTmpl.id })
+      .eq('id', current.id);
+    if (updErr) return { data: null, error: updErr };
+
+    return { data: { id: newTmpl.id, cloned: true }, error: null };
   },
 
   // Ensure final securing rows exist (empty) for any side that has an original
@@ -1102,6 +1315,91 @@ export const db = {
         const { error: secErr } = await supabase
           .from('order_package_securing')
           .insert({ order_package_id: orderPackageId, securing_template_id: tmpl?.id, securing_side: side, is_final: true })
+          .select('id')
+          .single();
+        if (secErr) return { data: null, error: secErr };
+      }
+    }
+
+    return { data: { ensured: true }, error: null };
+  },
+
+  // Ensure Final templates are empty and isolated from Original or other sides for this package
+  decoupleAndClearFinalTemplates: async (orderPackageId: string) => {
+    // Load all securing rows with template id
+    const { data: rows, error } = await supabase
+      .from('order_package_securing')
+      .select('id, securing_side, is_final, securing_template_id')
+      .eq('order_package_id', orderPackageId);
+    if (error) return { data: null, error };
+
+    // Build reference counts for template usage within this package
+    const counts: Record<string, number> = {};
+    (rows || []).forEach((r: any) => { if (r.securing_template_id) counts[r.securing_template_id] = (counts[r.securing_template_id] || 0) + 1; });
+
+    // For each FINAL row, if its template is shared OR null, then create a brand new EMPTY template and link it
+    for (const r of (rows || [])) {
+      if (!r.is_final) continue;
+      const tmplId = r.securing_template_id;
+      const needsNew = !tmplId || (counts[tmplId] || 0) > 1;
+      if (!needsNew) continue;
+
+      // Create empty beams
+      const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
+      const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
+      let skId: any = null;
+      if (r.securing_side === 'base') { const { data: sk } = await supabase.from('beam').insert({}).select('id').single(); skId = sk?.id || null; }
+
+      // Empty template payload
+      const emptyTmpl: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
+      if (skId) emptyTmpl.skids = skId;
+      const { data: newTmpl, error: newErr } = await supabase
+        .from('securing_template')
+        .insert(emptyTmpl)
+        .select('id')
+        .single();
+      if (newErr || !newTmpl) return { data: null, error: newErr };
+
+      const { error: linkErr } = await supabase
+        .from('order_package_securing')
+        .update({ securing_template_id: newTmpl.id })
+        .eq('id', r.id);
+      if (linkErr) return { data: null, error: linkErr };
+    }
+
+    return { data: { normalized: true }, error: null };
+  },
+
+  // Ensure original securing rows exist (empty) if missing
+  ensureOriginalSecuringForPackage: async (orderPackageId: string) => {
+    const { data: rows, error } = await supabase
+      .from('order_package_securing')
+      .select('id, securing_side, is_final')
+      .eq('order_package_id', orderPackageId);
+    if (error) return { data: null, error };
+
+    const sides = ['big_sides','small_sides','lid','base'] as const;
+    const hasOriginal: Record<string, boolean> = {};
+    (rows || []).forEach((r: any) => { if (!r.is_final) hasOriginal[r.securing_side] = true; });
+
+    for (const side of sides) {
+      if (!hasOriginal[side]) {
+        const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
+        const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
+        let skId: any = null;
+        if (side === 'base') { const { data: sk } = await supabase.from('beam').insert({}).select('id').single(); skId = sk?.id || null; }
+        const tmplPayload: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
+        if (skId) tmplPayload.skids = skId;
+        const { data: tmpl, error: tmplErr } = await supabase
+          .from('securing_template')
+          .insert(tmplPayload)
+          .select('id')
+          .single();
+        if (tmplErr) return { data: null, error: tmplErr };
+
+        const { error: secErr } = await supabase
+          .from('order_package_securing')
+          .insert({ order_package_id: orderPackageId, securing_template_id: tmpl?.id, securing_side: side, is_final: false })
           .select('id')
           .single();
         if (secErr) return { data: null, error: secErr };

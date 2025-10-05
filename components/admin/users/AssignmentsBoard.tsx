@@ -360,6 +360,8 @@ export default function AssignmentsBoard() {
                   key={p.id}
                   packer={p}
                   onPress={(id) => router.push(`/(admin)/users/${id}`)}
+                  moveOptions={orders.map(o => ({ id: o.id, label: o.order_name }))}
+                  onMoveTo={(destId) => requestAssign(destId, p.id, p.full_name, null)}
                 />
               ))}
             </View>
@@ -390,6 +392,7 @@ export default function AssignmentsBoard() {
                 <OrderLane
                   key={o.id}
                   order={o}
+                  allOrders={orders}
                   onDropPacker={requestAssign}
                   onOpenProfile={(id) => router.push(`/(admin)/users/${id}`)}
                   onMakeLead={async (orderId, packerId) => {
@@ -416,6 +419,7 @@ export default function AssignmentsBoard() {
                 <OrderLane
                   key={o.id}
                   order={o}
+                  allOrders={orders}
                   onDropPacker={requestAssign}
                   onOpenProfile={(id) => router.push(`/(admin)/users/${id}`)}
                   onMakeLead={async (orderId, packerId) => {

@@ -12,6 +12,7 @@ import PackingListTable, { PackingRow } from '../../components/packing/PackingLi
 import BoxDetailsTab from '../../components/packing/BoxDetailsTab';
 import OrderTasksManagement from '../../components/packing/order_tasks_management';
 import OrderSecuringSection from '../../components/packing/OrderSecuringSection';
+import VacuumPackingSection from '../../components/packing/VacuumPackingSection';
 import AccessoriesSection from '../../components/packing/AccessoriesSection';
 import CollapsibleCard from '../../components/packing/common/CollapsibleCard';
 
@@ -120,6 +121,11 @@ export default function PackingReportPage() {
       const sorted = (pkgs || []).sort((a, b) => (a.package_number || 0) - (b.package_number || 0));
       setOrderPackages(sorted);
 
+      // Ensure securing rows exist for FINAL for all packages (packers edit final)
+      for (const p of sorted) {
+        try { await db.ensureFinalSecuringForPackage(p.id); } catch (_) {}
+      }
+
       // Load original and final package_info rows
       const finalInfoIds = Array.from(new Set(sorted.map(p => p.final_pkg_info).filter(Boolean))) as string[];
       const originalInfoIds = Array.from(new Set(sorted.map(p => p.original_pkg_info).filter(Boolean))) as string[];
@@ -140,9 +146,11 @@ export default function PackingReportPage() {
         }
         if (packingIds.length) {
           const { data: types } = await db.getPackingTypesByIds(packingIds);
-          const p: Record<string, string> = {};
-          (types || []).forEach((t: any) => { p[t.id] = t.code; });
-          setPackingTypes(p);
+          const pMap: Record<string, string> = {};
+          const vMap: Record<string, boolean> = {};
+          (types || []).forEach((t: any) => { pMap[t.id] = t.code; vMap[t.id] = !!t.includes_vacuum_protection; });
+          setPackingTypes(pMap);
+          setPackTypeHasVacuum(vMap);
         }
       }
 
@@ -169,6 +177,8 @@ export default function PackingReportPage() {
       setLoading(false);
     }
   };
+
+  const [packTypeHasVacuum, setPackTypeHasVacuum] = useState<Record<string, boolean>>({});
 
   const rows: PackingRow[] = useMemo(() => {
     return orderPackages.map(p => {
@@ -298,6 +308,18 @@ export default function PackingReportPage() {
             >
               <OrderSecuringSection orderPackageId={p.id} />
             </View>
+
+            {/* Vacuum packing (Final packing type) */}
+            {(() => {
+              const finalId = (pkgInfoMap[p.final_pkg_info || ''] as any)?.packing_type_id || null;
+              const originalId = (pkgInfoMap[p.original_pkg_info || ''] as any)?.packing_type_id || null;
+              const hasVac = (finalId && packTypeHasVacuum[finalId]) || (originalId && packTypeHasVacuum[originalId]);
+              return hasVac ? (
+                <View>
+                  <VacuumPackingSection orderPackageId={p.id} />
+                </View>
+              ) : null;
+            })()}
 
             {/* Accessories section */}
             <View

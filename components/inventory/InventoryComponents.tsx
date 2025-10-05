@@ -101,7 +101,10 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
             )}
             <View className="flex-row items-center mb-2">
               <Text className="text-sm text-gray-500">
-                Unit: {material.unit?.name && material.unit.name.trim() && material.unit.name.trim() !== '.' ? material.unit.name : 'No unit specified'}
+                Unit: {(() => {
+                  const unitName = material.unit?.name;
+                  return unitName && unitName.trim() && unitName.trim() !== '.' ? unitName : 'No unit specified';
+                })()}
               </Text>
             </View>
 
@@ -284,7 +287,10 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                                           AED {pricing.price?.toFixed(2) || '0.00'}
                                         </Text>
                                         <Text className="text-xs text-gray-500">
-                                          {pricing.units_of_measure?.name && pricing.units_of_measure.name.trim() && pricing.units_of_measure.name.trim() !== '.' ? `per ${pricing.units_of_measure.name}` : 'per unit'}
+                                          {(() => {
+                                            const unitName = pricing.units_of_measure?.name;
+                                            return unitName && unitName.trim() && unitName.trim() !== '.' ? `per ${unitName}` : 'per unit';
+                                          })()}
                                         </Text>
                                       </View>
                                       
@@ -713,7 +719,8 @@ const [availableTags, setAvailableTags] = useState<Tag[]>(tags);
               <Text className="text-gray-900">
                 {(() => {
                   const unit = units.find(u => u.id === formData.unit_id);
-                  return unit?.name && unit.name.trim() && unit.name.trim() !== '.' ? unit.name : 'Select unit';
+                  const unitName = unit?.name;
+                  return unitName && unitName.trim() && unitName.trim() !== '.' ? unitName : 'Select unit';
                 })()}
               </Text>
               <ChevronDown size={16} color="#6b7280" />
@@ -1146,7 +1153,10 @@ function VariantCard({
                               AED {pricing.price.toFixed(2)}
                             </Text>
                             <Text className="text-xs text-gray-500">
-                              per {pricing.units_of_measure?.name && pricing.units_of_measure.name.trim() && pricing.units_of_measure.name.trim() !== '.' ? pricing.units_of_measure.name : 'unit'}
+                              per {(() => {
+                                const unitName = pricing.units_of_measure?.name;
+                                return unitName && unitName.trim() && unitName.trim() !== '.' ? unitName : 'unit';
+                              })()}
                             </Text>
                           </View>
                           
@@ -1760,7 +1770,10 @@ export function SupplierProductModal({
                           {formatPrice(item.price)}
                         </Text>
                         <Text className="text-sm text-gray-600">
-                          per {item.units_of_measure?.name && item.units_of_measure.name.trim() && item.units_of_measure.name.trim() !== '.' ? item.units_of_measure.name : 'unit'}
+                          per {(() => {
+                            const unitName = item.units_of_measure?.name;
+                            return unitName && unitName.trim() && unitName.trim() !== '.' ? unitName : 'unit';
+                          })()}
                         </Text>
                         {item.stock_level !== null && (
                           <Text className="text-sm text-blue-600 mt-1">

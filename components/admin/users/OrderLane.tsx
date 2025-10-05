@@ -13,12 +13,13 @@ export interface OrderLaneModel {
 
 interface OrderLaneProps {
   order: OrderLaneModel;
+  allOrders?: { id: string; order_name: string }[];
   onDropPacker?: (orderId: string, packerId: string, packerName?: string, originOrderId?: string | null) => void;
   onOpenProfile?: (packerId: string) => void;
   onMakeLead?: (orderId: string, packerId: string) => void;
 }
 
-export default function OrderLane({ order, onDropPacker, onOpenProfile, onMakeLead }: OrderLaneProps) {
+export default function OrderLane({ order, allOrders = [], onDropPacker, onOpenProfile, onMakeLead }: OrderLaneProps) {
   const [isOver, setIsOver] = useState(false);
   const dropProps: any = {};
   if (Platform.OS === 'web') {
@@ -67,9 +68,28 @@ export default function OrderLane({ order, onDropPacker, onOpenProfile, onMakeLe
               <div className="text-gray-500 italic">{emptyText}</div>
             ) : (
               <div className="flex flex-row flex-wrap gap-2">
-                {order.packers.map((p) => (
-                  <PackerCard key={p.id} packer={p} draggable={true} isLead={order.teamLeadId === p.id} originOrderId={order.id} onPress={onOpenProfile} onMakeLead={(pid) => onMakeLead?.(order.id, pid)} />
-                ))}
+                {order.packers.map((p) => {
+                  const options = [
+                    { id: 'POOL', label: 'Available Packers (Unassign)' },
+                    ...allOrders.filter((o) => o.id !== order.id).map((o) => ({ id: o.id, label: o.order_name }))
+                  ];
+                  return (
+                    <PackerCard
+                      key={p.id}
+                      packer={p}
+                      draggable={true}
+                      isLead={order.teamLeadId === p.id}
+                      originOrderId={order.id}
+                      onPress={onOpenProfile}
+                      onMakeLead={(pid) => onMakeLead?.(order.id, pid)}
+                      moveOptions={options}
+                      onMoveTo={(destId) => {
+                        if (destId === 'POOL') onDropPacker?.('POOL', p.id, p.full_name, order.id);
+                        else onDropPacker?.(destId, p.id, p.full_name, order.id);
+                      }}
+                    />
+                  );
+                })}
               </div>
             )}
           </CardContent>
@@ -94,9 +114,28 @@ export default function OrderLane({ order, onDropPacker, onOpenProfile, onMakeLe
             <Text className="text-gray-500">{emptyText}</Text>
           ) : (
             <View className="flex-row flex-wrap gap-2">
-              {order.packers.map((p) => (
-                <PackerCard key={p.id} packer={p} draggable={false} isLead={order.teamLeadId === p.id} originOrderId={order.id} onPress={onOpenProfile} onMakeLead={(pid) => onMakeLead?.(order.id, pid)} />
-              ))}
+              {order.packers.map((p) => {
+                const options = [
+                  { id: 'POOL', label: 'Available Packers (Unassign)' },
+                  ...allOrders.filter((o) => o.id !== order.id).map((o) => ({ id: o.id, label: o.order_name }))
+                ];
+                return (
+                  <PackerCard
+                    key={p.id}
+                    packer={p}
+                    draggable={false}
+                    isLead={order.teamLeadId === p.id}
+                    originOrderId={order.id}
+                    onPress={onOpenProfile}
+                    onMakeLead={(pid) => onMakeLead?.(order.id, pid)}
+                    moveOptions={options}
+                    onMoveTo={(destId) => {
+                      if (destId === 'POOL') onDropPacker?.('POOL', p.id, p.full_name, order.id);
+                      else onDropPacker?.(destId, p.id, p.full_name, order.id);
+                    }}
+                  />
+                );
+              })}
             </View>
           )}
         </CardContent>

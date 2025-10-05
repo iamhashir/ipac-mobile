@@ -1,6 +1,5 @@
-import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Dimensions } from 'react-native';
-import CollapsibleCard from './common/CollapsibleCard';
+import React, { useEffect, useMemo, useState } from 'react';
+import { View, Text, TouchableOpacity, Platform } from 'react-native';
 import GroupBox from './common/GroupBox';
 import TwoTierEditableCard from './common/TwoTierEditableCard';
 import { db } from '../../utils/api/supabase';
@@ -18,22 +17,14 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 
   const [materials, setMaterials] = useState<{ label: string; value: string }[]>([]);
   const [data, setData] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<Side>('big_sides');
-  const scrollViewRef = useRef<ScrollView>(null);
-  const screenWidth = Dimensions.get('window').width;
-  const pageWidth = screenWidth - 32;
-  const indexRef = useRef(0);
-  const [isScrolling, setIsScrolling] = useState(false);
-  const [pageHeights, setPageHeights] = useState<Record<Side, number>>({
-    big_sides: 0,
-    small_sides: 0,
-    lid: 0,
-    base: 0,
-  });
+  // Simplified tabs: remove horizontal ScrollView state to avoid jitter
 
   useEffect(() => {
     const init = async () => {
       const { data: mats } = await db.getAllMaterials();
       setMaterials((mats || []).map((m: any) => ({ label: m.name, value: m.id })));
+      // Normalize securing rows so each side/tier has its own template and finals start empty
+      try { await db.decoupleAndClearFinalTemplates(orderPackageId); } catch (_) {}
       const { data } = await db.getSecuringForPackage(orderPackageId);
       setData(data || []);
     };
@@ -63,21 +54,8 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 
   };
 
   const handleTabPress = (tab: Side, index: number) => {
-    if (isScrolling) return; // Prevent conflicts during scrolling
-    
+    // With simplified content rendering, just switch the tab
     setActiveTab(tab);
-    indexRef.current = index;
-    setIsScrolling(true);
-    
-    requestAnimationFrame(() => {
-      scrollViewRef.current?.scrollTo({ 
-        x: index * pageWidth, 
-        animated: true 
-      });
-      
-      // Reset scrolling flag after animation
-      setTimeout(() => setIsScrolling(false), 300);
-    });
   };
 
   // Add keyboard navigation support for web
@@ -102,18 +80,21 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 
         }
         
         if (newIndex !== currentIndex && newIndex >= 0) {
-          console.log(`Keyboard navigation: ${currentTabs[currentIndex]?.label} -> ${currentTabs[newIndex]?.label}`);
           handleTabPress(currentTabs[newIndex].key as Side, newIndex);
         }
       }
     };
 
-    // Only add keyboard listener on web platforms
-    if (typeof window !== 'undefined') {
-      window.addEventListener('keydown', handleKeyDown);
-      return () => window.removeEventListener('keydown', handleKeyDown);
+    // Only add keyboard listener on web platforms (avoid RN where window.addEventListener is undefined)
+    if (
+      Platform.OS === 'web' &&
+      typeof window !== 'undefined' &&
+      typeof (window as any).addEventListener === 'function'
+    ) {
+      window.addEventListener('keydown', handleKeyDown as any);
+      return () => window.removeEventListener('keydown', handleKeyDown as any);
     }
-  }, [activeTab, isScrolling]);
+  }, [activeTab]);
 
   const renderSideContent = (side: Side) => {
     const orig = bySide[side].original;
@@ -123,21 +104,58 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 
 
     const saveTemplate = async (fields: any) => {
       if (!editable) return;
-      const t = (editTarget === 'final') ? tmplFin : tmplOrig;
-      if (!t?.id) return;
-      await db.updateSecuringTemplate(t.id, fields);
+      const isFinal = editTarget === 'final';
+
+      // Always ensure the target tier exists and then ensure this side has its own template
+      try {
+        if (isFinal) {
+          await db.ensureFinalSecuringForPackage(orderPackageId);
+        } else {
+          await db.ensureOriginalSecuringForPackage(orderPackageId);
+        }
+      } catch (_) {}
+      await db.ensureUniqueTemplateForSide(orderPackageId, side, isFinal);
+
+      // Re-fetch to resolve the correct template id for this side/tier
+      const { data: fresh } = await db.getSecuringForPackage(orderPackageId);
+      setData(fresh || []);
+      const target = (fresh || []).find((r: any) => r.securing_side === side && r.is_final === isFinal);
+      const currentTemplateId = target?.securing_template?.id || null;
+      if (!currentTemplateId) return;
+
+      await db.updateSecuringTemplate(currentTemplateId, fields);
+      // Refresh so UI reflects saved value
+      const { data: updated } = await db.getSecuringForPackage(orderPackageId);
+      setData(updated || []);
     };
 
     const saveBeam = async (beamKey: 'horizontal_bar' | 'vertical_bar' | 'skids', fields: any) => {
       if (!editable) return;
-      const t = (editTarget === 'final') ? tmplFin : tmplOrig;
-      const beam = t?.[beamKey];
-      if (!beam?.id) return;
-      await db.updateBeam(beam.id, fields);
+      const isFinal = editTarget === 'final';
+
+      // Always ensure tier exists and this side has its own template (and beams)
+      try {
+        if (isFinal) {
+          await db.ensureFinalSecuringForPackage(orderPackageId);
+        } else {
+          await db.ensureOriginalSecuringForPackage(orderPackageId);
+        }
+      } catch (_) {}
+      await db.ensureUniqueTemplateForSide(orderPackageId, side, isFinal);
+
+      const { data: fresh } = await db.getSecuringForPackage(orderPackageId);
+      setData(fresh || []);
+      const target = (fresh || []).find((r: any) => r.securing_side === side && r.is_final === isFinal);
+      const beamId = target?.securing_template?.[beamKey]?.id || null;
+      if (!beamId) return;
+
+      await db.updateBeam(beamId, fields);
+      const { data: updated } = await db.getSecuringForPackage(orderPackageId);
+      setData(updated || []);
     };
 
     return (
-      <View style={{ width: screenWidth - 32 }} className="px-4">
+      <View className="px-4">
         {/* Top row: Quantity | Type | Thickness */}
         <View className="flex-row flex-wrap">
           <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.quantity ?? null} final={tmplFin?.quantity ?? null} type="number" onChange={(v) => saveTemplate({ quantity: v })} width={smallWidth} />
@@ -189,11 +207,28 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 
   ];
 
   return (
-    <View className="mt-2 mb-6 border border-blue-200 rounded-lg mx-4 bg-blue-50">
-      <Text className="text-blue-800 font-semibold text-lg px-4 pt-4">Securing</Text>
+    <View style={{ marginTop: 8, marginBottom: 24, borderWidth: 1, borderColor: '#bfdbfe', borderRadius: 12, marginHorizontal: 16, backgroundColor: '#eff6ff' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 16 }}>
+        <Text style={{ color: '#1e40af', fontWeight: '600', fontSize: 18 }}>Securing</Text>
+        {editTarget === 'original' && (
+          <TouchableOpacity
+            onPress={async () => {
+              try {
+                await db.ensureOriginalSecuringForPackage(orderPackageId);
+                const { data: fresh } = await db.getSecuringForPackage(orderPackageId);
+                setData(fresh || []);
+              } catch (_) {}
+            }}
+            disabled={!editable}
+            style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, backgroundColor: editable ? '#2563eb' : '#d1d5db' }}
+          >
+            <Text style={{ color: 'white' }}>Save</Text>
+          </TouchableOpacity>
+        )}
+      </View>
       
-      {/* Tabs header */}
-      <View className="flex-row items-end gap-6 px-4 mt-2 border-b border-blue-200">
+      {/* Tabs header (no className to avoid css-interop navigation checks) */}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', columnGap: 24, paddingHorizontal: 16, marginTop: 8, borderBottomWidth: 1, borderBottomColor: '#bfdbfe' }}>
         {tabs.map((tab, index) => {
           const isActive = activeTab === tab.key;
           return (
@@ -201,136 +236,44 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 
               key={tab.key} 
               onPress={() => handleTabPress(tab.key, index)} 
               activeOpacity={0.8}
-              disabled={isScrolling}
             >
-              <View className={`transition-all duration-200 ${
-                isActive 
-                  ? 'bg-white border border-blue-300 border-b-0 rounded-t-xl px-4 py-2 -mb-[1px] shadow-sm' 
-                  : 'px-4 pb-2 hover:bg-blue-100/50 rounded-t-lg'
-              }`}>
-                <Text className={`transition-all duration-200 ${
-                  isActive 
-                    ? 'text-blue-700 font-semibold' 
-                    : 'text-blue-600/70 hover:text-blue-600'
-                }`}>
-                  {tab.label}
-                </Text>
+              <View style={{
+                backgroundColor: isActive ? 'white' : 'transparent',
+                borderWidth: isActive ? 1 : 0,
+                borderColor: '#93c5fd',
+                borderBottomWidth: 0,
+                borderTopLeftRadius: 12,
+                borderTopRightRadius: 12,
+                paddingHorizontal: 16,
+                paddingVertical: isActive ? 8 : 0,
+                marginBottom: isActive ? -1 : 0,
+                shadowColor: isActive ? '#000' : 'transparent',
+                shadowOpacity: isActive ? 0.05 : 0,
+                shadowRadius: isActive ? 2 : 0,
+              }}>
+                <Text style={{ color: isActive ? '#1d4ed8' : '#2563eb99', fontWeight: isActive ? '600' : '400' }}>{tab.label}</Text>
               </View>
             </TouchableOpacity>
           );
         })}
       </View>
 
-      {/* Carousel content */}
-      <View style={{ height: pageHeights[activeTab] || undefined }}>
-        <ScrollView
-          ref={scrollViewRef}
-          horizontal
-          pagingEnabled
-          showsHorizontalScrollIndicator={false}
-          decelerationRate="fast"
-          snapToInterval={pageWidth}
-          snapToAlignment="start"
-          bounces={true}
-          bouncesZoom={false}
-          alwaysBounceHorizontal={false}
-          onScrollBeginDrag={() => {
-            setIsScrolling(true);
-          }}
-          onScroll={(event) => {
-            const { contentOffset } = event.nativeEvent;
-            const progress = contentOffset.x / pageWidth;
-            const index = Math.round(progress);
-            
-            // Only update if we're close to a snap position
-            if (Math.abs(progress - index) < 0.1 && index >= 0 && index < tabs.length) {
-              if (indexRef.current !== index) {
-                indexRef.current = index;
-                setActiveTab(tabs[index].key);
-              }
-            }
-          }}
-          onMomentumScrollEnd={(event) => {
-            const { contentOffset } = event.nativeEvent;
-            let targetIndex = Math.round(contentOffset.x / pageWidth);
-            
-            // Ensure we're within bounds
-            targetIndex = Math.max(0, Math.min(targetIndex, tabs.length - 1));
-            
-            const targetX = targetIndex * pageWidth;
-            const offset = Math.abs(contentOffset.x - targetX);
-            
-            console.log(`Momentum end - Offset: ${contentOffset.x.toFixed(2)}, Target: ${targetX}, Delta: ${offset.toFixed(2)}, Index: ${targetIndex}`);
-            
-            // Force exact positioning if we're off by more than 1 pixel
-            if (offset > 1) {
-              console.log(`Correcting position from ${contentOffset.x.toFixed(2)} to ${targetX}`);
-              scrollViewRef.current?.scrollTo({ 
-                x: targetX, 
-                animated: true 
-              });
-            }
-            
-            // Update state
-            indexRef.current = targetIndex;
-            setActiveTab(tabs[targetIndex].key);
-            setIsScrolling(false);
-          }}
-          onScrollEndDrag={(event) => {
-            const { contentOffset, velocity } = event.nativeEvent;
-            
-            console.log(`Scroll end drag - Velocity: ${velocity.x.toFixed(2)}, Offset: ${contentOffset.x.toFixed(2)}`);
-            
-            // For low velocity or incomplete swipes, snap to nearest page
-            if (Math.abs(velocity.x) < 1.0) {
-              const progress = contentOffset.x / pageWidth;
-              const targetIndex = Math.round(progress);
-              const clampedIndex = Math.max(0, Math.min(targetIndex, tabs.length - 1));
-              const targetX = clampedIndex * pageWidth;
-              
-              // Only correct if we're noticeably off position
-              if (Math.abs(contentOffset.x - targetX) > 5) {
-                console.log(`Low velocity snap: ${contentOffset.x.toFixed(2)} -> ${targetX}`);
-                scrollViewRef.current?.scrollTo({ 
-                  x: targetX, 
-                  animated: true 
-                });
-              }
-              
-              indexRef.current = clampedIndex;
-              setActiveTab(tabs[clampedIndex].key);
-            }
-          }}
-          scrollEventThrottle={16}
-          contentContainerStyle={{ flexDirection: 'row' }}
-        >
-          {tabs.map(tab => (
-            <View key={tab.key} className="py-4"
-              style={{ width: pageWidth }}
-              onLayout={(e)=>{
-                const h = e.nativeEvent.layout.height;
-                setPageHeights(prev => ({ ...prev, [tab.key]: h }));
-              }}
-            >
-              {renderSideContent(tab.key)}
-            </View>
-          ))}
-        </ScrollView>
+      {/* Simple tab content (no horizontal scroll to avoid jitter) */}
+      <View style={{ paddingVertical: 16 }}>
+        {renderSideContent(activeTab)}
       </View>
       
-      {/* Carousel position indicators */}
-      <View className="flex-row justify-center items-center py-2 gap-2">
+      {/* Tab position indicators */}
+      <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingVertical: 8, columnGap: 8 }}>
         {tabs.map((tab, index) => {
           const isActive = activeTab === tab.key;
           return (
             <TouchableOpacity
               key={`indicator-${tab.key}`}
               onPress={() => handleTabPress(tab.key, index)}
-              className="p-1"
+              activeOpacity={0.8}
             >
-              <View className={`w-2 h-2 rounded-full transition-all duration-200 ${
-                isActive ? 'bg-blue-500 scale-110' : 'bg-blue-300'
-              }`} />
+              <View style={{ width: 8, height: 8, borderRadius: 9999, backgroundColor: isActive ? '#3b82f6' : '#93c5fd' }} />
             </TouchableOpacity>
           );
         })}

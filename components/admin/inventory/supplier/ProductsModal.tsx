@@ -85,7 +85,12 @@ const [supplierVariants, setSupplierVariants] = useState<any[]>([]);
                       </View>
                       <View className="items-end">
                         <Text className="text-lg font-bold text-green-600">{formatPrice(item.price)}</Text>
-                        <Text className="text-sm text-gray-600">per {item.units_of_measure?.name && item.units_of_measure.name.trim() && item.units_of_measure.name.trim() !== '.' ? item.units_of_measure.name : 'unit'}</Text>
+                        <Text className="text-sm text-gray-600">
+                          per {(() => {
+                            const unitName = item.units_of_measure?.name;
+                            return unitName && unitName.trim() && unitName.trim() !== '.' ? unitName : 'unit';
+                          })()}
+                        </Text>
                         {item.stock_level !== null && (
                           <Text className="text-sm text-blue-600 mt-1">Stock: {item.stock_level}</Text>
                         )}
@@ -130,38 +135,40 @@ const [supplierVariants, setSupplierVariants] = useState<any[]>([]);
             )}
 </ScrollView>
 
-          {/* Edit pricing modal */}
-          {editPricing && (
-            <View className="absolute inset-0 z-20">
+          {/* Edit pricing modal (separate Modal to avoid clipping by parent overflow) */}
+          <Modal visible={!!editPricing} transparent animationType="fade">
+            <View className="flex-1" style={{ minHeight: 300 }}>
               <TouchableOpacity className="absolute inset-0 bg-black/50" onPress={() => setEditPricing(null)} />
               <View className="flex-1 justify-center items-center p-6">
-                <View className="bg-white rounded-2xl w-full max-w-2xl z-30">
-                  <SupplierPricingForm
-                    variant={editPricing.material_variants as MaterialVariant}
-                    suppliers={[supplier]}
-                    units={allUnits}
-                    pricing={{ supplier_id: supplier.id, price: editPricing.price, unit_id: editPricing.units_of_measure?.id || editPricing.unit_id }}
-                    defaultUnitId={(editPricing.material_variants as MaterialVariant)?.unit_id}
-                    onSave={async (data: any) => {
-                      try {
-                        await pricingOperations.update(editPricing.id, {
-                          price: data.price,
-                          unit_id: data.unit_id,
-                          supplier_id: supplier.id,
-                        });
-                        setEditPricing(null);
-                        await loadSupplierVariants();
-                        onUpdate && onUpdate();
-                      } catch (e) {
-                        // noop
-                      }
-                    }}
-                    onCancel={() => setEditPricing(null)}
-                  />
+                <View className="bg-white rounded-2xl w-full max-w-2xl">
+                  {editPricing && (
+                    <SupplierPricingForm
+                      variant={editPricing.material_variants as MaterialVariant}
+                      suppliers={[supplier]}
+                      units={allUnits}
+                      pricing={{ supplier_id: supplier.id, price: editPricing.price, unit_id: editPricing.units_of_measure?.id || editPricing.unit_id }}
+                      defaultUnitId={(editPricing.material_variants as MaterialVariant)?.unit_id}
+                      onSave={async (data: any) => {
+                        try {
+                          await pricingOperations.update(editPricing.id, {
+                            price: data.price,
+                            unit_id: data.unit_id,
+                            supplier_id: supplier.id,
+                          });
+                          setEditPricing(null);
+                          await loadSupplierVariants();
+                          onUpdate && onUpdate();
+                        } catch (e) {
+                          // noop
+                        }
+                      }}
+                      onCancel={() => setEditPricing(null)}
+                    />
+                  )}
                 </View>
               </View>
             </View>
-          )}
+          </Modal>
 
           {/* Confirm delete pricing */}
           <ConfirmModal

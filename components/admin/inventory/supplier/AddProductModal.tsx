@@ -860,7 +860,12 @@ function SupplierVariantManager({
               onPress={() => setUnitDropdownOpen(prev => !prev)}
               className="border border-gray-300 rounded-lg px-3 py-2 flex-row items-center justify-between"
             >
-              <Text className="text-gray-900">{selectedUnit?.name && selectedUnit.name.trim() && selectedUnit.name.trim() !== '.' ? selectedUnit.name : 'Select unit'}</Text>
+              <Text className="text-gray-900">
+                {(() => {
+                  const unitName = selectedUnit?.name;
+                  return unitName && unitName.trim() && unitName.trim() !== '.' ? unitName : 'Select unit';
+                })()}
+              </Text>
               <ChevronDown size={16} color="#6b7280" />
             </TouchableOpacity>
             {unitDropdownOpen && (
