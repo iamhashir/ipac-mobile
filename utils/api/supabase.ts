@@ -142,9 +142,36 @@ export const auth = {
   },
 };
 
-// Profile cache to reduce database queries
+// Profile cache to reduce database queries (in-memory)
 const profileCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache
+
+// Persistent cache helpers (survive reloads) to prevent UI freezes on slow networks
+const PERSIST_TTL = 24 * 60 * 60 * 1000; // 24 hours
+const PROFILE_PERSIST_PREFIX = 'ipac:last_profile:';
+
+const persistGet = async (key: string) => {
+  try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window?.localStorage) {
+      return window.localStorage.getItem(key);
+    }
+    return await AsyncStorage.getItem(key);
+  } catch (_) {
+    return null;
+  }
+};
+
+const persistSet = async (key: string, value: string) => {
+  try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window?.localStorage) {
+      window.localStorage.setItem(key, value);
+      return;
+    }
+    await AsyncStorage.setItem(key, value);
+  } catch (_) {
+    // noop
+  }
+};
 
 // Helper functions for database operations
 export const db = {
@@ -159,18 +186,35 @@ export const db = {
 
   // Get user profile with role (with caching)
   getUserProfile: async (userId) => {
-    // Check cache first
+    // In-memory cache first (fastest)
     const cached = profileCache.get(userId);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
       console.log('✨ getUserProfile: Using cached profile for userId:', userId);
       return { data: cached.data, error: null };
     }
 
+    // Persistent cache second (prevents UI freeze on cold loads)
+    try {
+      const persistKey = `${PROFILE_PERSIST_PREFIX}${userId}`;
+      const persistedRaw = await persistGet(persistKey);
+      if (persistedRaw) {
+        const persisted = JSON.parse(persistedRaw);
+        if (persisted?.timestamp && (Date.now() - persisted.timestamp) < PERSIST_TTL) {
+          console.log('✨ getUserProfile: Using persisted profile for userId:', userId);
+          // Hydrate in-memory cache to speed up subsequent calls
+          profileCache.set(userId, { data: persisted.data, timestamp: persisted.timestamp });
+          return { data: persisted.data, error: null };
+        }
+      }
+    } catch (e) {
+      // Ignore persistence errors
+    }
+
     console.log('🔍 getUserProfile: Starting profile lookup for userId:', userId);
     
     try {
       // Primary query with join and a timeout guard to prevent UI freeze
-      const timeoutMs = 5000;
+      const timeoutMs = 3500; // tighten to reduce UI stalls
       const timeoutSentinel: any = Symbol('timeout');
       const primaryPromise = supabase
         .from('profiles')
@@ -211,13 +255,33 @@ export const db = {
       }
 
       if (!profile) {
-        // Fallback: fetch minimal profile, then role separately
-        const { data: basic, error: basicErr } = await supabase
+        // Fallback: fetch minimal profile, then role separately (also guarded by timeout)
+        const fallbackTimeoutMs = 3500;
+        const timeoutSentinel2: any = Symbol('timeout2');
+
+        const basicPromise = supabase
           .from('profiles')
           .select('id, full_name, username, role_id, status')
           .eq('id', userId)
           .maybeSingle();
 
+        const basicResult: any = await Promise.race([
+          basicPromise,
+          new Promise((resolve) => setTimeout(() => resolve(timeoutSentinel2), fallbackTimeoutMs)),
+        ]);
+
+        if (basicResult === timeoutSentinel2) {
+          console.warn('⏳ getUserProfile: Fallback basic profile timed out. Returning last known profile if any.');
+          const last = profileCache.get(userId);
+          if (last?.data) {
+            return { data: last.data, error: null };
+          }
+          // As a last resort, return a minimal stub to unblock UI; consumers should handle missing role
+          return { data: { id: userId, full_name: '', status: 'unknown', roles: null }, error: null };
+        }
+
+        const basic = basicResult?.data ?? null;
+        const basicErr = basicResult?.error ?? null;
         if (basicErr) {
           console.error('❌ getUserProfile: Fallback profile error:', basicErr);
           return { data: null, error: basicErr };
@@ -225,17 +289,30 @@ export const db = {
 
         let roleRow: any = null;
         if (basic?.role_id) {
-          const { data: roleData } = await supabase
+          // Role lookup, but keep it non-blocking with its own timeout
+          const roleTimeoutMs = 2500;
+          const timeoutSentinel3: any = Symbol('timeout3');
+          const rolePromise = supabase
             .from('roles')
             .select('id, name, can_block_users, can_unblock_users, can_ban_users, can_reset_passwords, can_delete_profiles, can_manage_roles')
             .eq('id', basic.role_id)
             .maybeSingle();
-          roleRow = roleData || null;
+          const roleResult: any = await Promise.race([
+            rolePromise,
+            new Promise((resolve) => setTimeout(() => resolve(timeoutSentinel3), roleTimeoutMs)),
+          ]);
+          if (roleResult !== timeoutSentinel3) {
+            roleRow = roleResult?.data || null;
+          } else {
+            console.warn('⏳ getUserProfile: Role lookup timed out. Proceeding without role.');
+          }
         }
 
         const merged = { ...basic, roles: roleRow };
-        // Cache and return
-        profileCache.set(userId, { data: merged, timestamp: Date.now() });
+        // Cache and persist
+        const nowTs = Date.now();
+        profileCache.set(userId, { data: merged, timestamp: nowTs });
+        try { await persistSet(`${PROFILE_PERSIST_PREFIX}${userId}`, JSON.stringify({ data: merged, timestamp: nowTs })); } catch (_) {}
         console.log('✅ getUserProfile: Fallback profile loaded and cached:', {
           id: merged.id,
           full_name: merged.full_name,
@@ -256,11 +333,13 @@ export const db = {
         } : null
       });
 
-      // Cache the successful result
+      // Cache the successful result (and persist)
+      const nowTs = Date.now();
       profileCache.set(userId, {
         data: profile,
-        timestamp: Date.now()
+        timestamp: nowTs
       });
+      try { await persistSet(`${PROFILE_PERSIST_PREFIX}${userId}`, JSON.stringify({ data: profile, timestamp: nowTs })); } catch (_) {}
 
       console.log('✅ getUserProfile: Profile loaded and cached:', {
         id: profile.id,
@@ -1368,6 +1447,42 @@ export const db = {
     }
 
     return { data: { normalized: true }, error: null };
+  },
+
+  // Ensure there is a securing row for a specific side and tier; create empty beams/template if missing
+  ensureSecuringRowForSide: async (orderPackageId: string, side: string, isFinal: boolean) => {
+    // Check existence
+    const { data: existing, error: existErr } = await supabase
+      .from('order_package_securing')
+      .select('id, securing_template_id')
+      .eq('order_package_id', orderPackageId)
+      .eq('securing_side', side)
+      .eq('is_final', isFinal)
+      .limit(1);
+    if (existErr) return { data: null, error: existErr };
+    if (existing && existing.length) return { data: existing[0], error: null };
+
+    // Create empty beams and template
+    const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
+    const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
+    let skId: any = null;
+    if (side === 'base') { const { data: sk } = await supabase.from('beam').insert({}).select('id').single(); skId = sk?.id || null; }
+
+    const tmplPayload: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
+    if (skId) tmplPayload.skids = skId;
+    const { data: tmpl, error: tmplErr } = await supabase
+      .from('securing_template')
+      .insert(tmplPayload)
+      .select('id')
+      .single();
+    if (tmplErr) return { data: null, error: tmplErr };
+
+    const { data: created, error: insErr } = await supabase
+      .from('order_package_securing')
+      .insert({ order_package_id: orderPackageId, securing_template_id: tmpl?.id, securing_side: side, is_final: isFinal })
+      .select('id, securing_template_id')
+      .single();
+    return { data: created, error: insErr };
   },
 
   // Ensure original securing rows exist (empty) if missing

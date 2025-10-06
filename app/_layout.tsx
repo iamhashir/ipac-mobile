@@ -24,6 +24,9 @@ export default function RootLayout() {
     if (Platform.OS === 'web') {
       LogBox.ignoreLogs([
         'useNativeDriver is not supported',
+        // Reduce noise on web: RN Web warns when stray text nodes appear under View
+        'Unexpected text node',
+        'A text node cannot be a child of a <View>'
       ]);
     }
   }, []);

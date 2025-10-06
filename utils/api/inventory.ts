@@ -458,18 +458,44 @@ export const variantOperations = {
     return { data, error };
   },
 
-  // Add tags to variant
+  // Add tags to variant (idempotent - avoids 409 conflicts)
   addTags: async (variantId: string, tagIds: string[]) => {
-    const entries = tagIds.map(tagId => ({
-      material_variant_id: variantId,
-      tag_id: tagId
-    }));
+    try {
+      // Load existing tag links to avoid duplicates
+      const { data: existing, error: existErr } = await supabase
+        .from('material_variant_tags')
+        .select('tag_id')
+        .eq('material_variant_id', variantId);
+      if (existErr) {
+        // Non-fatal: proceed with upsert as fallback
+        console.warn('addTags: could not read existing tags, falling back to upsert', existErr);
+      }
 
-    const { data, error } = await supabase
-      .from('material_variant_tags')
-      .insert(entries);
+      const existingSet = new Set((existing || []).map((r: any) => r.tag_id));
+      const toInsert = (tagIds || []).filter((id) => !!id && !existingSet.has(id));
+      if (toInsert.length === 0) {
+        return { data: [], error: null };
+      }
 
-    return { data, error };
+      const entries = toInsert.map(tagId => ({
+        material_variant_id: variantId,
+        tag_id: tagId
+      }));
+
+      // Use upsert to be extra-safe in concurrent scenarios
+      const { data, error } = await supabase
+        .from('material_variant_tags')
+        .upsert(entries, { onConflict: 'material_variant_id,tag_id', ignoreDuplicates: true });
+
+      // Treat 409 conflicts as success (already linked)
+      if (error && (error.code === '409' || /duplicate key|conflict/i.test(String(error.message || '')))) {
+        return { data: [], error: null };
+      }
+
+      return { data, error };
+    } catch (e: any) {
+      return { data: null, error: e };
+    }
   },
 
   // Remove tags from variant
@@ -487,17 +513,51 @@ export const variantOperations = {
     return { data, error };
   },
 
-  // Update variant tags (replace all tags)
+  // Update variant tags (diff-based, avoids churn and conflicts)
   updateTags: async (variantId: string, tagIds: string[]) => {
-    // First remove all existing tags
-    await variantOperations.removeTags(variantId);
-    
-    // Then add new tags if any
-    if (tagIds.length > 0) {
-      return await variantOperations.addTags(variantId, tagIds);
+    try {
+      const normalized = Array.from(new Set((tagIds || []).filter(Boolean)));
+
+      // Read current tags
+      const { data: currentRows, error: readErr } = await supabase
+        .from('material_variant_tags')
+        .select('tag_id')
+        .eq('material_variant_id', variantId);
+      if (readErr) {
+        console.warn('updateTags: readErr, falling back to replace strategy', readErr);
+        // Fallback: replace all (previous behavior)
+        await variantOperations.removeTags(variantId);
+        if (normalized.length > 0) {
+          return await variantOperations.addTags(variantId, normalized);
+        }
+        return { data: null, error: null };
+      }
+
+      const current = new Set((currentRows || []).map((r: any) => r.tag_id));
+      const desired = new Set(normalized);
+
+      const toAdd = normalized.filter(id => !current.has(id));
+      const toRemove = (currentRows || []).map((r: any) => r.tag_id).filter((id: string) => !desired.has(id));
+
+      // Remove first (if any)
+      if (toRemove.length > 0) {
+        await supabase
+          .from('material_variant_tags')
+          .delete()
+          .eq('material_variant_id', variantId)
+          .in('tag_id', toRemove);
+      }
+
+      // Add missing (idempotent)
+      if (toAdd.length > 0) {
+        const addRes = await variantOperations.addTags(variantId, toAdd);
+        return addRes;
+      }
+
+      return { data: null, error: null };
+    } catch (e: any) {
+      return { data: null, error: e };
     }
-    
-    return { data: null, error: null };
   }
 };
 

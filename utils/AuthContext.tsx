@@ -122,9 +122,11 @@ export const AuthProvider = ({ children }) => {
         console.error('❌ Error loading user profile:', error);
         console.log('❌ Profile error details:', JSON.stringify(error, null, 2));
         
-        // If there's an error loading profile, still set loading to false
-        // This prevents infinite loading state
-        setProfile(null);
+        // If there's an error loading profile, avoid clearing an existing profile
+        // This prevents flicker/freezes when transient errors occur
+        if (!profile) {
+          setProfile(null);
+        }
         return;
       }
 

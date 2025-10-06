@@ -8,16 +8,33 @@ interface OrderSecuringSectionProps {
   orderPackageId: string;
 }
 
-type Side = 'big_sides' | 'small_sides' | 'lid' | 'base';
-
-const smallWidth = 160;
-const typeWideWidth = 240;
-
-const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 'original' | 'final'; editable?: boolean }> = ({ orderPackageId, editTarget = 'final', editable = true }) => {
+ type Side = 'big_sides' | 'small_sides' | 'lid' | 'base';
+ 
+ const smallWidth = 160;
+ const typeWideWidth = 240;
+ 
+ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 'original' | 'final'; editable?: boolean; autoSave?: boolean }> = ({ orderPackageId, editTarget = 'final', editable = true, autoSave = true }) => {
   const [materials, setMaterials] = useState<{ label: string; value: string }[]>([]);
   const [data, setData] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<Side>('big_sides');
   // Simplified tabs: remove horizontal ScrollView state to avoid jitter
+  // Pending changes when autoSave is disabled (keyed by side)
+  const [pending, setPending] = useState<Partial<Record<Side, { template?: any; beams?: Partial<Record<'horizontal_bar' | 'vertical_bar' | 'skids', any>> }>>>({});
+
+  // Compute pending state by side for unsaved indicator
+  const pendingBySide = useMemo(() => {
+    const sides: Side[] = ['big_sides','small_sides','lid','base'];
+    const map: Record<Side, boolean> = { big_sides: false, small_sides: false, lid: false, base: false };
+    sides.forEach((s) => {
+      const p = (pending as any)[s];
+      if (!p) return;
+      const hasTemplate = p.template && Object.keys(p.template).length > 0;
+      const hasBeams = p.beams && Object.values(p.beams).some((b: any) => b && Object.keys(b).length > 0);
+      map[s] = !!(hasTemplate || hasBeams);
+    });
+    return map;
+  }, [pending]);
+  const anyPending = useMemo(() => Object.values(pendingBySide).some(Boolean), [pendingBySide]);
 
   useEffect(() => {
     const init = async () => {
@@ -106,17 +123,19 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 
       if (!editable) return;
       const isFinal = editTarget === 'final';
 
-      // Always ensure the target tier exists and then ensure this side has its own template
-      try {
-        if (isFinal) {
-          await db.ensureFinalSecuringForPackage(orderPackageId);
-        } else {
-          await db.ensureOriginalSecuringForPackage(orderPackageId);
-        }
-      } catch (_) {}
+      if (!autoSave) {
+        // Stage pending template fields for this side
+        setPending(prev => ({
+          ...prev,
+          [side]: { ...(prev[side] || {}), template: { ...(prev[side]?.template || {}), ...fields } }
+        }));
+        return;
+      }
+
+      // Auto-save path
+      try { await db.ensureSecuringRowForSide(orderPackageId, side, isFinal); } catch (_) {}
       await db.ensureUniqueTemplateForSide(orderPackageId, side, isFinal);
 
-      // Re-fetch to resolve the correct template id for this side/tier
       const { data: fresh } = await db.getSecuringForPackage(orderPackageId);
       setData(fresh || []);
       const target = (fresh || []).find((r: any) => r.securing_side === side && r.is_final === isFinal);
@@ -124,7 +143,6 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 
       if (!currentTemplateId) return;
 
       await db.updateSecuringTemplate(currentTemplateId, fields);
-      // Refresh so UI reflects saved value
       const { data: updated } = await db.getSecuringForPackage(orderPackageId);
       setData(updated || []);
     };
@@ -133,14 +151,17 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 
       if (!editable) return;
       const isFinal = editTarget === 'final';
 
-      // Always ensure tier exists and this side has its own template (and beams)
-      try {
-        if (isFinal) {
-          await db.ensureFinalSecuringForPackage(orderPackageId);
-        } else {
-          await db.ensureOriginalSecuringForPackage(orderPackageId);
-        }
-      } catch (_) {}
+      if (!autoSave) {
+        // Stage pending beam fields for this side
+        setPending(prev => ({
+          ...prev,
+          [side]: { ...(prev[side] || {}), beams: { ...(prev[side]?.beams || {}), [beamKey]: { ...(prev[side]?.beams?.[beamKey] || {}), ...fields } } }
+        }));
+        return;
+      }
+
+      // Auto-save path
+      try { await db.ensureSecuringRowForSide(orderPackageId, side, isFinal); } catch (_) {}
       await db.ensureUniqueTemplateForSide(orderPackageId, side, isFinal);
 
       const { data: fresh } = await db.getSecuringForPackage(orderPackageId);
@@ -158,30 +179,30 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 
       <View className="px-4">
         {/* Top row: Quantity | Type | Thickness */}
         <View className="flex-row flex-wrap">
-          <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.quantity ?? null} final={tmplFin?.quantity ?? null} type="number" onChange={(v) => saveTemplate({ quantity: v })} width={smallWidth} />
-          <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Type" original={materialNameById(tmplOrig?.type_id)} final={materialNameById(tmplFin?.type_id)} type="select" selectItems={materials} onChange={(v) => saveTemplate({ type_id: v })} width={typeWideWidth} finalSelectValue={tmplFin?.type_id || null} defaultSelectValue={tmplOrig?.type_id || null} />
-          <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.thickness ?? null} final={tmplFin?.thickness ?? null} type="number" onChange={(v) => saveTemplate({ thickness: v })} width={smallWidth} />
+          <TwoTierEditableCard key={`${side}-quantity-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.quantity ?? null} final={tmplFin?.quantity ?? null} type="number" onChange={(v) => saveTemplate({ quantity: v })} width={smallWidth} />
+          <TwoTierEditableCard key={`${side}-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={materialNameById(tmplOrig?.type_id)} final={materialNameById(tmplFin?.type_id)} type="select" selectItems={materials} onChange={(v) => saveTemplate({ type_id: v })} width={typeWideWidth} finalSelectValue={tmplFin?.type_id || null} defaultSelectValue={tmplOrig?.type_id || null} />
+          <TwoTierEditableCard key={`${side}-thickness-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.thickness ?? null} final={tmplFin?.thickness ?? null} type="number" onChange={(v) => saveTemplate({ thickness: v })} width={smallWidth} />
         </View>
 
         {/* Horizontal Bars */}
         <GroupBox title="Horizontal bars">
           <View className="flex-row flex-wrap">
-            <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.horizontal_bar?.quantity ?? null} final={tmplFin?.horizontal_bar?.quantity ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { quantity: v })} width={smallWidth} />
-            <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Type" original={materialNameById(tmplOrig?.horizontal_bar?.type)} final={materialNameById(tmplFin?.horizontal_bar?.type)} type="select" selectItems={materials} onChange={(v) => saveBeam('horizontal_bar', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.horizontal_bar?.type || null} defaultSelectValue={tmplOrig?.horizontal_bar?.type || null} />
-            <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Space" original={tmplOrig?.horizontal_bar?.space ?? null} final={tmplFin?.horizontal_bar?.space ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { space: v })} width={smallWidth} />
-            <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Width" original={tmplOrig?.horizontal_bar?.width ?? null} final={tmplFin?.horizontal_bar?.width ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { width: v })} width={smallWidth} />
-            <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.horizontal_bar?.thickness ?? null} final={tmplFin?.horizontal_bar?.thickness ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { thickness: v })} width={smallWidth} />
+            <TwoTierEditableCard key={`${side}-hb-qty-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.horizontal_bar?.quantity ?? null} final={tmplFin?.horizontal_bar?.quantity ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { quantity: v })} width={smallWidth} />
+            <TwoTierEditableCard key={`${side}-hb-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={materialNameById(tmplOrig?.horizontal_bar?.type)} final={materialNameById(tmplFin?.horizontal_bar?.type)} type="select" selectItems={materials} onChange={(v) => saveBeam('horizontal_bar', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.horizontal_bar?.type || null} defaultSelectValue={tmplOrig?.horizontal_bar?.type || null} />
+            <TwoTierEditableCard key={`${side}-hb-space-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Space" original={tmplOrig?.horizontal_bar?.space ?? null} final={tmplFin?.horizontal_bar?.space ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { space: v })} width={smallWidth} />
+            <TwoTierEditableCard key={`${side}-hb-width-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Width" original={tmplOrig?.horizontal_bar?.width ?? null} final={tmplFin?.horizontal_bar?.width ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { width: v })} width={smallWidth} />
+            <TwoTierEditableCard key={`${side}-hb-thick-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.horizontal_bar?.thickness ?? null} final={tmplFin?.horizontal_bar?.thickness ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { thickness: v })} width={smallWidth} />
           </View>
         </GroupBox>
 
         {/* Vertical Bars */}
         <GroupBox title="Vertical bars">
           <View className="flex-row flex-wrap">
-            <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.vertical_bar?.quantity ?? null} final={tmplFin?.vertical_bar?.quantity ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { quantity: v })} width={smallWidth} />
-            <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Type" original={materialNameById(tmplOrig?.vertical_bar?.type)} final={materialNameById(tmplFin?.vertical_bar?.type)} type="select" selectItems={materials} onChange={(v) => saveBeam('vertical_bar', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.vertical_bar?.type || null} defaultSelectValue={tmplOrig?.vertical_bar?.type || null} />
-            <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Space" original={tmplOrig?.vertical_bar?.space ?? null} final={tmplFin?.vertical_bar?.space ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { space: v })} width={smallWidth} />
-            <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Width" original={tmplOrig?.vertical_bar?.width ?? null} final={tmplFin?.vertical_bar?.width ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { width: v })} width={smallWidth} />
-            <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.vertical_bar?.thickness ?? null} final={tmplFin?.vertical_bar?.thickness ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { thickness: v })} width={smallWidth} />
+            <TwoTierEditableCard key={`${side}-vb-qty-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.vertical_bar?.quantity ?? null} final={tmplFin?.vertical_bar?.quantity ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { quantity: v })} width={smallWidth} />
+            <TwoTierEditableCard key={`${side}-vb-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={materialNameById(tmplOrig?.vertical_bar?.type)} final={materialNameById(tmplFin?.vertical_bar?.type)} type="select" selectItems={materials} onChange={(v) => saveBeam('vertical_bar', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.vertical_bar?.type || null} defaultSelectValue={tmplOrig?.vertical_bar?.type || null} />
+            <TwoTierEditableCard key={`${side}-vb-space-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Space" original={tmplOrig?.vertical_bar?.space ?? null} final={tmplFin?.vertical_bar?.space ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { space: v })} width={smallWidth} />
+            <TwoTierEditableCard key={`${side}-vb-width-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Width" original={tmplOrig?.vertical_bar?.width ?? null} final={tmplFin?.vertical_bar?.width ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { width: v })} width={smallWidth} />
+            <TwoTierEditableCard key={`${side}-vb-thick-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.vertical_bar?.thickness ?? null} final={tmplFin?.vertical_bar?.thickness ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { thickness: v })} width={smallWidth} />
           </View>
         </GroupBox>
 
@@ -189,9 +210,9 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 
         {side === 'base' && (
           <GroupBox title="Skids">
             <View className="flex-row flex-wrap">
-              <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.skids?.quantity ?? null} final={tmplFin?.skids?.quantity ?? null} type="number" onChange={(v) => saveBeam('skids', { quantity: v })} width={smallWidth} />
-              <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Type" original={materialNameById(tmplOrig?.skids?.type)} final={materialNameById(tmplFin?.skids?.type)} type="select" selectItems={materials} onChange={(v) => saveBeam('skids', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.skids?.type || null} defaultSelectValue={tmplOrig?.skids?.type || null} />
-              <TwoTierEditableCard editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.skids?.thickness ?? null} final={tmplFin?.skids?.thickness ?? null} type="number" onChange={(v) => saveBeam('skids', { thickness: v })} width={smallWidth} />
+              <TwoTierEditableCard key={`${side}-sk-qty-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.skids?.quantity ?? null} final={tmplFin?.skids?.quantity ?? null} type="number" onChange={(v) => saveBeam('skids', { quantity: v })} width={smallWidth} />
+              <TwoTierEditableCard key={`${side}-sk-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={materialNameById(tmplOrig?.skids?.type)} final={materialNameById(tmplFin?.skids?.type)} type="select" selectItems={materials} onChange={(v) => saveBeam('skids', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.skids?.type || null} defaultSelectValue={tmplOrig?.skids?.type || null} />
+              <TwoTierEditableCard key={`${side}-sk-thick-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.skids?.thickness ?? null} final={tmplFin?.skids?.thickness ?? null} type="number" onChange={(v) => saveBeam('skids', { thickness: v })} width={smallWidth} />
             </View>
           </GroupBox>
         )}
@@ -210,20 +231,55 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 
     <View style={{ marginTop: 8, marginBottom: 24, borderWidth: 1, borderColor: '#bfdbfe', borderRadius: 12, marginHorizontal: 16, backgroundColor: '#eff6ff' }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 16 }}>
         <Text style={{ color: '#1e40af', fontWeight: '600', fontSize: 18 }}>Securing</Text>
-        {editTarget === 'original' && (
-          <TouchableOpacity
-            onPress={async () => {
+        {(editTarget === 'original' || !autoSave) && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {!autoSave && (
+              <Text style={{ color: anyPending ? '#b45309' : '#16a34a', fontSize: 12 }}>{anyPending ? 'Unsaved changes' : 'All changes saved'}</Text>
+            )}
+            <TouchableOpacity
+              onPress={async () => {
               try {
-                await db.ensureOriginalSecuringForPackage(orderPackageId);
-                const { data: fresh } = await db.getSecuringForPackage(orderPackageId);
-                setData(fresh || []);
+                if (!autoSave) {
+                  // Apply all pending changes (for current editTarget tier)
+                  const sides: Side[] = ['big_sides','small_sides','lid','base'];
+                  for (const s of sides) {
+                    const pend = pending[s];
+                    if (!pend) continue;
+                    const isFinal = editTarget === 'final';
+                    try { await db.ensureSecuringRowForSide(orderPackageId, s, isFinal); } catch (_) {}
+                    await db.ensureUniqueTemplateForSide(orderPackageId, s, isFinal);
+                    const { data: fresh } = await db.getSecuringForPackage(orderPackageId);
+                    const target = (fresh || []).find((r: any) => r.securing_side === s && r.is_final === isFinal);
+                    const tmplId = target?.securing_template?.id || null;
+                    if (tmplId && pend.template && Object.keys(pend.template).length) {
+                      await db.updateSecuringTemplate(tmplId, pend.template);
+                    }
+                    if (pend.beams) {
+                      for (const k of ['horizontal_bar','vertical_bar','skids'] as const) {
+                        const fields: any = (pend.beams as any)[k];
+                        if (!fields || !Object.keys(fields).length) continue;
+                        const beamId = target?.securing_template?.[k]?.id || null;
+                        if (beamId) await db.updateBeam(beamId, fields);
+                      }
+                    }
+                  }
+                  // Refresh and clear pending
+                  const { data: updated } = await db.getSecuringForPackage(orderPackageId);
+                  setData(updated || []);
+                  setPending({});
+                } else {
+                  await db.ensureOriginalSecuringForPackage(orderPackageId);
+                  const { data: fresh } = await db.getSecuringForPackage(orderPackageId);
+                  setData(fresh || []);
+                }
               } catch (_) {}
             }}
-            disabled={!editable}
-            style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, backgroundColor: editable ? '#2563eb' : '#d1d5db' }}
+            disabled={!editable || (!autoSave && !anyPending)}
+            style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, backgroundColor: (!editable || (!autoSave && !anyPending)) ? '#d1d5db' : '#2563eb' }}
           >
             <Text style={{ color: 'white' }}>Save</Text>
           </TouchableOpacity>
+          </View>
         )}
       </View>
       
@@ -231,6 +287,7 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 
       <View style={{ flexDirection: 'row', alignItems: 'flex-end', columnGap: 24, paddingHorizontal: 16, marginTop: 8, borderBottomWidth: 1, borderBottomColor: '#bfdbfe' }}>
         {tabs.map((tab, index) => {
           const isActive = activeTab === tab.key;
+          const showDot = !autoSave && pendingBySide[tab.key];
           return (
             <TouchableOpacity 
               key={tab.key} 
@@ -250,8 +307,12 @@ const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 
                 shadowColor: isActive ? '#000' : 'transparent',
                 shadowOpacity: isActive ? 0.05 : 0,
                 shadowRadius: isActive ? 2 : 0,
+                flexDirection: 'row',
+                alignItems: 'center',
+                columnGap: 6,
               }}>
                 <Text style={{ color: isActive ? '#1d4ed8' : '#2563eb99', fontWeight: isActive ? '600' : '400' }}>{tab.label}</Text>
+                {showDot ? (<View style={{ width: 8, height: 8, borderRadius: 9999, backgroundColor: '#f59e0b' }} />) : null}
               </View>
             </TouchableOpacity>
           );

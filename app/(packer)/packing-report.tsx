@@ -306,7 +306,7 @@ export default function PackingReportPage() {
                 sectionRefs.current['securing'] = y;
               }}
             >
-              <OrderSecuringSection orderPackageId={p.id} />
+              <OrderSecuringSection orderPackageId={p.id} editTarget="final" editable={true} autoSave={false} />
             </View>
 
             {/* Vacuum packing (Final packing type) */}

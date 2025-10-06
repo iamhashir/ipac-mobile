@@ -191,9 +191,9 @@ export default function OrderDetailsPage() {
                 <OrderPackingItems orderPackageId={p.id} />
               </View>
 
-              {/* Securing section: admin edits ORIGINAL fields inline */}
+              {/* Securing section: admin edits ORIGINAL fields inline (manual save) */}
               <View className="mt-3">
-                <OrderSecuringSection orderPackageId={p.id} editTarget="original" editable={allowOriginalEdits} />
+                <OrderSecuringSection orderPackageId={p.id} editTarget="original" editable={allowOriginalEdits} autoSave={false} />
               </View>
 
               {/* Materials (Accessories) for this box */}

@@ -33,14 +33,19 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
   const initialVal = isEditingOriginal ? (original ?? null) : (final ?? null);
   const [val, setVal] = useState<any>(type === 'select' ? initialSelect : initialVal);
 
+  // Keep internal state in sync when props change or when switching tabs
   useEffect(() => {
     if (type === 'select') {
       const next = (editTarget === 'original') ? (defaultSelectValue ?? null) : (finalSelectValue ?? null);
       setVal(next);
+    } else {
+      const next = (editTarget === 'original') ? (original ?? null) : (final ?? null);
+      setVal(next);
     }
-  }, [finalSelectValue, defaultSelectValue, type, editTarget]);
+  }, [original, final, finalSelectValue, defaultSelectValue, type, editTarget]);
 
   const commit = async () => {
+    if (!editable) return;
     if (type === 'number') {
       const n = val === null || val === '' ? null : Number(val);
       await onChange(Number.isFinite(n as number) ? n : null);
@@ -48,6 +53,15 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
       await onChange(val);
     }
   };
+
+  // Debounce commit for text/number to support auto-save without explicit blur
+  useEffect(() => {
+    if (!editable) return;
+    if (type === 'number' || type === 'text') {
+      const t = setTimeout(() => { void commit(); }, 600);
+      return () => clearTimeout(t);
+    }
+  }, [val, type, editable]);
 
   return (
     <View className={`${compact ? 'bg-blue-50 rounded-lg' : 'bg-blue-50 rounded-xl'} border border-indigo-200 ${compact ? 'p-1 m-0.5' : 'p-1 m-1'}`} style={{ width: width as any, flex: flex }}>
@@ -75,9 +89,11 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
             <View style={{ width: compact ? '90%' : '85%' }}>
               <TextInput
                 className="border border-gray-200 bg-white rounded px-1 py-1 text-center"
-                defaultValue={original !== null && original !== undefined ? String(original) : ''}
+                value={val === null || val === undefined ? '' : String(val)}
                 onChangeText={(t) => setVal(t)}
                 onEndEditing={commit}
+                onBlur={commit}
+                onSubmitEditing={commit}
                 keyboardType={type === 'number' ? 'numeric' : 'default'}
                 style={{ width: '100%', textAlign: 'center' }}
               />
@@ -108,9 +124,11 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
             <View style={{ width: compact ? '90%' : '85%' }}>
               <TextInput
                 className="border border-gray-200 bg-white rounded px-1 py-1 text-center"
-                defaultValue={final !== null && final !== undefined ? String(final) : ''}
+                value={val === null || val === undefined ? '' : String(val)}
                 onChangeText={(t) => setVal(t)}
                 onEndEditing={commit}
+                onBlur={commit}
+                onSubmitEditing={commit}
                 keyboardType={type === 'number' ? 'numeric' : 'default'}
                 style={{ width: '100%', textAlign: 'center' }}
               />
