@@ -161,9 +161,9 @@ export const AttendanceRow: React.FC<AttendanceRowProps> = ({
                       ? "text-gray-500"
                       : "text-blue-600"
                   }`}
-                >
-                  Start{isMediumOrLarger ? ' (Auto)' : ''}
-                </Text>
+                  >
+                    Start
+                  </Text>
               )}
             </View>
           </View>
@@ -326,7 +326,7 @@ onPress={() => {
                       : "text-blue-600"
                   }`}
                 >
-                  Start{isMediumOrLarger ? ' (Auto)' : ''}
+                  Start
                 </Text>
               )}
             </View>

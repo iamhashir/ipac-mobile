@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { Text } from 'react-native';
+import { Text, TextInput } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export type TextSizeOption = 'small' | 'medium' | 'large';
@@ -13,9 +13,10 @@ interface TextSizeContextValue {
 const TextSizeContext = createContext<TextSizeContextValue | undefined>(undefined);
 
 const SCALE_MAP: Record<TextSizeOption, number> = {
-  small: 0.92,
+  // Make differences clearly visible across the app (web + native)
+  small: 0.9,
   medium: 1.0,
-  large: 1.12,
+  large: 1.3,
 };
 
 export const TextSizeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -42,9 +43,7 @@ export const TextSizeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // Persist
     AsyncStorage.setItem(TEXT_SIZE_KEY, size).catch(() => {});
 
-    // Apply global font scaling via Text.defaultProps
-    // We keep any prior default style, and append a transform scale that approximates the preference.
-    // Note: This scales text visually across the app without touching each component.
+    // Apply global font scaling via Text.defaultProps (native/mobile) and CSS override (web)
     const RNText: any = Text as any;
     RNText.defaultProps = RNText.defaultProps || {};
     const existingStyle = RNText.defaultProps.style;
@@ -63,6 +62,24 @@ export const TextSizeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     RNText.defaultProps.style = [...withoutPrevScale, scaleStyle];
     RNText.defaultProps.allowFontScaling = true;
+
+    // Apply same default scaling to TextInput so inputs scale too
+    const RNTextInput: any = TextInput as any;
+    RNTextInput.defaultProps = RNTextInput.defaultProps || {};
+    const inputExisting = RNTextInput.defaultProps.style;
+    const inputBaseArray = Array.isArray(inputExisting)
+      ? inputExisting
+      : inputExisting
+      ? [inputExisting]
+      : [];
+    const inputWithoutPrev = inputBaseArray.filter((s: any) => !(s && s.__textSizeScale));
+    RNTextInput.defaultProps.style = [...inputWithoutPrev, scaleStyle];
+    RNTextInput.defaultProps.allowFontScaling = true;
+
+    // Web-only: set a data attribute on <html> so globals.css can override RN Web class font-sizes
+    if (typeof document !== 'undefined') {
+      document.documentElement.setAttribute('data-textsize', size);
+    }
   }, [size, hydrated]);
 
   const value = useMemo(() => ({ size, setSize: setSizeState }), [size]);

@@ -96,7 +96,7 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
                   isAfternoon ? "text-gray-400" : "text-blue-600"
                 }`}
               >
-                Start{isMediumOrLarger ? ' (Auto)' : ''}
+                Start
               </Text>
             </View>
           </View>
@@ -157,7 +157,7 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
               <Clock size={16} color={isMorning ? "#9CA3AF" : "#2563EB"} className={"mt-[6%]"} />
               <Text className={`ml-1 text-lg ${
                 isMorning ? "text-gray-400" : "text-blue-600"
-              }`}>Start{isMediumOrLarger ? ' (Auto)' : ''}</Text>
+              }`}>Start</Text>
             </View>
           </View>
 

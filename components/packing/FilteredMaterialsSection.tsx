@@ -6,7 +6,7 @@ import { Check, X, ChevronDown } from 'lucide-react-native';
 
 interface SourceSpec {
   type: 'tag' | 'material';
-  value: string;
+  value: string; // for type 'material', this is treated as an exact name (case-insensitive)
 }
 
 interface FilteredMaterialsSectionProps {
@@ -54,28 +54,34 @@ const FilteredMaterialsSection: React.FC<FilteredMaterialsSectionProps> = ({ ord
         const r = await db.getMaterialVariantsByTag(s.value);
         if (r.data) variantSets.push(r.data);
       } else if (s.type === 'material') {
-        const r = await db.getMaterialVariantsByMaterialName(s.value);
+        // Exact name match to avoid unrelated items (no partials)
+        const r = await db.getMaterialVariantsByMaterialExactName(s.value);
         if (r.data) variantSets.push(r.data);
       }
     }
     const flat = (variantSets.flat() || []) as any[];
-    // de-duplicate by id
+    // de-duplicate by id (local set for immediate filtering)
     const uniqMap = new Map<string, any>();
     flat.forEach(v => { if (v && v.id) uniqMap.set(v.id, v); });
-    setVariants(Array.from(uniqMap.values()).map((v: any) => ({ label: v.label, value: v.id, unit_id: v.unit_id || null, unit_name: v.unit_name || null })));
+    const nextVariants = Array.from(uniqMap.values()).map((v: any) => ({ label: v.label, value: v.id, unit_id: v.unit_id || null, unit_name: v.unit_name || null }));
+    setVariants(nextVariants);
+    const nextAllowed = new Set(nextVariants.map(v => v.value));
 
     const [{ data: u }, { data: rows }] = await Promise.all([
       db.getAllUnits(),
       db.getOrderPackageMaterials(orderPackageId),
     ] as any);
     setUnits((u || []).map((x: any) => ({ label: x.name || x.label, value: x.id || x.value })));
-    setItems((rows || []).filter((r: any) => allowedVariantIds.has(r.material_variant_id)));
+    setItems((rows || []).filter((r: any) => r.material_type === materialTypeLabel && nextAllowed.has(r.material_variant_id)));
   };
 
   useEffect(() => { setItems([]); setVariants([]); load(); }, [orderPackageId]);
   useEffect(() => { // reload items to apply filtering when variants change
-    (async () => { const { data: rows } = await db.getOrderPackageMaterials(orderPackageId); setItems((rows || []).filter((r: any) => allowedVariantIds.has(r.material_variant_id))); })();
-  }, [allowedVariantIds.size]);
+    (async () => {
+      const { data: rows } = await db.getOrderPackageMaterials(orderPackageId);
+      setItems((rows || []).filter((r: any) => r.material_type === materialTypeLabel && allowedVariantIds.has(r.material_variant_id)));
+    })();
+  }, [allowedVariantIds.size, orderPackageId, materialTypeLabel]);
 
   const resetForm = () => {
     setFormVariant(null);

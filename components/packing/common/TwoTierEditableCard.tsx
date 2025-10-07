@@ -18,6 +18,8 @@ interface TwoTierEditableCardProps {
   compact?: boolean;
   editTarget?: 'original' | 'final';
   editable?: boolean;
+  draftValue?: any; // optional externally-provided draft value to display (from parent pending state)
+  commitDebounceMs?: number; // optional debounce for text/number commit
 }
 
 const formatValue = (v: any) => {
@@ -26,42 +28,40 @@ const formatValue = (v: any) => {
   return String(v);
 };
 
-const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, original, final, type, onChange, selectItems, width, flex, finalSelectValue, defaultSelectValue, compact = false, editTarget = 'final', editable = true }) => {
+const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, original, final, type, onChange, selectItems, width, flex, finalSelectValue, defaultSelectValue, compact = false, editTarget = 'final', editable = true, draftValue, commitDebounceMs = 600 }) => {
   const isEditingOriginal = editTarget === 'original';
-  // Determine initial value/select based on which tier is editable
-  const initialSelect = (isEditingOriginal ? (defaultSelectValue ?? null) : (finalSelectValue ?? null));
-  const initialVal = isEditingOriginal ? (original ?? null) : (final ?? null);
-  const [val, setVal] = useState<any>(type === 'select' ? initialSelect : initialVal);
+  // Determine initial value based on which tier is editable, overridden by draftValue if provided
+  const initialSelect = isEditingOriginal ? (defaultSelectValue ?? null) : (finalSelectValue ?? null);
+  const baseVal = isEditingOriginal ? (original ?? null) : (final ?? null);
+  const initial = draftValue !== undefined ? draftValue : (type === 'select' ? initialSelect : baseVal);
+  const [val, setVal] = useState<any>(initial);
+  const [touched, setTouched] = useState(false); // only true after user input within this component
 
-  // Keep internal state in sync when props change or when switching tabs
+  // Keep internal state in sync when props or draft change, but don't commit on programmatic sync
   useEffect(() => {
-    if (type === 'select') {
-      const next = (editTarget === 'original') ? (defaultSelectValue ?? null) : (finalSelectValue ?? null);
-      setVal(next);
+    let next: any;
+    if (draftValue !== undefined) {
+      next = draftValue;
+    } else if (type === 'select') {
+      next = isEditingOriginal ? (defaultSelectValue ?? null) : (finalSelectValue ?? null);
     } else {
-      const next = (editTarget === 'original') ? (original ?? null) : (final ?? null);
-      setVal(next);
+      next = isEditingOriginal ? (original ?? null) : (final ?? null);
     }
-  }, [original, final, finalSelectValue, defaultSelectValue, type, editTarget]);
+    setVal(next);
+    setTouched(false); // reset touched so programmatic changes don't trigger commits
+  }, [original, final, finalSelectValue, defaultSelectValue, type, editTarget, draftValue, isEditingOriginal]);
 
-  const commit = async () => {
+  // Immediate stage: propagate on each user change so Save always sees latest drafts
+  // For numbers, parse into number|null; for text, pass string|null on empty
+  const stageImmediate = async (nextVal: any) => {
     if (!editable) return;
     if (type === 'number') {
-      const n = val === null || val === '' ? null : Number(val);
+      const n = nextVal === null || nextVal === '' ? null : Number(nextVal);
       await onChange(Number.isFinite(n as number) ? n : null);
     } else {
-      await onChange(val);
+      await onChange(nextVal);
     }
   };
-
-  // Debounce commit for text/number to support auto-save without explicit blur
-  useEffect(() => {
-    if (!editable) return;
-    if (type === 'number' || type === 'text') {
-      const t = setTimeout(() => { void commit(); }, 600);
-      return () => clearTimeout(t);
-    }
-  }, [val, type, editable]);
 
   return (
     <View className={`${compact ? 'bg-blue-50 rounded-lg' : 'bg-blue-50 rounded-xl'} border border-indigo-200 ${compact ? 'p-1 m-0.5' : 'p-1 m-1'}`} style={{ width: width as any, flex: flex }}>
@@ -75,12 +75,12 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
         {isEditingOriginal && editable ? (
           type === 'select' ? (
             <View style={{ width: compact ? '90%' : '85%' }}>
-              <SimpleSelect label={''} items={selectItems || []} value={val} onChange={async (v) => { setVal(v); await onChange(v); }} placeholder="Select" widthPercent={1} centerText={true} />
+              <SimpleSelect label={''} items={selectItems || []} value={val} onChange={async (v) => { setVal(v); setTouched(true); await onChange(v); }} placeholder="Select" widthPercent={1} centerText={true} />
             </View>
           ) : type === 'switch' ? (
             <TouchableOpacity
               activeOpacity={0.8}
-              onPress={async () => { const next = !val; setVal(next); await onChange(next); }}
+              onPress={async () => { const next = !val; setVal(next); setTouched(true); await onChange(next); }}
               className={`rounded ${compact ? 'w-[90%]' : 'w-[85%]'} py-2`}
             >
               <Text className={`text-gray-700 ${compact ? 'text-xs' : 'text-sm'} text-center`}>{val ? 'Yes' : 'No'}</Text>
@@ -90,10 +90,7 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
               <TextInput
                 className="border border-gray-200 bg-white rounded px-1 py-1 text-center"
                 value={val === null || val === undefined ? '' : String(val)}
-                onChangeText={(t) => setVal(t)}
-                onEndEditing={commit}
-                onBlur={commit}
-                onSubmitEditing={commit}
+                onChangeText={async (t) => { setVal(t); setTouched(true); await stageImmediate(t); }}
                 keyboardType={type === 'number' ? 'numeric' : 'default'}
                 style={{ width: '100%', textAlign: 'center' }}
               />
@@ -110,12 +107,12 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
         {!isEditingOriginal && editable ? (
           type === 'select' ? (
             <View style={{ width: compact ? '90%' : '85%' }}>
-              <SimpleSelect label={''} items={selectItems || []} value={val} onChange={async (v) => { setVal(v); await onChange(v); }} placeholder="Select" widthPercent={1} centerText={true} />
+              <SimpleSelect label={''} items={selectItems || []} value={val} onChange={async (v) => { setVal(v); setTouched(true); await onChange(v); }} placeholder="Select" widthPercent={1} centerText={true} />
             </View>
           ) : type === 'switch' ? (
             <TouchableOpacity
               activeOpacity={0.8}
-              onPress={async () => { const next = !val; setVal(next); await onChange(next); }}
+              onPress={async () => { const next = !val; setVal(next); setTouched(true); await onChange(next); }}
               className={`rounded ${compact ? 'w-[90%]' : 'w-[85%]'} py-2`}
             >
               <Text className={`text-gray-700 ${compact ? 'text-xs' : 'text-sm'} text-center`}>{val ? 'Yes' : 'No'}</Text>
@@ -125,10 +122,7 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
               <TextInput
                 className="border border-gray-200 bg-white rounded px-1 py-1 text-center"
                 value={val === null || val === undefined ? '' : String(val)}
-                onChangeText={(t) => setVal(t)}
-                onEndEditing={commit}
-                onBlur={commit}
-                onSubmitEditing={commit}
+                onChangeText={async (t) => { setVal(t); setTouched(true); await stageImmediate(t); }}
                 keyboardType={type === 'number' ? 'numeric' : 'default'}
                 style={{ width: '100%', textAlign: 'center' }}
               />

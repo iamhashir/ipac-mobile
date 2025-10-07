@@ -68,7 +68,8 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
       vMap[x.id || x.value] = x.unit_id || null;
     });
     setVariantUnitIdMap(vMap);
-    setItems(rows || []);
+    // Only show accessories added in this section
+    setItems((rows || []).filter((r: any) => r.material_type === 'Accessories'));
   };
 
   useEffect(() => {

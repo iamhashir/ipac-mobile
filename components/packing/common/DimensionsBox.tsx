@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, Alert } from 'react-native';
+import React from 'react';
+import { View, Text, TextInput } from 'react-native';
 
 export interface DimensionsTriple {
   length: number | null;
@@ -32,30 +32,19 @@ const TripleRowReadOnly: React.FC<{ title: string; dims: DimensionsTriple | null
 
 const TripleRowEditable: React.FC<{
   title: string;
-  initial: DimensionsTriple | null | undefined;
-  onSave: (dims: DimensionsTriple) => Promise<void>;
-}> = ({ title, initial, onSave }) => {
-  const [vals, setVals] = useState<DimensionsTriple>({
-    length: initial?.length ?? null,
-    width: initial?.width ?? null,
-    height: initial?.height ?? null,
-  });
-
+  value: DimensionsTriple | null | undefined;
+  onChange: (patch: Partial<DimensionsTriple>) => void;
+}> = ({ title, value, onChange }) => {
+  const pick = (field: keyof DimensionsTriple): string => {
+    const v = value?.[field];
+    return v === null || v === undefined ? '' : String(v);
+  };
   const toNumberOrNull = (s: string) => {
     const t = s.trim();
     if (t.length === 0) return null;
     const n = Number(t);
     return Number.isFinite(n) ? n : null;
   };
-
-  const saveAll = async () => {
-    try {
-      await onSave(vals);
-    } catch (e: any) {
-      Alert.alert('Error', e?.message || 'Failed to save dimensions');
-    }
-  };
-
   return (
     <View className="bg-gray-50 border border-indigo-200 rounded-lg px-2 py-2 mb-2 items-center justify-center">
       <Text className="text-[10px] text-green-900 mb-1 bg-green-100 text-center w-full"> {title}</Text>
@@ -64,9 +53,8 @@ const TripleRowEditable: React.FC<{
           <Text className="text-[10px] text-gray-500">Length</Text>
           <TextInput
             className="border border-gray-300 bg-white rounded py-1 text-center"
-            defaultValue={vals.length !== null ? String(vals.length) : ''}
-            onChangeText={(t) => setVals(v => ({ ...v, length: toNumberOrNull(t) }))}
-            onEndEditing={saveAll}
+            value={pick('length')}
+            onChangeText={(t) => onChange({ length: toNumberOrNull(t) })}
             keyboardType="numeric"
             style={{ width: 70 }}
           />
@@ -75,9 +63,8 @@ const TripleRowEditable: React.FC<{
           <Text className="text-[10px] text-gray-500">Width</Text>
           <TextInput
             className="border border-gray-300 bg-white rounded py-1 text-center"
-            defaultValue={vals.width !== null ? String(vals.width) : ''}
-            onChangeText={(t) => setVals(v => ({ ...v, width: toNumberOrNull(t) }))}
-            onEndEditing={saveAll}
+            value={pick('width')}
+            onChangeText={(t) => onChange({ width: toNumberOrNull(t) })}
             keyboardType="numeric"
             style={{ width: 70 }}
           />
@@ -86,9 +73,8 @@ const TripleRowEditable: React.FC<{
           <Text className="text-[10px] text-gray-500">Height</Text>
           <TextInput
             className="border border-gray-300 bg-white rounded py-1 text-center"
-            defaultValue={vals.height !== null ? String(vals.height) : ''}
-            onChangeText={(t) => setVals(v => ({ ...v, height: toNumberOrNull(t) }))}
-            onEndEditing={saveAll}
+            value={pick('height')}
+            onChangeText={(t) => onChange({ height: toNumberOrNull(t) })}
             keyboardType="numeric"
             style={{ width: 70 }}
           />
@@ -102,17 +88,17 @@ export interface DimensionsBoxProps {
   heading: string;
   original: DimensionsTriple | null | undefined;
   final: DimensionsTriple | null | undefined;
-  onSaveFinal: (dims: DimensionsTriple) => Promise<void>;
+  onChangeFinal: (patch: Partial<DimensionsTriple>) => void;
 }
 
-const DimensionsBox: React.FC<DimensionsBoxProps> = ({ heading, original, final, onSaveFinal }) => {
+const DimensionsBox: React.FC<DimensionsBoxProps> = ({ heading, original, final, onChangeFinal }) => {
   return (
     <View className="bg-blue-50 rounded-xl border border-indigo-200 p-2 m-1 flex-1">
       <View className="px-3 py-1 rounded-full self-center mb-2">
         <Text className="text-blue-800 text-xs font-semibold text-center">{heading}</Text>
       </View>
       <TripleRowReadOnly title="Original" dims={original || null} />
-      <TripleRowEditable title="Final" initial={final || null} onSave={onSaveFinal} />
+      <TripleRowEditable title="Final" value={final || null} onChange={onChangeFinal} />
     </View>
   );
 };

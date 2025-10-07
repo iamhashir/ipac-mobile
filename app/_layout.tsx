@@ -5,15 +5,32 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider } from '../utils/AuthContext';
 import { PackerSessionProvider } from '../utils/PackerSessionContext';
-import { TextSizeProvider } from '../utils/TextSizeContext';
+import { TextSizeProvider, useTextSize } from '../utils/TextSizeContext';
 import { Text, View, ActivityIndicator } from 'react-native';
 import { useFonts } from 'expo-font';
 import './globals.css';
 
+function AppStack() {
+  // Re-mount the navigator when text size changes so all Text nodes pick up new defaults
+  const { size } = useTextSize();
+  return (
+    <>
+      <StatusBar style="auto" />
+      <Stack key={size} screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="index" />
+        <Stack.Screen name="auth" />
+        <Stack.Screen name="(admin)" />
+        <Stack.Screen name="(packer)" />
+        <Stack.Screen name="+not-found" />
+      </Stack>
+    </>
+  );
+}
+
 export default function RootLayout() {
   // Load Calibri fonts from local folder
   const [fontsLoaded] = useFonts({
-'Calibri-Regular': require('../assets/fonts/calibri-regular.ttf'),
+    'Calibri-Regular': require('../assets/fonts/calibri-regular.ttf'),
     'Calibri-Bold': require('../assets/fonts/calibri-bold.ttf'),
     'Calibri-Italic': require('../assets/fonts/calibri-italic.ttf'),
     'Calibri-BoldItalic': require('../assets/fonts/calibri-bold-italic.ttf'),
@@ -59,14 +76,7 @@ export default function RootLayout() {
     <AuthProvider>
       <TextSizeProvider>
         <PackerSessionProvider>
-          <StatusBar style="auto" />
-          <Stack screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="index" />
-            <Stack.Screen name="auth" />
-            <Stack.Screen name="(admin)" />
-            <Stack.Screen name="(packer)" />
-            <Stack.Screen name="+not-found" />
-          </Stack>
+          <AppStack />
         </PackerSessionProvider>
       </TextSizeProvider>
     </AuthProvider>

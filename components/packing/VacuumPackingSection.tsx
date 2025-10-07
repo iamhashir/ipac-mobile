@@ -16,25 +16,25 @@ const VacuumPackingSection: React.FC<VacuumPackingSectionProps> = ({ orderPackag
           <FilteredMaterialsSection
             orderPackageId={orderPackageId}
             title="Select laminate"
-            materialTypeLabel="Laminate"
+            materialTypeLabel="Vacuum Packing"
             quantityLabel="in Bands"
-            sources={[{ type: 'tag', value: 'laminate' }, { type: 'tag', value: 'laminates' }, { type: 'material', value: 'laminate' }]}
+            sources={[{ type: 'material', value: 'Laminate' }]}
           />
 
           {/* Desiccant */}
           <FilteredMaterialsSection
             orderPackageId={orderPackageId}
             title="Desiccant"
-            materialTypeLabel="Desiccant"
-            sources={[{ type: 'tag', value: 'desiccant' }, { type: 'material', value: 'desicant' }, { type: 'material', value: 'desiccant' }]}
+            materialTypeLabel="Vacuum Packing"
+            sources={[{ type: 'material', value: 'Desiccant' }]}
           />
 
           {/* Vacuum Accessories */}
           <FilteredMaterialsSection
             orderPackageId={orderPackageId}
             title="Vacuum Accessories"
-            materialTypeLabel="Vacuum Accessories"
-            sources={[{ type: 'tag', value: 'vacuum' }, { type: 'tag', value: 'vacuum packing' }, { type: 'tag', value: 'vacuum_packing' }]}
+            materialTypeLabel="Vacuum Packing"
+            sources={[{ type: 'tag', value: 'Vacuum Accessories' }]}
           />
 
           {/* Service - placeholder input only; wire to DB later if needed */}

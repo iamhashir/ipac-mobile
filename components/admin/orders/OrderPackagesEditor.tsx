@@ -154,7 +154,7 @@ const OrderPackagesEditor: React.FC<OrderPackagesEditorProps> = ({ orderId, onDo
                 </TouchableOpacity>
               </View>
               <ScrollView className="p-2">
-                <OrderSecuringSection orderPackageId={activeSecuringFor.id} editTarget="original" editable={true} />
+                <OrderSecuringSection orderPackageId={activeSecuringFor.id} editTarget="original" editable={true} autoSave={false} />
               </ScrollView>
             </View>
           </View>

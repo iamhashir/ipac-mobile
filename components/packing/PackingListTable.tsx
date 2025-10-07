@@ -32,12 +32,13 @@ const PackingListTable: React.FC<PackingListTableProps> = ({ rows, onRowPress })
     | 'box' | 'name' | 'cog' | 'boxQty' | 'boxType' | 'packType' | 'tare' | 'net' | 'gross';
 
   const allCols: { key: ColKey; label: string; flex: number }[] = [
+    // Desired order: Box #, Box Quantity, Name, Box Type, S.E.I, Center of Gravity, Tare, Net, Gross
     { key: 'box', label: 'Box #', flex: 0.9 },
-    { key: 'name', label: 'Name of Equipment', flex: 2.2 },
-    { key: 'cog', label: 'Center of Gravity', flex: 1.2 },
     { key: 'boxQty', label: 'Box Quantity', flex: 1.2 },
+    { key: 'name', label: 'Name of Equipment', flex: 2.2 },
     { key: 'boxType', label: 'Box Type', flex: 1.6 },
     { key: 'packType', label: 'S.E.I', flex: 1.6 },
+    { key: 'cog', label: 'Center of Gravity', flex: 1.2 },
     { key: 'tare', label: 'Tare', flex: 1.1 },
     { key: 'net', label: 'Net Weight', flex: 1.2 },
     { key: 'gross', label: 'Gross Weight', flex: 1.2 },

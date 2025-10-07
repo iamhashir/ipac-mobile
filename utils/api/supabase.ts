@@ -468,6 +468,19 @@ export const db = {
     return { data, error };
   },
 
+  // Mark toolbox briefing as completed for the whole order and current shift (today)
+  setToolboxBriefingForOrderShift: async (orderId, shiftPeriod) => {
+    const today = new Date().toISOString().split('T')[0];
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .update({ toolbox_briefing_completed: true, updated_at: new Date().toISOString() })
+      .eq('order_id', orderId)
+      .eq('shift_period', shiftPeriod)
+      .eq('log_date', today)
+      .select('id');
+    return { data, error };
+  },
+
   // Update attendance records to allow restarting
   updateAttendanceForRestart: async (orderId, packerId, shiftPeriod, startTimeIso) => {
     const today = new Date().toISOString().split('T')[0];
@@ -874,18 +887,33 @@ export const db = {
     return { data, error };
   },
 
-  // Packaging: packing types lookup (try both correct and misspelled vacuum flags; fallback if both missing)
+  // Packaging: packing types lookup (support multiple column names for vacuum flag)
   getPackingTypesByIds: async (ids) => {
     if (!ids || ids.length === 0) return { data: [], error: null };
 
-    // Attempt 1: correct column name
+    // Attempt 1: includes_vacuum_protection (preferred)
     let r1 = await supabase
       .from('packing_types')
       .select('id, name, code, includes_vacuum_protection')
       .in('id', ids);
     if (!r1.error) return { data: r1.data, error: null };
 
-    // Attempt 2: some environments have a misspelled column: inlcudes_vacuum_protecton
+    // Attempt 2: includes_vacuum_packing (alternate naming)
+    const r1b = await supabase
+      .from('packing_types')
+      .select('id, name, code, includes_vacuum_packing')
+      .in('id', ids);
+    if (!r1b.error) {
+      const mapped = (r1b.data || []).map((t: any) => ({
+        id: t.id,
+        name: t.name,
+        code: t.code,
+        includes_vacuum_protection: !!t.includes_vacuum_packing,
+      }));
+      return { data: mapped, error: null };
+    }
+
+    // Attempt 3: historical misspelling: inlcudes_vacuum_protecton
     const r2 = await supabase
       .from('packing_types')
       .select('id, name, code, inlcudes_vacuum_protecton')
@@ -900,7 +928,7 @@ export const db = {
       return { data: mapped, error: null };
     }
 
-    // Attempt 3: fallback without flag
+    // Attempt 4: fallback without flag
     const r3 = await supabase
       .from('packing_types')
       .select('id, name, code')
@@ -927,13 +955,24 @@ export const db = {
     return { data, error };
   },
 
-  // Material variants filtered by tag name (e.g., 'accessories')
+  // Material variants filtered by a specific tag name (strict match, case-insensitive)
   getMaterialVariantsByTag: async (tagName) => {
-    // Step 1: find materials that have the given tag
+    const normalized = String(tagName || '').trim();
+
+    // Step 0: resolve the tag id by name (case-insensitive exact)
+    const { data: tagRow, error: tagErr } = await supabase
+      .from('tags')
+      .select('id, name')
+      .ilike('name', normalized)
+      .maybeSingle();
+    if (tagErr) return { data: null, error: tagErr };
+    if (!tagRow?.id) return { data: [], error: null };
+
+    // Step 1: find materials that have exactly this tag id
     const { data: mats, error: matsErr } = await supabase
       .from('material_tags')
-      .select('material_id, tags(name)')
-      .eq('tags.name', tagName);
+      .select('material_id')
+      .eq('tag_id', tagRow.id);
     if (matsErr) return { data: null, error: matsErr };
     const materialIds = Array.from(new Set((mats || []).map((r: any) => r.material_id).filter(Boolean)));
     if (!materialIds.length) return { data: [], error: null };
@@ -941,7 +980,6 @@ export const db = {
     // Step 2: fetch all variants for these materials, including the material's default unit
     let variants: any = null;
     let varErr: any = null;
-    // Try selecting with materials' unit if available
     {
       const r = await supabase
         .from('material_variants')
@@ -961,7 +999,6 @@ export const db = {
       varErr = r.error;
     }
 
-    // Fallback: if that failed (e.g., materials has no unit_id), select minimal variant fields
     if (varErr) {
       const r2 = await supabase
         .from('material_variants')
@@ -1031,72 +1068,91 @@ export const db = {
     return { data: items, error: null };
   },
 
+  // Material variants filtered by material name with exact match (case-insensitive, no partials)
+  getMaterialVariantsByMaterialExactName: async (materialName) => {
+    const { data: mats, error: matsErr } = await supabase
+      .from('materials')
+      .select('id, name, unit_id, units_of_measure:unit_id ( id, name )')
+      .ilike('name', materialName); // exact (no wildcards)
+    if (matsErr) return { data: null, error: matsErr };
+    const materialIds = Array.from(new Set((mats || []).map((m: any) => m.id).filter(Boolean)));
+    if (!materialIds.length) return { data: [], error: null };
+
+    let variants: any = null;
+    let varErr: any = null;
+    const r = await supabase
+      .from('material_variants')
+      .select(`
+        id,
+        variant_name,
+        material_id,
+        materials:material_id (
+          id,
+          unit_id,
+          units_of_measure:unit_id ( id, name )
+        )
+      `)
+      .in('material_id', materialIds)
+      .order('variant_name');
+    variants = r.data;
+    varErr = r.error;
+    if (varErr) return { data: null, error: varErr };
+
+    const items = (variants || []).map((v: any) => ({
+      id: v.id,
+      value: v.id,
+      label: v.variant_name,
+      material_id: v.material_id,
+      unit_id: v?.materials?.unit_id || null,
+      unit_name: v?.materials?.units_of_measure?.name || null,
+    }));
+    return { data: items, error: null };
+  },
+
   // Get order package materials (used by Accessories)
   getOrderPackageMaterials: async (orderPackageId) => {
     const { data, error } = await supabase
       .from('order_package_materials')
-      .select('id, order_package_id, material_variant_id, quantity, unit_id, length, width, comment, item_used')
+      .select('id, order_package_id, material_variant_id, material_type, quantity, unit_id, length, width, comment, item_used')
       .eq('order_package_id', orderPackageId)
       .order('created_at', { ascending: true });
     return { data, error };
   },
 
   addOrderPackageMaterial: async (payload) => {
-    // Build three shapes to tolerate schema differences across environments
-    const legacy: any = {
+    // Canonicalize material_type to your enum values
+    const allowed = ['Accessories','Securing','Gas Packing','Vacuum Packing'];
+    const canonType = (() => {
+      const raw = String(payload.material_type || '').trim();
+      const match = allowed.find(a => a.toLowerCase() === raw.toLowerCase());
+      return match || (raw || 'Accessories');
+    })();
+
+    // Build exactly the row shape matching your table (single POST only)
+    const row: any = {
       order_package_id: payload.order_package_id,
       material_variant_id: payload.material_variant_id,
-      material_type: payload.material_type, // NOT NULL on live schema (e.g., 'Accessories')
-      is_final: payload.is_final ?? false, // NOT NULL boolean
+      material_type: canonType,
+      is_final: payload.is_final ?? true,
       quantity: (typeof payload.quantity === 'number' && isFinite(payload.quantity))
         ? payload.quantity
-        : (typeof payload.quantity_calculated === 'number' && isFinite(payload.quantity_calculated) ? payload.quantity_calculated : null),
+        : Number(payload.quantity ?? 0),
       unit_id: payload.unit_id,
       length: (typeof payload.length === 'number' && isFinite(payload.length)) ? payload.length : null,
       width: (typeof payload.width === 'number' && isFinite(payload.width)) ? payload.width : null,
-      comment: payload.comment ?? payload.notes ?? null,
+      height: (typeof payload.height === 'number' && isFinite(payload.height)) ? payload.height : null,
+      comment: payload.comment ?? null,
       item_used: payload.item_used ?? false,
+      original: payload.original ?? null,
+      quantity_used: (typeof payload.quantity_used === 'number' && isFinite(payload.quantity_used)) ? payload.quantity_used : null,
     };
 
-    const canonical: any = {
-      order_package_id: payload.order_package_id,
-      material_variant_id: payload.material_variant_id,
-      quantity_calculated: (typeof payload.quantity_calculated === 'number' && isFinite(payload.quantity_calculated))
-        ? payload.quantity_calculated
-        : (typeof payload.quantity === 'number' && isFinite(payload.quantity) ? payload.quantity : 0),
-      unit_id: payload.unit_id,
-      cost_at_calculation: (typeof payload.cost_at_calculation === 'number' && isFinite(payload.cost_at_calculation))
-        ? payload.cost_at_calculation
-        : 0,
-      quantity_actual: (typeof payload.quantity_actual === 'number' && isFinite(payload.quantity_actual)) ? payload.quantity_actual : null,
-      cost_actual: (typeof payload.cost_actual === 'number' && isFinite(payload.cost_actual)) ? payload.cost_actual : null,
-      usage_details: payload.usage_details ?? null,
-      notes: payload.notes ?? payload.comment ?? null,
-    };
-
-    // 1) Try legacy shape first (it matches what readers expect in this codebase)
-    let { data, error } = await supabase
+    const { data, error } = await supabase
       .from('order_package_materials')
-      .insert(legacy)
+      .insert(row)
       .select('id')
       .single();
-    if (!error) return { data, error: null };
-
-    // 2) Try canonical schema next
-    const q2 = await supabase
-      .from('order_package_materials')
-      .insert(canonical)
-      .select('id')
-      .single();
-    if (!q2.error) return { data: q2.data, error: null };
-
-    // 3) Last resort: try the raw payload we were given
-    const q3 = await supabase
-      .from('order_package_materials')
-      .insert(payload)
-      .select('id')
-      .single();
-    return { data: q3.data, error: q3.error };
+    return { data, error };
   },
 
   updateOrderPackageMaterial: async (id, fields) => {
