@@ -92,8 +92,8 @@ The application uses a comprehensive PostgreSQL schema with the following main e
    ```
 
 4. Set up the database:
-   - Run the schema from `supabase-schema-example.md` in your Supabase project
-   - Apply RLS policies from `supabase-rls-policies.sql`
+   - Set up your Supabase project with the required database schema
+   - Configure Row Level Security (RLS) policies as needed
 
 5. Start the development server:
    ```bash
