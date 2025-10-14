@@ -887,55 +887,85 @@ export const db = {
     return { data, error };
   },
 
-  // Packaging: packing types lookup (support multiple column names for vacuum flag)
+  // Packaging: packing types lookup (support multiple column names for vacuum/gas flags)
   getPackingTypesByIds: async (ids) => {
     if (!ids || ids.length === 0) return { data: [], error: null };
 
-    // Attempt 1: includes_vacuum_protection (preferred)
-    let r1 = await supabase
-      .from('packing_types')
-      .select('id, name, code, includes_vacuum_protection')
-      .in('id', ids);
-    if (!r1.error) return { data: r1.data, error: null };
-
-    // Attempt 2: includes_vacuum_packing (alternate naming)
-    const r1b = await supabase
-      .from('packing_types')
-      .select('id, name, code, includes_vacuum_packing')
-      .in('id', ids);
-    if (!r1b.error) {
-      const mapped = (r1b.data || []).map((t: any) => ({
-        id: t.id,
-        name: t.name,
-        code: t.code,
-        includes_vacuum_protection: !!t.includes_vacuum_packing,
-      }));
-      return { data: mapped, error: null };
+    // Attempt 1: preferred columns
+    {
+      const r = await supabase
+        .from('packing_types')
+        .select('id, name, code, includes_vacuum_protection, includes_gas_protection')
+        .in('id', ids);
+      if (!r.error) {
+        return { data: r.data, error: null };
+      }
     }
 
-    // Attempt 3: historical misspelling: inlcudes_vacuum_protecton
-    const r2 = await supabase
-      .from('packing_types')
-      .select('id, name, code, inlcudes_vacuum_protecton')
-      .in('id', ids);
-    if (!r2.error) {
-      const mapped = (r2.data || []).map((t: any) => ({
-        id: t.id,
-        name: t.name,
-        code: t.code,
-        includes_vacuum_protection: !!t.inlcudes_vacuum_protecton,
-      }));
-      return { data: mapped, error: null };
+    // Attempt 2: alternate naming for vacuum flag
+    {
+      const r = await supabase
+        .from('packing_types')
+        .select('id, name, code, includes_vacuum_packing, includes_gas_protection')
+        .in('id', ids);
+      if (!r.error) {
+        const mapped = (r.data || []).map((t: any) => ({
+          id: t.id,
+          name: t.name,
+          code: t.code,
+          includes_vacuum_protection: !!t.includes_vacuum_packing,
+          includes_gas_protection: !!t.includes_gas_protection,
+        }));
+        return { data: mapped, error: null };
+      }
     }
 
-    // Attempt 4: fallback without flag
-    const r3 = await supabase
-      .from('packing_types')
-      .select('id, name, code')
-      .in('id', ids);
-    if (r3.error) return { data: null, error: r3.error };
-    const withFlag = (r3.data || []).map((t: any) => ({ ...t, includes_vacuum_protection: false }));
-    return { data: withFlag, error: null };
+    // Attempt 3: alternate naming for gas flag
+    {
+      const r = await supabase
+        .from('packing_types')
+        .select('id, name, code, includes_vacuum_protection, includes_gas_packing')
+        .in('id', ids);
+      if (!r.error) {
+        const mapped = (r.data || []).map((t: any) => ({
+          id: t.id,
+          name: t.name,
+          code: t.code,
+          includes_vacuum_protection: !!t.includes_vacuum_protection,
+          includes_gas_protection: !!t.includes_gas_packing,
+        }));
+        return { data: mapped, error: null };
+      }
+    }
+
+    // Attempt 4: historical misspelling for vacuum flag
+    {
+      const r = await supabase
+        .from('packing_types')
+        .select('id, name, code, inlcudes_vacuum_protecton, includes_gas_protection')
+        .in('id', ids);
+      if (!r.error) {
+        const mapped = (r.data || []).map((t: any) => ({
+          id: t.id,
+          name: t.name,
+          code: t.code,
+          includes_vacuum_protection: !!t.inlcudes_vacuum_protecton,
+          includes_gas_protection: !!t.includes_gas_protection,
+        }));
+        return { data: mapped, error: null };
+      }
+    }
+
+    // Fallback without flags
+    {
+      const r = await supabase
+        .from('packing_types')
+        .select('id, name, code')
+        .in('id', ids);
+      if (r.error) return { data: null, error: r.error };
+      const withFlags = (r.data || []).map((t: any) => ({ ...t, includes_vacuum_protection: false, includes_gas_protection: false }));
+      return { data: withFlags, error: null };
+    }
   },
 
   getAllMaterials: async () => {
@@ -1109,11 +1139,11 @@ export const db = {
     return { data: items, error: null };
   },
 
-  // Get order package materials (used by Accessories)
+  // Get order package materials (used by Accessories and specialized sections)
   getOrderPackageMaterials: async (orderPackageId) => {
     const { data, error } = await supabase
       .from('order_package_materials')
-      .select('id, order_package_id, material_variant_id, material_type, quantity, unit_id, length, width, comment, item_used')
+      .select('id, order_package_id, material_variant_id, material_type, quantity, quantity_used, unit_id, length, width, comment, item_used')
       .eq('order_package_id', orderPackageId)
       .order('created_at', { ascending: true });
     return { data, error };

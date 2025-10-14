@@ -1,4 +1,4 @@
-# IPAC Operations App
++# IPAC Operations App
 
 A comprehensive operational management application for industrial packaging and preservation services, built with React Native and Expo.
 

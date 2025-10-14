@@ -10,6 +10,7 @@ import OrderPackingItems from '../../../components/packing/order_packing_items';
 import PackageForm from '../../../components/admin/orders/PackageForm';
 import AccessoriesSection from '../../../components/packing/AccessoriesSection';
 import VacuumPackingSection from '../../../components/packing/VacuumPackingSection';
+import GasPackingSection from '../../../components/packing/GasPackingSection';
 
 interface OrderPkg { id: string; package_number: number | null; description: string | null; status: string; original_pkg_info?: string | null; final_pkg_info?: string | null; }
 
@@ -26,6 +27,7 @@ export default function OrderDetailsPage() {
   const [newItem, setNewItem] = useState<Record<string, { designation: string; qty: string }>>({});
   const [showAddBox, setShowAddBox] = useState(false);
   const [packTypeHasVacuum, setPackTypeHasVacuum] = useState<Record<string, boolean>>({});
+  const [packTypeHasGas, setPackTypeHasGas] = useState<Record<string, boolean>>({});
 
   useEffect(() => { if (orderId) load(); }, [orderId]);
 
@@ -73,11 +75,14 @@ export default function OrderDetailsPage() {
       const packTypeIds = Array.from(new Set((infos || []).map((i: any) => i?.packing_type_id).filter(Boolean)));
       if (packTypeIds.length) {
         const { data: types } = await db.getPackingTypesByIds(packTypeIds);
-        const map: Record<string, boolean> = {};
-        (types || []).forEach((t: any) => { map[t.id] = !!t.includes_vacuum_protection; });
-        setPackTypeHasVacuum(map);
+        const vacMap: Record<string, boolean> = {};
+        const gasMap: Record<string, boolean> = {};
+        (types || []).forEach((t: any) => { vacMap[t.id] = !!t.includes_vacuum_protection; gasMap[t.id] = !!t.includes_gas_protection; });
+        setPackTypeHasVacuum(vacMap);
+        setPackTypeHasGas(gasMap);
       } else {
         setPackTypeHasVacuum({});
+        setPackTypeHasGas({});
       }
       // If order not pending, require confirmation to edit original
       setNeedsConfirm(ord?.production_status && ord.production_status !== 'pending');
@@ -200,6 +205,18 @@ export default function OrderDetailsPage() {
               <View className="mt-3">
                 <AccessoriesSection orderPackageId={p.id} />
               </View>
+
+              {/* Gas packing (conditional) */}
+              {(() => {
+                const draft = infoDrafts[p.id];
+                const packTypeId = draft?.packing_type_id || (null as any);
+                const hasGas = packTypeId ? !!packTypeHasGas[packTypeId] : false;
+                return hasGas ? (
+                  <View className="mt-3">
+                    <GasPackingSection orderPackageId={p.id} />
+                  </View>
+                ) : null;
+              })()}
 
               {/* Vacuum packing (conditional) */}
               {(() => {

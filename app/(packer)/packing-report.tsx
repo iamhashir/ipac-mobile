@@ -13,6 +13,7 @@ import BoxDetailsTab from '../../components/packing/BoxDetailsTab';
 import OrderTasksManagement from '../../components/packing/order_tasks_management';
 import OrderSecuringSection from '../../components/packing/OrderSecuringSection';
 import VacuumPackingSection from '../../components/packing/VacuumPackingSection';
+import GasPackingSection from '../../components/packing/GasPackingSection';
 import AccessoriesSection from '../../components/packing/AccessoriesSection';
 import CollapsibleCard from '../../components/packing/common/CollapsibleCard';
 
@@ -148,9 +149,11 @@ export default function PackingReportPage() {
           const { data: types } = await db.getPackingTypesByIds(packingIds);
           const pMap: Record<string, string> = {};
           const vMap: Record<string, boolean> = {};
-          (types || []).forEach((t: any) => { pMap[t.id] = t.code; vMap[t.id] = !!t.includes_vacuum_protection; });
+          const gMap: Record<string, boolean> = {};
+          (types || []).forEach((t: any) => { pMap[t.id] = t.code; vMap[t.id] = !!t.includes_vacuum_protection; gMap[t.id] = !!t.includes_gas_protection; });
           setPackingTypes(pMap);
           setPackTypeHasVacuum(vMap);
+          setPackTypeHasGas(gMap);
         }
       }
 
@@ -179,6 +182,7 @@ export default function PackingReportPage() {
   };
 
   const [packTypeHasVacuum, setPackTypeHasVacuum] = useState<Record<string, boolean>>({});
+  const [packTypeHasGas, setPackTypeHasGas] = useState<Record<string, boolean>>({});
 
   const rows: PackingRow[] = useMemo(() => {
     return orderPackages.map(p => {
@@ -308,6 +312,18 @@ export default function PackingReportPage() {
             >
               <OrderSecuringSection orderPackageId={p.id} editTarget="final" editable={true} autoSave={false} />
             </View>
+
+            {/* Gas packing (Final packing type) */}
+            {(() => {
+              const finalId = (pkgInfoMap[p.final_pkg_info || ''] as any)?.packing_type_id || null;
+              const originalId = (pkgInfoMap[p.original_pkg_info || ''] as any)?.packing_type_id || null;
+              const hasGas = (finalId && packTypeHasGas[finalId]) || (originalId && packTypeHasGas[originalId]);
+              return hasGas ? (
+                <View>
+                  <GasPackingSection orderPackageId={p.id} />
+                </View>
+              ) : null;
+            })()}
 
             {/* Vacuum packing (Final packing type) */}
             {(() => {
