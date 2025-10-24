@@ -1,0 +1,97 @@
+# Learn more: https://docs.expo.dev/build-reference/easignore/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Dependencies (EAS installs fresh)
+node_modules/
+
+# Build outputs and caches
+.expo/
+dist/
+web-build/
+dist-bundle/
+.metro-health-check*
+
+# Android build artifacts (rebuilt on EAS)
+android/app/.cxx/
+android/app/build/
+android/.gradle/
+android/build/
+android/app/debug.keystore
+android/local.properties
+
+# iOS build artifacts (rebuilt on EAS)
+ios/Pods/
+ios/build/
+ios/*.xcworkspace
+ios/*.xcuserdata/
+
+# Native binaries and archives
+*.ipa
+*.apk
+*.aab
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+
+# Development and debug files
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+*.log
+and-error-logs.txt
+
+# Documentation and temporary files
+*.md
+!README.md
+!CHANGELOG.md
+order_page_architecture.html
+order_page_architecture_files/
+*-fixes-*.md
+*-fix-*.md
+*-summary.md
+
+# SQL scripts (not needed for builds)
+*.sql
+fix_*.sql
+run-*.sql
+check-*.sql
+*_examples.sql
+
+# Environment files (use EAS Secrets instead)
+.env
+.env*.local
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test files (optional - remove if you run tests in CI)
+__tests__/
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Kotlin
+.kotlin/
+
+# Legacy artifacts
+functions/appwrite/
+
+# Misc
+*.pem
+.expo-shared/

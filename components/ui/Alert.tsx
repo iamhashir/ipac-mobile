@@ -58,9 +58,14 @@ export const Alert: React.FC<AlertProps> = ({
 
   if (floating) {
     return (
-      <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
-        <View className="flex-1">
-          <View className={floatWrap}>
+      <Modal 
+        visible={visible} 
+        animationType="fade" 
+        transparent 
+        statusBarTranslucent
+      >
+        <View className="flex-1" pointerEvents="box-none">
+          <View className={floatWrap} pointerEvents="box-none">
             <View className={`border ${c.border} ${c.bg} rounded-lg p-3 flex-row items-start shadow-lg`}>
               <Text className={`mr-2 ${c.text}`}>{c.icon}</Text>
               <View className="flex-1">

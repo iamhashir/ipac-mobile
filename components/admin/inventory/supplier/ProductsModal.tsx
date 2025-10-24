@@ -85,14 +85,11 @@ const [supplierVariants, setSupplierVariants] = useState<any[]>([]);
                       </View>
                       <View className="items-end">
                         <Text className="text-lg font-bold text-green-600">{formatPrice(item.price)}</Text>
-                        <Text className="text-sm text-gray-600">
-                          per {(() => {
-                            const unitName = item.units_of_measure?.name;
-                            return unitName && unitName.trim() && unitName.trim() !== '.' ? unitName : 'unit';
-                          })()}
-                        </Text>
-                        {item.stock_level !== null && (
-                          <Text className="text-sm text-blue-600 mt-1">Stock: {item.stock_level}</Text>
+                        {item.price_per_unit && (
+                          <Text className="text-xs text-gray-500">Per unit: {formatPrice(item.price_per_unit)}</Text>
+                        )}
+                        {item.supplier_quantity && (
+                          <Text className="text-xs text-blue-600 mt-1">Qty: {item.supplier_quantity}</Text>
                         )}
                         {/* Row action buttons */}
                         <View className="flex-row mt-2">
@@ -146,13 +143,19 @@ const [supplierVariants, setSupplierVariants] = useState<any[]>([]);
                       variant={editPricing.material_variants as MaterialVariant}
                       suppliers={[supplier]}
                       units={allUnits}
-                      pricing={{ supplier_id: supplier.id, price: editPricing.price, unit_id: editPricing.units_of_measure?.id || editPricing.unit_id }}
+                      pricing={{
+                        supplier_id: supplier.id,
+                        price: editPricing.price,
+                        price_per_unit: editPricing.price_per_unit,
+                        supplier_quantity: editPricing.supplier_quantity
+                      }}
                       defaultUnitId={(editPricing.material_variants as MaterialVariant)?.unit_id}
                       onSave={async (data: any) => {
                         try {
                           await pricingOperations.update(editPricing.id, {
                             price: data.price,
-                            unit_id: data.unit_id,
+                            price_per_unit: data.price_per_unit,
+                            supplier_quantity: data.supplier_quantity,
                             supplier_id: supplier.id,
                           });
                           setEditPricing(null);

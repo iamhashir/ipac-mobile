@@ -31,6 +31,10 @@ export interface MaterialVariant {
   description?: string;
   attributes?: Record<string, any>;
   unit_id?: string;
+  length?: number | null;
+  width?: number | null;
+  thickness?: number | null;
+  weight_per_unit?: number | null;
   created_at?: string;
   material?: Material;
   supplier_pricing?: SupplierPricing[];
@@ -42,11 +46,10 @@ export interface SupplierPricing {
   material_variant_id: string;
   supplier_id: string;
   price: number;
-  unit_id: string;
-  stock_level?: number | null;
+  price_per_unit: number;
+  supplier_quantity: number;
   updated_at?: string;
   suppliers?: Supplier;  // API returns 'suppliers' not 'supplier'
-  units_of_measure?: UnitOfMeasure;  // API returns 'units_of_measure' not 'unit'
 }
 
 export interface Supplier {
@@ -101,7 +104,7 @@ export const materialOperations = {
         // Load variants
         const { data: vars, error: varsErr } = await supabase
           .from('material_variants')
-          .select('id, material_id, variant_name, description, attributes, unit_id, created_at')
+          .select('id, material_id, variant_name, description, attributes, unit_id, length, width, thickness, weight_per_unit, created_at')
           .in('material_id', matIds);
         if (varsErr) return { data: null, error: varsErr };
         variants = vars || [];
@@ -115,17 +118,13 @@ export const materialOperations = {
               id,
               material_variant_id,
               price,
-              stock_level,
+              price_per_unit,
+              supplier_quantity,
               updated_at,
               suppliers (
                 id,
                 name,
                 contact_person
-              ),
-              units_of_measure:unit_id (
-                id,
-                name,
-                description
               )
             `)
             .in('material_variant_id', variantIds)
@@ -197,7 +196,8 @@ export const materialOperations = {
           supplier_pricing (
             id,
             price,
-            stock_level,
+            price_per_unit,
+            supplier_quantity,
             updated_at,
             suppliers (
               id,
@@ -205,11 +205,6 @@ export const materialOperations = {
               contact_person,
               email,
               phone
-            ),
-            units_of_measure:unit_id (
-              id,
-              name,
-              description
             )
           )
         ),
@@ -365,17 +360,13 @@ export const variantOperations = {
         supplier_pricing (
           id,
           price,
-          stock_level,
+          price_per_unit,
+          supplier_quantity,
           updated_at,
           suppliers (
             id,
             name,
             contact_person
-          ),
-          units_of_measure:unit_id (
-            id,
-            name,
-            description
           )
         )
       `)
@@ -580,19 +571,19 @@ export const supplierOperations = {
       .select(`
         id,
         price,
-        stock_level,
+        price_per_unit,
+        supplier_quantity,
         updated_at,
-        units_of_measure:unit_id (
-          id,
-          name,
-          description
-        ),
         material_variants:material_variant_id (
           id,
           variant_name,
           description,
           attributes,
           unit_id,
+          length,
+          width,
+          thickness,
+          weight_per_unit,
           materials:material_id (
             id,
             name,
@@ -665,11 +656,6 @@ export const pricingOperations = {
           contact_person,
           email,
           phone
-        ),
-        units_of_measure:unit_id (
-          id,
-          name,
-          description
         )
       `)
       .eq('material_variant_id', variantId)
@@ -689,11 +675,6 @@ export const pricingOperations = {
           id,
           name,
           contact_person
-        ),
-        units_of_measure:unit_id (
-          id,
-          name,
-          description
         )
       `)
       .single();

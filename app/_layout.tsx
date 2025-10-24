@@ -11,12 +11,11 @@ import { useFonts } from 'expo-font';
 import './globals.css';
 
 function AppStack() {
-  // Re-mount the navigator when text size changes so all Text nodes pick up new defaults
-  const { size } = useTextSize();
+  // Text nodes will pick up size changes via context
   return (
     <>
       <StatusBar style="auto" />
-      <Stack key={size} screenOptions={{ headerShown: false }}>
+      <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
         <Stack.Screen name="auth" />
         <Stack.Screen name="(admin)" />

@@ -286,29 +286,21 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                                         <Text className="text-lg font-bold text-green-600 mr-2">
                                           AED {pricing.price?.toFixed(2) || '0.00'}
                                         </Text>
-                                        <Text className="text-xs text-gray-500">
-                                          {(() => {
-                                            const unitName = pricing.units_of_measure?.name;
-                                            return unitName && unitName.trim() && unitName.trim() !== '.' ? `per ${unitName}` : 'per unit';
-                                          })()}
-                                        </Text>
                                       </View>
+                                      {pricing.price_per_unit && (
+                                        <Text className="text-xs text-gray-500">
+                                          Per unit: AED {pricing.price_per_unit?.toFixed(2)}
+                                        </Text>
+                                      )}
+                                      {pricing.supplier_quantity && (
+                                        <Text className="text-xs text-blue-600 mt-1">
+                                          Supplier qty: {pricing.supplier_quantity}
+                                        </Text>
+                                      )}
                                       
                                       <Text className="text-xs text-gray-400 mt-1">
                                         Updated: {formatLastUpdated(pricing.updated_at)}
                                       </Text>
-                                      
-                                      {pricing.stock_level !== null && pricing.stock_level !== undefined && (
-                                        <View className="flex-row items-center mt-1">
-                                          <View className={`w-2 h-2 rounded-full mr-1 ${
-                                            pricing.stock_level > 10 ? 'bg-green-500' : 
-                                            pricing.stock_level > 0 ? 'bg-yellow-500' : 'bg-red-500'
-                                          }`} />
-                                          <Text className="text-xs text-gray-500">
-                                            Stock: {pricing.stock_level}
-                                          </Text>
-                                        </View>
-                                      )}
                                       {/* Action buttons */}
                                       <View className="flex-row mt-2">
                                         <TouchableOpacity
@@ -1152,36 +1144,18 @@ function VariantCard({
                             <Text className="text-lg font-bold text-green-600">
                               AED {pricing.price.toFixed(2)}
                             </Text>
-                            <Text className="text-xs text-gray-500">
-                              per {(() => {
-                                const unitName = pricing.units_of_measure?.name;
-                                return unitName && unitName.trim() && unitName.trim() !== '.' ? unitName : 'unit';
-                              })()}
-                            </Text>
+                            {pricing.price_per_unit && (
+                              <Text className="text-xs text-gray-500">
+                                Per unit: AED {pricing.price_per_unit.toFixed(2)}
+                              </Text>
+                            )}
                           </View>
                           
                           <View className="items-end">
-                            {pricing.stock_level !== null && pricing.stock_level !== undefined ? (
-                              <View className="flex-row items-center">
-                                <View className={`w-2 h-2 rounded-full mr-1 ${
-                                  pricing.stock_level > 10 
-                                    ? 'bg-green-500' 
-                                    : pricing.stock_level > 0 
-                                    ? 'bg-yellow-500' 
-                                    : 'bg-red-500'
-                                }`} />
-                                <Text className={`text-xs font-medium ${
-                                  pricing.stock_level > 10 
-                                    ? 'text-green-600' 
-                                    : pricing.stock_level > 0 
-                                    ? 'text-yellow-600' 
-                                    : 'text-red-600'
-                                }`}>
-                                  Stock: {pricing.stock_level}
-                                </Text>
-                              </View>
-                            ) : (
-                              <Text className="text-xs text-gray-400">Stock: N/A</Text>
+                            {pricing.supplier_quantity && (
+                              <Text className="text-xs text-blue-600">
+                                Qty: {pricing.supplier_quantity}
+                              </Text>
                             )}
                             
                             {pricing.updated_at && (
@@ -1775,9 +1749,14 @@ export function SupplierProductModal({
                             return unitName && unitName.trim() && unitName.trim() !== '.' ? unitName : 'unit';
                           })()}
                         </Text>
-                        {item.stock_level !== null && (
+                        {item.price_per_unit && (
+                          <Text className="text-xs text-gray-500 mt-1">
+                            Per unit: {formatPrice(item.price_per_unit)}
+                          </Text>
+                        )}
+                        {item.supplier_quantity && (
                           <Text className="text-sm text-blue-600 mt-1">
-                            Stock: {item.stock_level}
+                            Qty: {item.supplier_quantity}
                           </Text>
                         )}
                       </View>
@@ -1850,7 +1829,6 @@ export function SupplierVariantManager({
   const [selectedVariant, setSelectedVariant] = useState<MaterialVariant | null>(null);
   const [price, setPrice] = useState('');
   const [selectedUnit, setSelectedUnit] = useState<UnitOfMeasure | null>(null);
-  const [stockLevel, setStockLevel] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
   const [filteredMaterials, setFilteredMaterials] = useState<Material[]>(allMaterials);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1885,7 +1863,6 @@ export function SupplierVariantManager({
     setSelectedVariant(null);
     setPrice('');
     setSelectedUnit(null);
-    setStockLevel('');
     setShowDropdown(false);
   };
 
@@ -1913,8 +1890,8 @@ export function SupplierVariantManager({
         material_variant_id: selectedVariant.id,
         supplier_id: supplier.id,
         price: parseFloat(price),
-        unit_id: selectedUnit.id,
-        stock_level: stockLevel ? parseInt(stockLevel) : null
+        price_per_unit: parseFloat(price), // default to price
+        supplier_quantity: 1 // default quantity
       };
 
       const { error } = await pricingOperations.create(pricingData);
@@ -1959,8 +1936,8 @@ export function SupplierVariantManager({
         material_variant_id: newVariant.id,
         supplier_id: supplier.id,
         price: parseFloat(price),
-        unit_id: selectedUnit.id,
-        stock_level: stockLevel ? parseInt(stockLevel) : null
+        price_per_unit: parseFloat(price), // default to price
+        supplier_quantity: 1 // default quantity
       };
 
       const { error: pricingError } = await pricingOperations.create(pricingData);
@@ -2021,8 +1998,8 @@ export function SupplierVariantManager({
         material_variant_id: newVariant.id,
         supplier_id: supplier.id,
         price: parseFloat(price),
-        unit_id: selectedUnit.id,
-        stock_level: stockLevel ? parseInt(stockLevel) : null
+        price_per_unit: parseFloat(price), // default to price
+        supplier_quantity: 1 // default quantity
       };
 
       const { error: pricingError } = await pricingOperations.create(pricingData);
@@ -2362,20 +2339,6 @@ export function SupplierVariantManager({
                       </TouchableOpacity>
                     ))}
                   </View>
-                </View>
-
-                {/* Stock Level (Optional) */}
-                <View className="mb-4">
-                  <Text className="text-base font-medium text-gray-900 mb-2">
-                    Stock Level (Optional)
-                  </Text>
-                  <TextInput
-                    value={stockLevel}
-                    onChangeText={setStockLevel}
-                    placeholder="0"
-                    keyboardType="numeric"
-                    className="border border-gray-300 rounded-lg px-3 py-2"
-                  />
                 </View>
 
                 {/* Submit Button */}

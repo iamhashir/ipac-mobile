@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ScrollView,
   TextInput,
+  Alert,
 } from "react-native";
 import {
   ChevronRight,
@@ -21,12 +22,14 @@ import {
   Material,
   MaterialVariant,
   UnitOfMeasure,
+  Tag,
 } from "../../../../utils/api/inventory";
 import {
   supplierOperations,
   variantOperations,
   materialOperations,
   pricingOperations,
+  tagOperations,
 } from "../../../../utils/api/inventory";
 
 export interface AddSupplierProductModalProps {
@@ -215,18 +218,102 @@ function SupplierVariantManager({
   const [newVariantName, setNewVariantName] = useState("");
   const [newVariantDescription, setNewVariantDescription] = useState("");
   const [variantAttributes, setVariantAttributes] = useState<{ key: string; value: string }[]>([{ key: "", value: "" }]);
+  
+  // Dimension fields for variants
+  const [length, setLength] = useState("");
+  const [width, setWidth] = useState("");
+  const [thickness, setThickness] = useState("");
+  const [weightPerUnit, setWeightPerUnit] = useState("");
+  
+  // Pricing fields
+  const [pricePerUnit, setPricePerUnit] = useState("");
+  const [supplierQuantity, setSupplierQuantity] = useState("");
 
   // Variant naming preference
   const [includePrefix, setIncludePrefix] = useState(true);
 
+  // Tags state
+  const [availableTags, setAvailableTags] = useState<Tag[]>([]);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [newTagName, setNewTagName] = useState("");
+  const [loadingTags, setLoadingTags] = useState(true);
+  const [showTagDropdown, setShowTagDropdown] = useState(false);
+
   // Derived flags
   const isNewMaterial = !selectedMaterial && searchQuery.trim().length > 0;
+
+  // Load tags on mount
+  useEffect(() => {
+    loadTags();
+  }, []);
+
+  // Load variant tags when variant is selected
+  useEffect(() => {
+    if (selectedVariant?.id) {
+      loadVariantTags();
+    } else {
+      setSelectedTags([]);
+    }
+  }, [selectedVariant?.id]);
 
   useEffect(() => {
     if (isNewMaterial) {
       setNewMaterialName(searchQuery);
     }
   }, [isNewMaterial, searchQuery]);
+
+  const loadTags = async () => {
+    try {
+      const { data, error } = await tagOperations.getAll();
+      if (error) {
+        console.error("Error loading tags:", error);
+      } else {
+        setAvailableTags(data || []);
+      }
+    } catch (error) {
+      console.error("Error loading tags:", error);
+    } finally {
+      setLoadingTags(false);
+    }
+  };
+
+  const loadVariantTags = async () => {
+    if (!selectedVariant?.id) return;
+    try {
+      const { data, error } = await variantOperations.getWithTags(selectedVariant.id);
+      if (data?.material_variant_tags) {
+        const tagIds = data.material_variant_tags.map((vt: any) => vt.tag_id);
+        setSelectedTags(tagIds);
+      }
+    } catch (error) {
+      console.error("Error loading variant tags:", error);
+    }
+  };
+
+  const toggleTag = (tagId: string) => {
+    setSelectedTags((prev) =>
+      prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId]
+    );
+  };
+
+  const handleAddTag = async () => {
+    const name = newTagName.trim();
+    if (!name) return;
+    try {
+      const { data, error } = await tagOperations.create(name);
+      if (error) {
+        Alert.alert("Error", "Failed to create tag");
+        return;
+      }
+      if (data) {
+        setAvailableTags((prev) => [...prev, data as Tag]);
+        setSelectedTags((prev) => [...prev, (data as Tag).id]);
+        setNewTagName("");
+      }
+    } catch (e) {
+      Alert.alert("Error", "Failed to create tag");
+    }
+  };
 
   // Compute suggestions for existing material + suffix typing
   const variantSuggestions = useMemo(() => {
@@ -283,7 +370,6 @@ function SupplierVariantManager({
     setSelectedVariant(null);
     setPrice("");
     setSelectedUnit(null);
-    setStockLevel("");
     setShowDropdown(false);
     setVariantQuery("");
     setVariantSuffix("");
@@ -293,6 +379,14 @@ function SupplierVariantManager({
     setNewVariantName("");
     setNewVariantDescription("");
     setVariantAttributes([{ key: "", value: "" }]);
+    setLength("");
+    setWidth("");
+    setThickness("");
+    setWeightPerUnit("");
+    setPricePerUnit("");
+    setSupplierQuantity("");
+    setSelectedTags([]);
+    setNewTagName("");
   };
 
   const handleSelectMaterial = (material: Material) => {
@@ -401,6 +495,10 @@ function SupplierVariantManager({
           description: (selectedMaterial ? newVariantDescription : newVariantDescription) || null,
           attributes: Object.keys(attrsObj).length > 0 ? attrsObj : {},
           unit_id: selectedUnit!.id,
+          length: length ? parseFloat(length) : null,
+          width: width ? parseFloat(width) : null,
+          thickness: thickness ? parseFloat(thickness) : null,
+          weight_per_unit: weightPerUnit ? parseFloat(weightPerUnit) : null,
         };
         const { data: newVar, error: varErr } = await variantOperations.create(
           variantData
@@ -413,13 +511,18 @@ function SupplierVariantManager({
         variant = newVar as MaterialVariant;
       }
 
+      // 2.5) Update variant tags if any selected
+      if (selectedTags.length > 0 && variant?.id) {
+        await variantOperations.updateTags(variant.id, selectedTags);
+      }
+
       // 3) Create pricing
       const pricingData: any = {
         material_variant_id: variant.id,
         supplier_id: supplier.id,
         price: parseFloat(price),
-        unit_id: selectedUnit!.id,
-        stock_level: stockLevel ? parseInt(stockLevel) : null,
+        price_per_unit: pricePerUnit ? parseFloat(pricePerUnit) : parseFloat(price),
+        supplier_quantity: supplierQuantity ? parseFloat(supplierQuantity) : 1,
       };
       const { error: pricingError } = await pricingOperations.create(pricingData);
       if (!pricingError) {
@@ -461,8 +564,8 @@ function SupplierVariantManager({
         material_variant_id: newVariant.id,
         supplier_id: supplier.id,
         price: parseFloat(price),
-        unit_id: selectedUnit.id,
-        stock_level: stockLevel ? parseInt(stockLevel) : null,
+        price_per_unit: pricePerUnit ? parseFloat(pricePerUnit) : parseFloat(price),
+        supplier_quantity: supplierQuantity ? parseFloat(supplierQuantity) : 1,
       };
       const { error: pricingError } = await pricingOperations.create(
         pricingData
@@ -523,8 +626,8 @@ function SupplierVariantManager({
         material_variant_id: newVariant.id,
         supplier_id: supplier.id,
         price: parseFloat(price),
-        unit_id: selectedUnit.id,
-        stock_level: stockLevel ? parseInt(stockLevel) : null,
+        price_per_unit: pricePerUnit ? parseFloat(pricePerUnit) : parseFloat(price),
+        supplier_quantity: supplierQuantity ? parseFloat(supplierQuantity) : 1,
       };
       const { error: pricingError } = await pricingOperations.create(
         pricingData
@@ -705,6 +808,42 @@ function SupplierVariantManager({
                         className="border border-gray-300 rounded-lg px-3 py-2"
                       />
                     </View>
+                    {/* Dimension fields */}
+                    <View className="mt-4">
+                      <Text className="text-base font-medium text-gray-900 mb-2">Dimensions</Text>
+                      <View className="flex-row space-x-2 mb-2">
+                        <View className="flex-1">
+                          <Text className="text-xs text-gray-600 mb-1">Length</Text>
+                          <TextInput
+                            value={length}
+                            onChangeText={setLength}
+                            placeholder="Length"
+                            keyboardType="decimal-pad"
+                            className="border border-gray-300 rounded-lg px-2 py-2 text-sm"
+                          />
+                        </View>
+                        <View className="flex-1">
+                          <Text className="text-xs text-gray-600 mb-1">Width</Text>
+                          <TextInput
+                            value={width}
+                            onChangeText={setWidth}
+                            placeholder="Width"
+                            keyboardType="decimal-pad"
+                            className="border border-gray-300 rounded-lg px-2 py-2 text-sm"
+                          />
+                        </View>
+                        <View className="flex-1">
+                          <Text className="text-xs text-gray-600 mb-1">Thickness</Text>
+                          <TextInput
+                            value={thickness}
+                            onChangeText={setThickness}
+                            placeholder="Thickness"
+                            keyboardType="decimal-pad"
+                            className="border border-gray-300 rounded-lg px-2 py-2 text-sm"
+                          />
+                        </View>
+                      </View>
+                    </View>
                     <View className="mt-2">
                       <View className="flex-row justify-between items-center mb-2">
                         <Text className="text-sm font-medium text-gray-700">Attributes</Text>
@@ -796,6 +935,42 @@ function SupplierVariantManager({
                     className="border border-gray-300 rounded-lg px-3 py-2"
                   />
                 </View>
+                {/* Dimension fields */}
+                <View className="mb-4">
+                  <Text className="text-base font-medium text-gray-900 mb-2">Dimensions</Text>
+                  <View className="flex-row space-x-2 mb-2">
+                    <View className="flex-1">
+                      <Text className="text-xs text-gray-600 mb-1">Length</Text>
+                      <TextInput
+                        value={length}
+                        onChangeText={setLength}
+                        placeholder="Length"
+                        keyboardType="decimal-pad"
+                        className="border border-gray-300 rounded-lg px-2 py-2 text-sm"
+                      />
+                    </View>
+                    <View className="flex-1">
+                      <Text className="text-xs text-gray-600 mb-1">Width</Text>
+                      <TextInput
+                        value={width}
+                        onChangeText={setWidth}
+                        placeholder="Width"
+                        keyboardType="decimal-pad"
+                        className="border border-gray-300 rounded-lg px-2 py-2 text-sm"
+                      />
+                    </View>
+                    <View className="flex-1">
+                      <Text className="text-xs text-gray-600 mb-1">Thickness</Text>
+                      <TextInput
+                        value={thickness}
+                        onChangeText={setThickness}
+                        placeholder="Thickness"
+                        keyboardType="decimal-pad"
+                        className="border border-gray-300 rounded-lg px-2 py-2 text-sm"
+                      />
+                    </View>
+                  </View>
+                </View>
                 <View className="mb-4">
                   <View className="flex-row justify-between items-center mb-2">
                     <Text className="text-sm font-medium text-gray-700">Attributes</Text>
@@ -845,13 +1020,39 @@ function SupplierVariantManager({
           <TextInput
             value={price}
             onChangeText={setPrice}
-            placeholder="Enter price"
+            placeholder="Enter total price"
             keyboardType="decimal-pad"
             className="border border-gray-300 rounded-lg px-3 py-2"
           />
-              {errors.price && (
+          {errors.price && (
             <Text className="text-xs text-red-600 mt-1">{errors.price}</Text>
           )}
+        </View>
+        <View className="mb-4">
+          <Text className="text-sm font-medium text-gray-700 mb-2">
+            Price Per Unit
+          </Text>
+          <TextInput
+            value={pricePerUnit}
+            onChangeText={setPricePerUnit}
+            placeholder="Enter price per unit (optional)"
+            keyboardType="decimal-pad"
+            className="border border-gray-300 rounded-lg px-3 py-2"
+          />
+          <Text className="text-xs text-gray-500 mt-1">Leave empty to use total price</Text>
+        </View>
+        <View className="mb-4">
+          <Text className="text-sm font-medium text-gray-700 mb-2">
+            Supplier Quantity
+          </Text>
+          <TextInput
+            value={supplierQuantity}
+            onChangeText={setSupplierQuantity}
+            placeholder="Quantity from supplier (e.g., sheets)"
+            keyboardType="decimal-pad"
+            className="border border-gray-300 rounded-lg px-3 py-2"
+          />
+          <Text className="text-xs text-gray-500 mt-1">E.g., for plywood: unit is m² but comes in 29m² sheets</Text>
         </View>
       <View className="mb-4">
           <Text className="text-sm font-medium text-gray-700 mb-2">Unit of Measure *</Text>
@@ -903,19 +1104,105 @@ function SupplierVariantManager({
               </View>
             )}
           </View>
-          {errors.unit && <Text className="text-xs text-red-600 mt-1">{errors.unit}</Text>}
+        {errors.unit && <Text className="text-xs text-red-600 mt-1">{errors.unit}</Text>}
         </View>
-        <View className="mb-6">
-          <Text className="text-sm font-medium text-gray-700 mb-2">
-            Stock Level
-          </Text>
-          <TextInput
-            value={stockLevel}
-            onChangeText={setStockLevel}
-            placeholder="Optional stock level"
-            keyboardType="number-pad"
-            className="border border-gray-300 rounded-lg px-3 py-2"
-          />
+
+        {/* Variant Tags */}
+        <View className="mb-4">
+          <Text className="text-sm font-medium text-gray-700 mb-2">Variant Tags</Text>
+          <View className="border border-gray-300 rounded-lg p-3">
+            {/* Selected tags */}
+            {selectedTags.length > 0 && (
+              <View className="flex-row flex-wrap mb-3">
+                {selectedTags.map((tagId) => {
+                  const tag = availableTags.find((t) => t.id === tagId);
+                  if (!tag) return null;
+                  return (
+                    <TouchableOpacity
+                      key={tagId}
+                      onPress={() => toggleTag(tagId)}
+                      className="bg-blue-100 border border-blue-300 rounded-full px-3 py-1 mr-2 mb-2 flex-row items-center"
+                    >
+                      <Text className="text-sm text-blue-700 mr-1">{tag.name}</Text>
+                      <X size={14} color="#1d4ed8" />
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* Tag dropdown toggle */}
+            <TouchableOpacity
+              onPress={() => setShowTagDropdown(!showTagDropdown)}
+              className="flex-row items-center justify-between py-2 border-t border-gray-200"
+            >
+              <View className="flex-row items-center">
+                <TagIcon size={16} color="#6b7280" />
+                <Text className="text-sm text-gray-600 ml-2">
+                  {showTagDropdown ? "Hide available tags" : "Show available tags"}
+                </Text>
+              </View>
+              <ChevronDown
+                size={16}
+                color="#6b7280"
+                style={{
+                  transform: [{ rotate: showTagDropdown ? "180deg" : "0deg" }],
+                }}
+              />
+            </TouchableOpacity>
+
+            {/* Available tags dropdown */}
+            {showTagDropdown && (
+              <View className="mt-3">
+                {/* Create new tag */}
+                <View className="flex-row mb-3">
+                  <TextInput
+                    value={newTagName}
+                    onChangeText={setNewTagName}
+                    placeholder="New tag name"
+                    className="flex-1 border border-gray-300 rounded-lg px-3 py-2 mr-2 text-sm"
+                  />
+                  <TouchableOpacity
+                    onPress={handleAddTag}
+                    className="bg-green-500 px-4 py-2 rounded-lg justify-center"
+                  >
+                    <Plus size={16} color="white" />
+                  </TouchableOpacity>
+                </View>
+
+                {/* Available tags list */}
+                <View className="flex-row flex-wrap">
+                  {availableTags.map((tag) => (
+                    <TouchableOpacity
+                      key={tag.id}
+                      onPress={() => toggleTag(tag.id)}
+                      className={`rounded-full px-3 py-1 mr-2 mb-2 border ${
+                        selectedTags.includes(tag.id)
+                          ? "bg-blue-100 border-blue-300"
+                          : "bg-gray-100 border-gray-300"
+                      }`}
+                    >
+                      <Text
+                        className={`text-sm ${
+                          selectedTags.includes(tag.id)
+                            ? "text-blue-700"
+                            : "text-gray-700"
+                        }`}
+                      >
+                        {tag.name}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {availableTags.length === 0 && !loadingTags && (
+                  <Text className="text-sm text-gray-500 italic">
+                    No tags available. Create one above.
+                  </Text>
+                )}
+              </View>
+            )}
+          </View>
         </View>
       </ScrollView>
 

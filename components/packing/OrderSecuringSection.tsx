@@ -14,7 +14,10 @@ interface OrderSecuringSectionProps {
  const typeWideWidth = 240;
  
  const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 'original' | 'final'; editable?: boolean; autoSave?: boolean }> = ({ orderPackageId, editTarget = 'final', editable = true, autoSave = true }) => {
-  const [variants, setVariants] = useState<{ label: string; value: string }[]>([]);
+  // Separate variant lists for different sections
+  const [bodyVariants, setBodyVariants] = useState<{ label: string; value: string }[]>([]);
+  const [barVariants, setBarVariants] = useState<{ label: string; value: string }[]>([]);
+  const [woodVariants, setWoodVariants] = useState<{ label: string; value: string }[]>([]);
   const [data, setData] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<Side>('big_sides');
   // Simplified tabs: remove horizontal ScrollView state to avoid jitter
@@ -38,12 +41,18 @@ interface OrderSecuringSectionProps {
 
   useEffect(() => {
     const init = async () => {
-      // Load only securing variants for dropdowns
-      const { data: vars } = await db.getMaterialVariantsByTag('securing');
-      setVariants((vars || []).map((v: any) => ({ label: v.label, value: v.id || v.value })));
-      // Load securing data (no writes on mount)
-      const { data } = await db.getSecuringForPackage(orderPackageId);
-      setData(data || []);
+      // Load variants by their respective variant tags
+      const [bodyRes, barRes, woodRes, securingData] = await Promise.all([
+        db.getMaterialVariantsByVariantTag('Body'),
+        db.getMaterialVariantsByVariantTag('Bar'),
+        db.getMaterialVariantsByVariantTag('Wood'),
+        db.getSecuringForPackage(orderPackageId)
+      ]);
+      
+      setBodyVariants((bodyRes.data || []).map((v: any) => ({ label: v.label, value: v.id || v.value })));
+      setBarVariants((barRes.data || []).map((v: any) => ({ label: v.label, value: v.id || v.value })));
+      setWoodVariants((woodRes.data || []).map((v: any) => ({ label: v.label, value: v.id || v.value })));
+      setData(securingData.data || []);
     };
     init();
   }, [orderPackageId]);
@@ -65,8 +74,18 @@ interface OrderSecuringSectionProps {
   }, [data]);
 
   const templateField = (row: any, field: string) => row?.securing_template ? row.securing_template[field] : null;
-  const variantLabelById = (id: string | null | undefined) => {
-    const item = variants.find(m => m.value === id);
+  
+  // Helper to find variant label from any of the three variant lists
+  const variantLabelById = (id: string | null | undefined, variantList?: { label: string; value: string }[]) => {
+    if (!id) return '—';
+    // If specific list provided, search only that list
+    if (variantList) {
+      const item = variantList.find(m => m.value === id);
+      return item?.label || '—';
+    }
+    // Otherwise search all lists
+    const allVariants = [...bodyVariants, ...barVariants, ...woodVariants];
+    const item = allVariants.find(m => m.value === id);
     return item?.label || '—';
   };
 
@@ -180,7 +199,7 @@ interface OrderSecuringSectionProps {
         {/* Top row: Quantity | Type | Thickness */}
         <View className="flex-row flex-wrap">
           <TwoTierEditableCard key={`${side}-quantity-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.quantity ?? null} final={tmplFin?.quantity ?? null} type="number" onChange={(v) => saveTemplate({ quantity: v })} width={smallWidth} draftValue={(pending as any)[side]?.template?.quantity} />
-          <TwoTierEditableCard key={`${side}-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.type_id)} final={variantLabelById(tmplFin?.type_id)} type="select" selectItems={variants} onChange={(v) => saveTemplate({ type_id: v })} width={typeWideWidth} finalSelectValue={tmplFin?.type_id || null} defaultSelectValue={tmplOrig?.type_id || null} draftValue={(pending as any)[side]?.template?.type_id} />
+          <TwoTierEditableCard key={`${side}-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.type_id, bodyVariants)} final={variantLabelById(tmplFin?.type_id, bodyVariants)} type="select" selectItems={bodyVariants} onChange={(v) => saveTemplate({ type_id: v })} width={typeWideWidth} finalSelectValue={tmplFin?.type_id || null} defaultSelectValue={tmplOrig?.type_id || null} draftValue={(pending as any)[side]?.template?.type_id} />
           <TwoTierEditableCard key={`${side}-thickness-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.thickness ?? null} final={tmplFin?.thickness ?? null} type="number" onChange={(v) => saveTemplate({ thickness: v })} width={smallWidth} draftValue={(pending as any)[side]?.template?.thickness} />
         </View>
 
@@ -188,7 +207,7 @@ interface OrderSecuringSectionProps {
         <GroupBox title="Horizontal bars">
           <View className="flex-row flex-wrap">
             <TwoTierEditableCard key={`${side}-hb-qty-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.horizontal_bar?.quantity ?? null} final={tmplFin?.horizontal_bar?.quantity ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { quantity: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.quantity} />
-            <TwoTierEditableCard key={`${side}-hb-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.horizontal_bar?.type)} final={variantLabelById(tmplFin?.horizontal_bar?.type)} type="select" selectItems={variants} onChange={(v) => saveBeam('horizontal_bar', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.horizontal_bar?.type || null} defaultSelectValue={tmplOrig?.horizontal_bar?.type || null} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.type} />
+            <TwoTierEditableCard key={`${side}-hb-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.horizontal_bar?.type, barVariants)} final={variantLabelById(tmplFin?.horizontal_bar?.type, barVariants)} type="select" selectItems={barVariants} onChange={(v) => saveBeam('horizontal_bar', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.horizontal_bar?.type || null} defaultSelectValue={tmplOrig?.horizontal_bar?.type || null} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.type} />
             <TwoTierEditableCard key={`${side}-hb-space-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Space" original={tmplOrig?.horizontal_bar?.space ?? null} final={tmplFin?.horizontal_bar?.space ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { space: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.space} />
             <TwoTierEditableCard key={`${side}-hb-width-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Width" original={tmplOrig?.horizontal_bar?.width ?? null} final={tmplFin?.horizontal_bar?.width ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { width: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.width} />
             <TwoTierEditableCard key={`${side}-hb-thick-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.horizontal_bar?.thickness ?? null} final={tmplFin?.horizontal_bar?.thickness ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { thickness: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.thickness} />
@@ -199,7 +218,7 @@ interface OrderSecuringSectionProps {
         <GroupBox title="Vertical bars">
           <View className="flex-row flex-wrap">
             <TwoTierEditableCard key={`${side}-vb-qty-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.vertical_bar?.quantity ?? null} final={tmplFin?.vertical_bar?.quantity ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { quantity: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.vertical_bar?.quantity} />
-            <TwoTierEditableCard key={`${side}-vb-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.vertical_bar?.type)} final={variantLabelById(tmplFin?.vertical_bar?.type)} type="select" selectItems={variants} onChange={(v) => saveBeam('vertical_bar', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.vertical_bar?.type || null} defaultSelectValue={tmplOrig?.vertical_bar?.type || null} draftValue={(pending as any)[side]?.beams?.vertical_bar?.type} />
+            <TwoTierEditableCard key={`${side}-vb-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.vertical_bar?.type, barVariants)} final={variantLabelById(tmplFin?.vertical_bar?.type, barVariants)} type="select" selectItems={barVariants} onChange={(v) => saveBeam('vertical_bar', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.vertical_bar?.type || null} defaultSelectValue={tmplOrig?.vertical_bar?.type || null} draftValue={(pending as any)[side]?.beams?.vertical_bar?.type} />
             <TwoTierEditableCard key={`${side}-vb-space-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Space" original={tmplOrig?.vertical_bar?.space ?? null} final={tmplFin?.vertical_bar?.space ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { space: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.vertical_bar?.space} />
             <TwoTierEditableCard key={`${side}-vb-width-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Width" original={tmplOrig?.vertical_bar?.width ?? null} final={tmplFin?.vertical_bar?.width ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { width: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.vertical_bar?.width} />
             <TwoTierEditableCard key={`${side}-vb-thick-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.vertical_bar?.thickness ?? null} final={tmplFin?.vertical_bar?.thickness ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { thickness: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.vertical_bar?.thickness} />
@@ -211,7 +230,7 @@ interface OrderSecuringSectionProps {
           <GroupBox title="Skids">
             <View className="flex-row flex-wrap">
               <TwoTierEditableCard key={`${side}-sk-qty-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.skids?.quantity ?? null} final={tmplFin?.skids?.quantity ?? null} type="number" onChange={(v) => saveBeam('skids', { quantity: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.skids?.quantity} />
-              <TwoTierEditableCard key={`${side}-sk-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.skids?.type)} final={variantLabelById(tmplFin?.skids?.type)} type="select" selectItems={variants} onChange={(v) => saveBeam('skids', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.skids?.type || null} defaultSelectValue={tmplOrig?.skids?.type || null} draftValue={(pending as any)[side]?.beams?.skids?.type} />
+              <TwoTierEditableCard key={`${side}-sk-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.skids?.type, woodVariants)} final={variantLabelById(tmplFin?.skids?.type, woodVariants)} type="select" selectItems={woodVariants} onChange={(v) => saveBeam('skids', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.skids?.type || null} defaultSelectValue={tmplOrig?.skids?.type || null} draftValue={(pending as any)[side]?.beams?.skids?.type} />
               <TwoTierEditableCard key={`${side}-sk-thick-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.skids?.thickness ?? null} final={tmplFin?.skids?.thickness ?? null} type="number" onChange={(v) => saveBeam('skids', { thickness: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.skids?.thickness} />
             </View>
           </GroupBox>

@@ -1,15 +1,15 @@
 {
   "expo": {
-    "name": "IPAC",
+    "name": "IPAC VALSEM",
     "slug": "ipac-operations-app",
     "version": "1.0.0",
     "orientation": "default",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/ios-light.png",
     "userInterfaceStyle": "light",
-  "newArchEnabled": false,
-  "scheme": "ipac-operations-app",
+    "newArchEnabled": false,
+    "scheme": "ipac-operations-app",
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/splash-icon-dark.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -30,10 +30,7 @@
       "output": "static",
       "backgroundColor": "#ffffff"
     },
-    "plugins": [
-      "expo-router",
-      "expo-dev-client"
-    ],
+    "plugins": ["expo-router", "expo-dev-client"],
     "experiments": {
       "typedRoutes": true
     },
@@ -41,7 +38,9 @@
       "router": {},
       "eas": {
         "projectId": "062cda24-3592-4de1-9d03-c22f89ccef94"
-      }
+      },
+      "supabaseUrl": "https://fqynbudvpvpiljdrrvem.supabase.co",
+      "supabasePublishableKey": "sb_publishable_dfuVrEfuwxJE4wVSw6mxcg_W5qV7iTs"
     }
   }
 }

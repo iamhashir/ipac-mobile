@@ -194,6 +194,10 @@ export function VariantForm({
     variant_name: variant?.variant_name || material.name,
     description: variant?.description || '',
     material_id: material.id,
+    length: variant?.length ? String(variant.length) : '',
+    width: variant?.width ? String(variant.width) : '',
+    thickness: variant?.thickness ? String(variant.thickness) : '',
+    weight_per_unit: variant?.weight_per_unit ? String(variant.weight_per_unit) : '',
   });
   
   const [attributes, setAttributes] = useState<{key: string, value: string}[]>(
@@ -266,7 +270,11 @@ export function VariantForm({
     const variantData = {
       ...formData,
       variant_name: fullVariantName,
-      attributes: Object.keys(attributesObj).length > 0 ? attributesObj : null
+      attributes: Object.keys(attributesObj).length > 0 ? attributesObj : null,
+      length: formData.length ? parseFloat(formData.length) : null,
+      width: formData.width ? parseFloat(formData.width) : null,
+      thickness: formData.thickness ? parseFloat(formData.thickness) : null,
+      weight_per_unit: formData.weight_per_unit ? parseFloat(formData.weight_per_unit) : null,
     };
 
     // Save the variant data and handle tags
@@ -372,6 +380,55 @@ export function VariantForm({
             numberOfLines={2}
             className="border border-gray-300 rounded-lg px-4 py-2 text-gray-900 text-sm"
           />
+        </View>
+
+        {/* Dimensions */}
+        <View className="mb-4">
+          <Text className="text-sm font-medium text-gray-700 mb-2">
+            Dimensions
+          </Text>
+          <View className="flex-row space-x-2 mb-2">
+            <View className="flex-1">
+              <Text className="text-xs text-gray-600 mb-1">Length</Text>
+              <TextInput
+                value={formData.length}
+                onChangeText={(text) => setFormData(prev => ({ ...prev, length: text }))}
+                placeholder="Length"
+                keyboardType="decimal-pad"
+                className="border border-gray-300 rounded-lg px-2 py-1 text-gray-900 text-sm"
+              />
+            </View>
+            <View className="flex-1">
+              <Text className="text-xs text-gray-600 mb-1">Width</Text>
+              <TextInput
+                value={formData.width}
+                onChangeText={(text) => setFormData(prev => ({ ...prev, width: text }))}
+                placeholder="Width"
+                keyboardType="decimal-pad"
+                className="border border-gray-300 rounded-lg px-2 py-1 text-gray-900 text-sm"
+              />
+            </View>
+            <View className="flex-1">
+              <Text className="text-xs text-gray-600 mb-1">Thickness</Text>
+              <TextInput
+                value={formData.thickness}
+                onChangeText={(text) => setFormData(prev => ({ ...prev, thickness: text }))}
+                placeholder="Thickness"
+                keyboardType="decimal-pad"
+                className="border border-gray-300 rounded-lg px-2 py-1 text-gray-900 text-sm"
+              />
+            </View>
+          </View>
+          <View className="mt-2">
+            <Text className="text-xs text-gray-600 mb-1">Weight Per Unit</Text>
+            <TextInput
+              value={formData.weight_per_unit}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, weight_per_unit: text }))}
+              placeholder="Weight per unit (optional)"
+              keyboardType="decimal-pad"
+              className="border border-gray-300 rounded-lg px-2 py-1 text-gray-900 text-sm"
+            />
+          </View>
         </View>
 
         {/* Attributes */}
@@ -523,12 +580,11 @@ export function SupplierPricingForm({
 const [formData, setFormData] = useState({
     supplier_id: pricing?.supplier_id || '',
     price: pricing?.price ? String(pricing.price) : '',
-    unit_id: pricing?.unit_id || defaultUnitId || '',
+    price_per_unit: pricing?.price_per_unit ? String(pricing.price_per_unit) : '',
+    supplier_quantity: pricing?.supplier_quantity ? String(pricing.supplier_quantity) : '',
     material_variant_id: variant.id,
   });
-const [errors, setErrors] = useState<{ supplier_id?: string; price?: string; unit_id?: string }>({});
-  const [unitOpen, setUnitOpen] = useState(false);
-  const [unitQuery, setUnitQuery] = useState('');
+const [errors, setErrors] = useState<{ supplier_id?: string; price?: string; price_per_unit?: string; supplier_quantity?: string }>({});
   const [supplierOpen, setSupplierOpen] = useState(false);
   const [supplierQuery, setSupplierQuery] = useState('');
 
@@ -536,13 +592,14 @@ const [errors, setErrors] = useState<{ supplier_id?: string; price?: string; uni
     const errs: any = {};
     if (!formData.supplier_id) errs.supplier_id = 'Please select a supplier';
     if (!formData.price.trim() || isNaN(Number(formData.price))) errs.price = 'Please enter a valid price';
-    if (!formData.unit_id) errs.unit_id = 'Please select a unit of measure';
     setErrors(errs);
     if (Object.keys(errs).length > 0) return;
 
     const pricingData = {
       ...formData,
       price: Number(formData.price),
+      price_per_unit: formData.price_per_unit ? Number(formData.price_per_unit) : Number(formData.price),
+      supplier_quantity: formData.supplier_quantity ? Number(formData.supplier_quantity) : 1,
     };
 
     onSave(pricingData);
@@ -614,57 +671,41 @@ const [errors, setErrors] = useState<{ supplier_id?: string; price?: string; uni
         <TextInput
           value={formData.price}
           onChangeText={(text) => setFormData(prev => ({ ...prev, price: text }))}
-          placeholder="Enter price"
+          placeholder="Enter total price"
           keyboardType="decimal-pad"
           className="border border-gray-300 rounded-lg px-4 py-3 text-gray-900"
         />
         {errors.price && <Text className="text-xs text-red-600 mt-1">{errors.price}</Text>}
       </View>
 
-      {/* Unit of Measure (dropdown) */}
+      {/* Price Per Unit */}
       <View className="mb-4">
-        <Text className="text-sm font-medium text-gray-700 mb-2">Unit of Measure *</Text>
-        <View>
-          <TouchableOpacity
-            onPress={() => setUnitOpen(prev => !prev)}
-            className="border border-gray-300 rounded-lg px-4 py-3 flex-row items-center justify-between"
-          >
-            <Text className="text-gray-900">
-              {units.find(u => u.id === formData.unit_id)?.name || 'Select unit'}
-            </Text>
-            <ChevronDown size={16} color="#6b7280" />
-          </TouchableOpacity>
-          {unitOpen && (
-            <View className="mt-2 bg-white border border-gray-300 rounded-lg max-h-64">
-              {/* search box */}
-              <View className="p-2 border-b border-gray-200">
-                <TextInput
-                  value={unitQuery}
-                  onChangeText={setUnitQuery}
-                  placeholder="Type to filter units..."
-                  className="border border-gray-300 rounded px-2 py-1 text-sm"
-                />
-              </View>
-              <ScrollView>
-                {units
-                  .filter(u => !unitQuery.trim() || u.name.toLowerCase().includes(unitQuery.toLowerCase()))
-                  .map((unit) => (
-                  <TouchableOpacity
-                    key={unit.id}
-                    onPress={() => { setFormData(prev => ({ ...prev, unit_id: unit.id })); setUnitOpen(false); }}
-                    className="p-3 border-b border-gray-100"
-                  >
-                    <Text className="text-sm text-gray-900">{unit.name}</Text>
-                    {unit.description ? (
-                      <Text className="text-xs text-gray-500">{unit.description}</Text>
-                    ) : null}
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-          )}
-        </View>
-        {errors.unit_id && <Text className="text-xs text-red-600 mt-1">{errors.unit_id}</Text>}
+        <Text className="text-sm font-medium text-gray-700 mb-2">
+          Price Per Unit
+        </Text>
+        <TextInput
+          value={formData.price_per_unit}
+          onChangeText={(text) => setFormData(prev => ({ ...prev, price_per_unit: text }))}
+          placeholder="Enter price per unit (optional)"
+          keyboardType="decimal-pad"
+          className="border border-gray-300 rounded-lg px-4 py-3 text-gray-900"
+        />
+        <Text className="text-xs text-gray-500 mt-1">Leave empty to use total price</Text>
+      </View>
+
+      {/* Supplier Quantity */}
+      <View className="mb-4">
+        <Text className="text-sm font-medium text-gray-700 mb-2">
+          Supplier Quantity
+        </Text>
+        <TextInput
+          value={formData.supplier_quantity}
+          onChangeText={(text) => setFormData(prev => ({ ...prev, supplier_quantity: text }))}
+          placeholder="Quantity from supplier"
+          keyboardType="decimal-pad"
+          className="border border-gray-300 rounded-lg px-4 py-3 text-gray-900"
+        />
+        <Text className="text-xs text-gray-500 mt-1">E.g., for plywood: unit is m² but supplier provides 29m² sheets</Text>
       </View>
 
 
