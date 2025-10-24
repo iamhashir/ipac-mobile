@@ -202,8 +202,9 @@ await loadExistingAttendance(packersResponse, initialAttendance);
             };
           }
           
-          // Check if toolbox briefing was completed
-          if (attendanceRecords.some(r => r.toolbox_briefing_completed)) {
+          // Check if toolbox briefing was completed for CURRENT shift only
+          const currentShift: TimePeriod = isAfternoon ? 'afternoon' : 'morning';
+          if (attendanceRecords.some(r => r.shift_period === currentShift && r.toolbox_briefing_completed)) {
             setToolboxCompleted(true);
           }
         }
@@ -824,7 +825,12 @@ await loadExistingAttendance(packersResponse, initialAttendance);
           <View className="p-4 bg-gray-50 border-t border-gray-200 rounded-b-lg">
             {!toolboxCompleted && hasPresentPackers && (
               <TouchableOpacity
-                onPress={() => {
+                onPress={async () => {
+                  try {
+                    const shift: TimePeriod = isAfternoon ? 'afternoon' : 'morning';
+                    // Persist at the order+shift level so it stays hidden when returning
+                    await db.setToolboxBriefingForOrderShift(orderId, shift);
+                  } catch (_) {}
                   setToolboxCompleted(true);
                 }}
                 className="mb-4 py-3 px-6 rounded-lg bg-orange-500"
@@ -849,7 +855,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
                   ? 'text-gray-500'
                   : 'text-white'
               }`}>
-{saving ? 'Saving Attendance...' : 'Continue to Packing Report'}
+{saving ? 'Saving Attendance...' : 'Continue to Packing List'}
               </Text>
             </TouchableOpacity>
           </View>

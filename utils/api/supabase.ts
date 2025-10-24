@@ -1,23 +1,29 @@
 import { createClient } from '@supabase/supabase-js';
 import Constants from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
-// Get environment variables
 const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl || process.env.EXPO_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = Constants.expoConfig?.extra?.supabaseAnonKey || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+const supabasePublishableKey = Constants.expoConfig?.extra?.supabasePublishableKey || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
-if (!supabaseUrl || !supabaseAnonKey) {
+//get rid of these test logs later
+console.warn("😭😭😭 sup url constants:'", Constants.expoConfig?.extra?.supabaseUrl,"'");
+console.warn("😭😭😭 sup key constants:'", Constants.expoConfig?.extra?.supabasePublishableKey,"'");
+console.warn("😭😭😭 sup url env:'", process.env.EXPO_PUBLIC_SUPABASE_URL,"'");
+console.warn("😭😭😭 sup key env:'", process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,"'");
+
+if (!supabaseUrl || !supabasePublishableKey) {
   throw new Error('Missing Supabase environment variables. Please check your .env file.');
 }
 
-// Create Supabase client
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
   auth: {
-    // Enable automatic session refresh
+    ...(Platform.OS !== 'web' ? { storage: AsyncStorage } : {}),
     autoRefreshToken: true,
-    // Persist session in local storage
     persistSession: true,
-    // Set custom storage key
-    storageKey: 'ipac-operations-auth',
+    detectSessionInUrl: false,
+    // syncSession: true,
+    storageKey: 'ipac-operations-auth-v2',
   },
 });
 
@@ -56,9 +62,15 @@ export const auth = {
     return { error };
   },
 
-  // Get current session
+  // Get current session (recover from invalid refresh tokens on RN)
   getSession: async () => {
-    const { data: { session }, error } = await supabase.auth.getSession();
+    const { data, error } = await supabase.auth.getSession();
+    const session = data?.session || null;
+    if (error && (String(error.message).includes('Invalid Refresh Token') || String(error.message).includes('Refresh Token Not Found'))) {
+      // Clear bad local session to avoid app-breaking errors and let user re-auth
+      try { await supabase.auth.signOut(); } catch (_) {}
+      return { session: null, error: null };
+    }
     return { session, error };
   },
 
@@ -136,36 +148,85 @@ export const auth = {
   },
 };
 
+// Profile cache to reduce database queries (in-memory)
+const profileCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache
+
+// Persistent cache helpers (survive reloads) to prevent UI freezes on slow networks
+const PERSIST_TTL = 24 * 60 * 60 * 1000; // 24 hours
+const PROFILE_PERSIST_PREFIX = 'ipac:last_profile:';
+
+const persistGet = async (key: string) => {
+  try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window?.localStorage) {
+      return window.localStorage.getItem(key);
+    }
+    return await AsyncStorage.getItem(key);
+  } catch (_) {
+    return null;
+  }
+};
+
+const persistSet = async (key: string, value: string) => {
+  try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window?.localStorage) {
+      window.localStorage.setItem(key, value);
+      return;
+    }
+    await AsyncStorage.setItem(key, value);
+  } catch (_) {
+    // noop
+  }
+};
+
 // Helper functions for database operations
 export const db = {
-  // Get user profile with role
-  getUserProfile: async (userId) => {
-    // Try explicit relationship alias first to avoid PostgREST rel-name ambiguities
-    let { data, error } = await supabase
-      .from('profiles')
-      .select(`
-        *,
-        roles:role_id (
-          id,
-          name,
-          can_block_users,
-          can_unblock_users,
-          can_ban_users,
-          can_reset_passwords,
-          can_delete_profiles,
-          can_manage_roles
-        )
-      `)
-      .eq('id', userId)
-      .maybeSingle();
+  // Clear profile cache (useful when profile is updated)
+  clearProfileCache: (userId?: string) => {
+    if (userId) {
+      profileCache.delete(userId);
+    } else {
+      profileCache.clear();
+    }
+  },
 
-    // Fallback: use constraint-qualified join if the alias fails
-    if (error) {
-      const q2 = await supabase
+  // Get user profile with role (with caching)
+  getUserProfile: async (userId) => {
+    // In-memory cache first (fastest)
+    const cached = profileCache.get(userId);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      console.log('✨ getUserProfile: Using cached profile for userId:', userId);
+      return { data: cached.data, error: null };
+    }
+
+    // Persistent cache second (prevents UI freeze on cold loads)
+    try {
+      const persistKey = `${PROFILE_PERSIST_PREFIX}${userId}`;
+      const persistedRaw = await persistGet(persistKey);
+      if (persistedRaw) {
+        const persisted = JSON.parse(persistedRaw);
+        if (persisted?.timestamp && (Date.now() - persisted.timestamp) < PERSIST_TTL) {
+          console.log('✨ getUserProfile: Using persisted profile for userId:', userId);
+          // Hydrate in-memory cache to speed up subsequent calls
+          profileCache.set(userId, { data: persisted.data, timestamp: persisted.timestamp });
+          return { data: persisted.data, error: null };
+        }
+      }
+    } catch (e) {
+      // Ignore persistence errors
+    }
+
+    console.log('🔍 getUserProfile: Starting profile lookup for userId:', userId);
+    
+    try {
+      // Primary query with join and a timeout guard to prevent UI freeze
+      const timeoutMs = 3500; // tighten to reduce UI stalls
+      const timeoutSentinel: any = Symbol('timeout');
+      const primaryPromise = supabase
         .from('profiles')
         .select(`
           *,
-          roles:roles!profiles_role_id_fkey (
+          roles (
             id,
             name,
             can_block_users,
@@ -178,12 +239,126 @@ export const db = {
         `)
         .eq('id', userId)
         .maybeSingle();
-      data = q2.data as any;
-      error = q2.error as any;
+
+      const primaryResult: any = await Promise.race([
+        primaryPromise,
+        new Promise((resolve) => setTimeout(() => resolve(timeoutSentinel), timeoutMs)),
+      ]);
+
+      let profile: any = null;
+      let profileError: any = null;
+
+      if (primaryResult === timeoutSentinel) {
+        console.warn('⏳ getUserProfile: Primary query timed out, falling back to minimal profile fetch');
+      } else {
+        profile = primaryResult?.data ?? null;
+        profileError = primaryResult?.error ?? null;
+      }
+
+      if (profileError) {
+        console.error('❌ getUserProfile: Error fetching profile:', profileError);
+        // fall through to fallback below
+      }
+
+      if (!profile) {
+        // Fallback: fetch minimal profile, then role separately (also guarded by timeout)
+        const fallbackTimeoutMs = 3500;
+        const timeoutSentinel2: any = Symbol('timeout2');
+
+        const basicPromise = supabase
+          .from('profiles')
+          .select('id, full_name, username, role_id, status')
+          .eq('id', userId)
+          .maybeSingle();
+
+        const basicResult: any = await Promise.race([
+          basicPromise,
+          new Promise((resolve) => setTimeout(() => resolve(timeoutSentinel2), fallbackTimeoutMs)),
+        ]);
+
+        if (basicResult === timeoutSentinel2) {
+          console.warn('⏳ getUserProfile: Fallback basic profile timed out. Returning last known profile if any.');
+          const last = profileCache.get(userId);
+          if (last?.data) {
+            return { data: last.data, error: null };
+          }
+          // As a last resort, return a minimal stub to unblock UI; consumers should handle missing role
+          return { data: { id: userId, full_name: '', status: 'unknown', roles: null }, error: null };
+        }
+
+        const basic = basicResult?.data ?? null;
+        const basicErr = basicResult?.error ?? null;
+        if (basicErr) {
+          console.error('❌ getUserProfile: Fallback profile error:', basicErr);
+          return { data: null, error: basicErr };
+        }
+
+        let roleRow: any = null;
+        if (basic?.role_id) {
+          // Role lookup, but keep it non-blocking with its own timeout
+          const roleTimeoutMs = 2500;
+          const timeoutSentinel3: any = Symbol('timeout3');
+          const rolePromise = supabase
+            .from('roles')
+            .select('id, name, can_block_users, can_unblock_users, can_ban_users, can_reset_passwords, can_delete_profiles, can_manage_roles')
+            .eq('id', basic.role_id)
+            .maybeSingle();
+          const roleResult: any = await Promise.race([
+            rolePromise,
+            new Promise((resolve) => setTimeout(() => resolve(timeoutSentinel3), roleTimeoutMs)),
+          ]);
+          if (roleResult !== timeoutSentinel3) {
+            roleRow = roleResult?.data || null;
+          } else {
+            console.warn('⏳ getUserProfile: Role lookup timed out. Proceeding without role.');
+          }
+        }
+
+        const merged = { ...basic, roles: roleRow };
+        // Cache and persist
+        const nowTs = Date.now();
+        profileCache.set(userId, { data: merged, timestamp: nowTs });
+        try { await persistSet(`${PROFILE_PERSIST_PREFIX}${userId}`, JSON.stringify({ data: merged, timestamp: nowTs })); } catch (_) {}
+        console.log('✅ getUserProfile: Fallback profile loaded and cached:', {
+          id: merged.id,
+          full_name: merged.full_name,
+          role: merged.roles?.name,
+          status: merged.status,
+        });
+        return { data: merged, error: null };
+      }
+
+      console.log('🔍 getUserProfile: Query result:', {
+        found: !!profile,
+        error: profileError?.message,
+        profileData: profile ? {
+          id: profile.id,
+          full_name: profile.full_name,
+          role: profile.roles?.name,
+          status: profile.status
+        } : null
+      });
+
+      // Cache the successful result (and persist)
+      const nowTs = Date.now();
+      profileCache.set(userId, {
+        data: profile,
+        timestamp: nowTs
+      });
+      try { await persistSet(`${PROFILE_PERSIST_PREFIX}${userId}`, JSON.stringify({ data: profile, timestamp: nowTs })); } catch (_) {}
+
+      console.log('✅ getUserProfile: Profile loaded and cached:', {
+        id: profile.id,
+        full_name: profile.full_name,
+        role: profile.roles?.name,
+        status: profile.status
+      });
+
+      return { data: profile, error: null };
+    } catch (error) {
+      console.error('💥 getUserProfile: Unexpected error:', error);
+      return { data: null, error: { message: 'Failed to load profile', originalError: error } };
     }
-    
-    // Ensure we always return a single object or null
-    return { data: (data as any) || null, error };
   },
 
   // Get available orders for packer selection (including in_progress orders)
@@ -296,6 +471,19 @@ export const db = {
       .is('end_time', null) // Only update records without end time
       .select();
     
+    return { data, error };
+  },
+
+  // Mark toolbox briefing as completed for the whole order and current shift (today)
+  setToolboxBriefingForOrderShift: async (orderId, shiftPeriod) => {
+    const today = new Date().toISOString().split('T')[0];
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .update({ toolbox_briefing_completed: true, updated_at: new Date().toISOString() })
+      .eq('order_id', orderId)
+      .eq('shift_period', shiftPeriod)
+      .eq('log_date', today)
+      .select('id');
     return { data, error };
   },
 
@@ -653,7 +841,7 @@ export const db = {
     return { data, error };
   },
 
-  // Upsert final dimensions for an order package. If finalInfoId is missing, create it (cloning original if provided)
+  // Upsert final dimensions for an order package. If finalInfoId is missing, create an EMPTY final package_info and link it.
   upsertFinalDimensions: async ({ orderPackageId, finalInfoId, originalInfoId, scope, length, width, height }) => {
     const fields: any = {};
     if (scope === 'internal') {
@@ -668,43 +856,29 @@ export const db = {
 
     let effectiveFinalId = finalInfoId as string | null | undefined;
 
+    // If there is no final package_info, create an EMPTY row and link it to the order package
     if (!effectiveFinalId) {
-      // Create final package_info by cloning from original if available
-      let base: any = {};
-      if (originalInfoId) {
-        const { data: orig } = await supabase
-          .from('package_info')
-          .select('*')
-          .eq('id', originalInfoId)
-          .single();
-        if (orig) {
-          const { id, ...rest } = orig;
-          base = { ...rest };
-        }
-      }
-      const insertPayload = { ...base, ...fields };
       const { data: created, error: createErr } = await supabase
         .from('package_info')
-        .insert(insertPayload)
+        .insert({})
         .select('id')
         .single();
       if (createErr || !created) return { data: null, error: createErr || { message: 'Failed to create final package info' } };
       effectiveFinalId = created.id;
 
-      // Update order_packages.final_pkg_info
       const { error: updErr } = await supabase
         .from('order_packages')
         .update({ final_pkg_info: effectiveFinalId })
         .eq('id', orderPackageId);
       if (updErr) return { data: null, error: updErr };
-    } else {
-      // Update existing final package_info
-      const { error: updFinalErr } = await supabase
-        .from('package_info')
-        .update(fields)
-        .eq('id', effectiveFinalId);
-      if (updFinalErr) return { data: null, error: updFinalErr };
     }
+
+    // Update the final package_info with provided fields (no cloning)
+    const { error: updFinalErr } = await supabase
+      .from('package_info')
+      .update(fields)
+      .eq('id', effectiveFinalId);
+    if (updFinalErr) return { data: null, error: updFinalErr };
 
     return { data: { final_pkg_info: effectiveFinalId }, error: null };
   },
@@ -719,14 +893,85 @@ export const db = {
     return { data, error };
   },
 
-  // Packaging: packing types lookup
+  // Packaging: packing types lookup (support multiple column names for vacuum/gas flags)
   getPackingTypesByIds: async (ids) => {
     if (!ids || ids.length === 0) return { data: [], error: null };
-    const { data, error } = await supabase
-      .from('packing_types')
-      .select('id, name, code')
-      .in('id', ids);
-    return { data, error };
+
+    // Attempt 1: preferred columns
+    {
+      const r = await supabase
+        .from('packing_types')
+        .select('id, name, code, includes_vacuum_protection, includes_gas_protection')
+        .in('id', ids);
+      if (!r.error) {
+        return { data: r.data, error: null };
+      }
+    }
+
+    // Attempt 2: alternate naming for vacuum flag
+    {
+      const r = await supabase
+        .from('packing_types')
+        .select('id, name, code, includes_vacuum_packing, includes_gas_protection')
+        .in('id', ids);
+      if (!r.error) {
+        const mapped = (r.data || []).map((t: any) => ({
+          id: t.id,
+          name: t.name,
+          code: t.code,
+          includes_vacuum_protection: !!t.includes_vacuum_packing,
+          includes_gas_protection: !!t.includes_gas_protection,
+        }));
+        return { data: mapped, error: null };
+      }
+    }
+
+    // Attempt 3: alternate naming for gas flag
+    {
+      const r = await supabase
+        .from('packing_types')
+        .select('id, name, code, includes_vacuum_protection, includes_gas_packing')
+        .in('id', ids);
+      if (!r.error) {
+        const mapped = (r.data || []).map((t: any) => ({
+          id: t.id,
+          name: t.name,
+          code: t.code,
+          includes_vacuum_protection: !!t.includes_vacuum_protection,
+          includes_gas_protection: !!t.includes_gas_packing,
+        }));
+        return { data: mapped, error: null };
+      }
+    }
+
+    // Attempt 4: historical misspelling for vacuum flag
+    {
+      const r = await supabase
+        .from('packing_types')
+        .select('id, name, code, inlcudes_vacuum_protecton, includes_gas_protection')
+        .in('id', ids);
+      if (!r.error) {
+        const mapped = (r.data || []).map((t: any) => ({
+          id: t.id,
+          name: t.name,
+          code: t.code,
+          includes_vacuum_protection: !!t.inlcudes_vacuum_protecton,
+          includes_gas_protection: !!t.includes_gas_protection,
+        }));
+        return { data: mapped, error: null };
+      }
+    }
+
+    // Fallback without flags
+    {
+      const r = await supabase
+        .from('packing_types')
+        .select('id, name, code')
+        .in('id', ids);
+      if (r.error) return { data: null, error: r.error };
+      const withFlags = (r.data || []).map((t: any) => ({ ...t, includes_vacuum_protection: false, includes_gas_protection: false }));
+      return { data: withFlags, error: null };
+    }
   },
 
   getAllMaterials: async () => {
@@ -746,13 +991,24 @@ export const db = {
     return { data, error };
   },
 
-  // Material variants filtered by tag name (e.g., 'accessories')
+  // Material variants filtered by a specific tag name (strict match, case-insensitive)
   getMaterialVariantsByTag: async (tagName) => {
-    // Step 1: find materials that have the given tag
+    const normalized = String(tagName || '').trim();
+
+    // Step 0: resolve the tag id by name (case-insensitive exact)
+    const { data: tagRow, error: tagErr } = await supabase
+      .from('tags')
+      .select('id, name')
+      .ilike('name', normalized)
+      .maybeSingle();
+    if (tagErr) return { data: null, error: tagErr };
+    if (!tagRow?.id) return { data: [], error: null };
+
+    // Step 1: find materials that have exactly this tag id
     const { data: mats, error: matsErr } = await supabase
       .from('material_tags')
-      .select('material_id, tags(name)')
-      .eq('tags.name', tagName);
+      .select('material_id')
+      .eq('tag_id', tagRow.id);
     if (matsErr) return { data: null, error: matsErr };
     const materialIds = Array.from(new Set((mats || []).map((r: any) => r.material_id).filter(Boolean)));
     if (!materialIds.length) return { data: [], error: null };
@@ -760,7 +1016,6 @@ export const db = {
     // Step 2: fetch all variants for these materials, including the material's default unit
     let variants: any = null;
     let varErr: any = null;
-    // Try selecting with materials' unit if available
     {
       const r = await supabase
         .from('material_variants')
@@ -780,7 +1035,6 @@ export const db = {
       varErr = r.error;
     }
 
-    // Fallback: if that failed (e.g., materials has no unit_id), select minimal variant fields
     if (varErr) {
       const r2 = await supabase
         .from('material_variants')
@@ -804,72 +1058,204 @@ export const db = {
     return { data: items, error: null };
   },
 
-  // Get order package materials (used by Accessories)
+  // Material variants filtered by variant tag (uses material_variant_tags table)
+  getMaterialVariantsByVariantTag: async (tagName) => {
+    const normalized = String(tagName || '').trim();
+
+    // Step 0: resolve the tag id by name (case-insensitive exact)
+    const { data: tagRow, error: tagErr } = await supabase
+      .from('tags')
+      .select('id, name')
+      .ilike('name', normalized)
+      .maybeSingle();
+    if (tagErr) return { data: null, error: tagErr };
+    if (!tagRow?.id) return { data: [], error: null };
+
+    // Step 1: find variant ids that have exactly this tag id
+    const { data: variantTags, error: variantTagsErr } = await supabase
+      .from('material_variant_tags')
+      .select('material_variant_id')
+      .eq('tag_id', tagRow.id);
+    if (variantTagsErr) return { data: null, error: variantTagsErr };
+    const variantIds = Array.from(new Set((variantTags || []).map((r: any) => r.material_variant_id).filter(Boolean)));
+    if (!variantIds.length) return { data: [], error: null };
+
+    // Step 2: fetch these variants with their material's default unit
+    let variants: any = null;
+    let varErr: any = null;
+    {
+      const r = await supabase
+        .from('material_variants')
+        .select(`
+          id,
+          variant_name,
+          material_id,
+          materials:material_id (
+            id,
+            unit_id,
+            units_of_measure:unit_id ( id, name )
+          )
+        `)
+        .in('id', variantIds)
+        .order('variant_name');
+      variants = r.data;
+      varErr = r.error;
+    }
+
+    if (varErr) {
+      const r2 = await supabase
+        .from('material_variants')
+        .select('id, variant_name, material_id')
+        .in('id', variantIds)
+        .order('variant_name');
+      variants = r2.data;
+      varErr = r2.error;
+    }
+
+    if (varErr) return { data: null, error: varErr };
+
+    const items = (variants || []).map((v: any) => ({
+      id: v.id,
+      value: v.id,
+      label: v.variant_name,
+      material_id: v.material_id,
+      unit_id: v?.materials?.unit_id || null,
+      unit_name: v?.materials?.units_of_measure?.name || null,
+    }));
+    return { data: items, error: null };
+  },
+
+  // Material variants filtered by material name (case-insensitive, partial match)
+  getMaterialVariantsByMaterialName: async (materialName) => {
+    // Step 1: find materials whose name includes the provided text (case-insensitive)
+    const { data: mats, error: matsErr } = await supabase
+      .from('materials')
+      .select('id, name, unit_id, units_of_measure:unit_id ( id, name )')
+      .ilike('name', `%${materialName}%`);
+    if (matsErr) return { data: null, error: matsErr };
+    const materialIds = Array.from(new Set((mats || []).map((m: any) => m.id).filter(Boolean)));
+    if (!materialIds.length) return { data: [], error: null };
+
+    // Step 2: get variants for those materials, include material unit if possible
+    let variants: any = null;
+    let varErr: any = null;
+    {
+      const r = await supabase
+        .from('material_variants')
+        .select(`
+          id,
+          variant_name,
+          material_id,
+          materials:material_id (
+            id,
+            unit_id,
+            units_of_measure:unit_id ( id, name )
+          )
+        `)
+        .in('material_id', materialIds)
+        .order('variant_name');
+      variants = r.data;
+      varErr = r.error;
+    }
+
+    if (varErr) return { data: null, error: varErr };
+
+    const items = (variants || []).map((v: any) => ({
+      id: v.id,
+      value: v.id,
+      label: v.variant_name,
+      material_id: v.material_id,
+      unit_id: v?.materials?.unit_id || null,
+      unit_name: v?.materials?.units_of_measure?.name || null,
+    }));
+    return { data: items, error: null };
+  },
+
+  // Material variants filtered by material name with exact match (case-insensitive, no partials)
+  getMaterialVariantsByMaterialExactName: async (materialName) => {
+    const { data: mats, error: matsErr } = await supabase
+      .from('materials')
+      .select('id, name, unit_id, units_of_measure:unit_id ( id, name )')
+      .ilike('name', materialName); // exact (no wildcards)
+    if (matsErr) return { data: null, error: matsErr };
+    const materialIds = Array.from(new Set((mats || []).map((m: any) => m.id).filter(Boolean)));
+    if (!materialIds.length) return { data: [], error: null };
+
+    let variants: any = null;
+    let varErr: any = null;
+    const r = await supabase
+      .from('material_variants')
+      .select(`
+        id,
+        variant_name,
+        material_id,
+        materials:material_id (
+          id,
+          unit_id,
+          units_of_measure:unit_id ( id, name )
+        )
+      `)
+      .in('material_id', materialIds)
+      .order('variant_name');
+    variants = r.data;
+    varErr = r.error;
+    if (varErr) return { data: null, error: varErr };
+
+    const items = (variants || []).map((v: any) => ({
+      id: v.id,
+      value: v.id,
+      label: v.variant_name,
+      material_id: v.material_id,
+      unit_id: v?.materials?.unit_id || null,
+      unit_name: v?.materials?.units_of_measure?.name || null,
+    }));
+    return { data: items, error: null };
+  },
+
+  // Get order package materials (used by Accessories and specialized sections)
   getOrderPackageMaterials: async (orderPackageId) => {
     const { data, error } = await supabase
       .from('order_package_materials')
-      .select('id, order_package_id, material_variant_id, quantity, unit_id, length, width, comment, item_used')
+      .select('id, order_package_id, material_variant_id, material_type, quantity, quantity_used, unit_id, length, width, comment, item_used')
       .eq('order_package_id', orderPackageId)
       .order('created_at', { ascending: true });
     return { data, error };
   },
 
   addOrderPackageMaterial: async (payload) => {
-    // Build three shapes to tolerate schema differences across environments
-    const legacy: any = {
+    // Canonicalize material_type to your enum values
+    const allowed = ['Accessories','Securing','Gas Packing','Vacuum Packing'];
+    const canonType = (() => {
+      const raw = String(payload.material_type || '').trim();
+      const match = allowed.find(a => a.toLowerCase() === raw.toLowerCase());
+      return match || (raw || 'Accessories');
+    })();
+
+    // Build exactly the row shape matching your table (single POST only)
+    const row: any = {
       order_package_id: payload.order_package_id,
       material_variant_id: payload.material_variant_id,
-      material_type: payload.material_type, // NOT NULL on live schema (e.g., 'Accessories')
-      is_final: payload.is_final ?? false, // NOT NULL boolean
+      material_type: canonType,
+      is_final: payload.is_final ?? true,
       quantity: (typeof payload.quantity === 'number' && isFinite(payload.quantity))
         ? payload.quantity
-        : (typeof payload.quantity_calculated === 'number' && isFinite(payload.quantity_calculated) ? payload.quantity_calculated : null),
+        : Number(payload.quantity ?? 0),
       unit_id: payload.unit_id,
       length: (typeof payload.length === 'number' && isFinite(payload.length)) ? payload.length : null,
       width: (typeof payload.width === 'number' && isFinite(payload.width)) ? payload.width : null,
-      comment: payload.comment ?? payload.notes ?? null,
+      height: (typeof payload.height === 'number' && isFinite(payload.height)) ? payload.height : null,
+      comment: payload.comment ?? null,
       item_used: payload.item_used ?? false,
+      original: payload.original ?? null,
+      quantity_used: (typeof payload.quantity_used === 'number' && isFinite(payload.quantity_used)) ? payload.quantity_used : null,
     };
 
-    const canonical: any = {
-      order_package_id: payload.order_package_id,
-      material_variant_id: payload.material_variant_id,
-      quantity_calculated: (typeof payload.quantity_calculated === 'number' && isFinite(payload.quantity_calculated))
-        ? payload.quantity_calculated
-        : (typeof payload.quantity === 'number' && isFinite(payload.quantity) ? payload.quantity : 0),
-      unit_id: payload.unit_id,
-      cost_at_calculation: (typeof payload.cost_at_calculation === 'number' && isFinite(payload.cost_at_calculation))
-        ? payload.cost_at_calculation
-        : 0,
-      quantity_actual: (typeof payload.quantity_actual === 'number' && isFinite(payload.quantity_actual)) ? payload.quantity_actual : null,
-      cost_actual: (typeof payload.cost_actual === 'number' && isFinite(payload.cost_actual)) ? payload.cost_actual : null,
-      usage_details: payload.usage_details ?? null,
-      notes: payload.notes ?? payload.comment ?? null,
-    };
-
-    // 1) Try legacy shape first (it matches what readers expect in this codebase)
-    let { data, error } = await supabase
+    const { data, error } = await supabase
       .from('order_package_materials')
-      .insert(legacy)
+      .insert(row)
       .select('id')
       .single();
-    if (!error) return { data, error: null };
-
-    // 2) Try canonical schema next
-    const q2 = await supabase
-      .from('order_package_materials')
-      .insert(canonical)
-      .select('id')
-      .single();
-    if (!q2.error) return { data: q2.data, error: null };
-
-    // 3) Last resort: try the raw payload we were given
-    const q3 = await supabase
-      .from('order_package_materials')
-      .insert(payload)
-      .select('id')
-      .single();
-    return { data: q3.data, error: q3.error };
+    return { data, error };
   },
 
   updateOrderPackageMaterial: async (id, fields) => {
@@ -912,6 +1298,15 @@ export const db = {
     }
   },
 
+  addPackageItem: async ({ orderPackageId, designation, quantity }) => {
+    const { data, error } = await supabase
+      .from('package_items')
+      .insert({ order_package_id: orderPackageId, designation, quantity })
+      .select('id')
+      .single();
+    return { data, error };
+  },
+
   getAllPackingTypes: async () => {
     const { data, error } = await supabase
       .from('packing_types')
@@ -921,50 +1316,54 @@ export const db = {
   },
 
   updatePackageInfo: async (id, fields) => {
-    const { data, error } = await supabase
+    // Do not include non-existent columns to avoid 400 errors
+    const { error } = await supabase
       .from('package_info')
-      .update({ ...fields, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select('id')
-      .single();
-    return { data, error };
+      .update({ ...fields })
+      .eq('id', id);
+    return { data: { id }, error };
   },
 
+  // Ensure there is a linked EMPTY final package_info for this order package
   ensureFinalPackageInfo: async ({ orderPackageId, finalInfoId, originalInfoId }) => {
     if (finalInfoId) return { data: { id: finalInfoId }, error: null };
-    if (!originalInfoId) {
-      const { data: created, error: createErr } = await supabase
-        .from('package_info')
-        .insert({})
-        .select('id')
-        .single();
-      if (createErr || !created) return { data: null, error: createErr };
-      const { error: updErr } = await supabase
-        .from('order_packages')
-        .update({ final_pkg_info: created.id })
-        .eq('id', orderPackageId);
-      if (updErr) return { data: null, error: updErr };
-      return { data: { id: created.id }, error: null };
-    }
-    const { data: orig, error: oErr } = await supabase
+
+    // Always create an EMPTY package_info row (do not clone original)
+    const { data: created, error: createErr } = await supabase
       .from('package_info')
-      .select('*')
-      .eq('id', originalInfoId)
-      .single();
-    if (oErr) return { data: null, error: oErr };
-    const { id, created_at, updated_at, ...rest } = orig || {};
-    const { data: newRow, error: nErr } = await supabase
-      .from('package_info')
-      .insert(rest || {})
+      .insert({})
       .select('id')
       .single();
-    if (nErr || !newRow) return { data: null, error: nErr };
-    const { error: linkErr } = await supabase
+    if (createErr || !created) return { data: null, error: createErr };
+
+    // Link to order_packages.final_pkg_info
+    const { error: updErr } = await supabase
       .from('order_packages')
-      .update({ final_pkg_info: newRow.id })
+      .update({ final_pkg_info: created.id })
       .eq('id', orderPackageId);
-    if (linkErr) return { data: null, error: linkErr };
-    return { data: { id: newRow.id }, error: null };
+    if (updErr) return { data: null, error: updErr };
+
+    return { data: { id: created.id }, error: null };
+  },
+
+  // Ensure there is a linked EMPTY original package_info for this order package
+  ensureOriginalPackageInfo: async ({ orderPackageId, originalInfoId }) => {
+    if (originalInfoId) return { data: { id: originalInfoId }, error: null };
+
+    const { data: created, error: createErr } = await supabase
+      .from('package_info')
+      .insert({})
+      .select('id')
+      .single();
+    if (createErr || !created) return { data: null, error: createErr };
+
+    const { error: updErr } = await supabase
+      .from('order_packages')
+      .update({ original_pkg_info: created.id })
+      .eq('id', orderPackageId);
+    if (updErr) return { data: null, error: updErr };
+
+    return { data: { id: created.id }, error: null };
   },
 
   // Securing
@@ -992,8 +1391,22 @@ export const db = {
       .update({ ...fields })
       .eq('id', templateId)
       .select('id')
-      .single();
-    return { data, error };
+      .maybeSingle();
+    
+    // Handle 409 conflicts gracefully - the data might already be set
+    if (error && error.code === '409') {
+      console.warn('Conflict updating securing_template, retrying with fresh data...');
+      // Retry once
+      const { data: retryData, error: retryError } = await supabase
+        .from('securing_template')
+        .update({ ...fields })
+        .eq('id', templateId)
+        .select('id')
+        .maybeSingle();
+      return { data: retryData || { id: templateId }, error: retryError };
+    }
+    
+    return { data: data || { id: templateId }, error };
   },
 
   updateBeam: async (beamId, fields) => {
@@ -1002,8 +1415,303 @@ export const db = {
       .update({ ...fields })
       .eq('id', beamId)
       .select('id')
+      .maybeSingle();
+    
+    // Handle 409 conflicts gracefully
+    if (error && error.code === '409') {
+      console.warn('Conflict updating beam, retrying...');
+      const { data: retryData, error: retryError } = await supabase
+        .from('beam')
+        .update({ ...fields })
+        .eq('id', beamId)
+        .select('id')
+        .maybeSingle();
+      return { data: retryData || { id: beamId }, error: retryError };
+    }
+    
+    return { data: data || { id: beamId }, error };
+  },
+
+  // Ensure the securing_template (and beams) for a given side are not shared by other sides.
+  // If shared, clone beams + template and re-link the current side to the new template.
+  ensureUniqueTemplateForSide: async (orderPackageId: string, side: string, isFinal: boolean) => {
+    // 1) Fetch this side's securing row with template + beams
+    const { data: secRows, error: secErr } = await supabase
+      .from('order_package_securing')
+      .select(`
+        id,
+        securing_template_id,
+        securing_template:securing_template(
+          id, quantity, type_id, thickness,
+          horizontal_bar:beam!securing_template_horizontal_bar_fkey(id, quantity, type, width, thickness, space),
+          vertical_bar:beam!securing_template_vertical_bar_fkey(id, quantity, type, width, thickness, space),
+          skids:beam!securing_template_skids_fkey(id, quantity, type, width, thickness, space)
+        )
+      `)
+      .eq('order_package_id', orderPackageId)
+      .eq('securing_side', side)
+      .eq('is_final', isFinal)
+      .limit(1);
+    if (secErr || !secRows || !secRows.length) return { data: null, error: secErr };
+    const current = secRows[0] as any;
+    const tmplId = current.securing_template_id;
+
+    // If for any reason there is no template linked yet, create an empty one and link it
+    if (!tmplId) {
+      // Create empty beams
+      const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
+      const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
+      let skId: any = null;
+      if (side === 'base') { const { data: sk } = await supabase.from('beam').insert({}).select('id').single(); skId = sk?.id || null; }
+      const tmplPayload: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
+      if (skId) tmplPayload.skids = skId;
+      const { data: newEmpty, error: newErr } = await supabase
+        .from('securing_template')
+        .insert(tmplPayload)
+        .select('id')
+        .single();
+      if (newErr || !newEmpty) return { data: null, error: newErr };
+      const { error: linkErr } = await supabase
+        .from('order_package_securing')
+        .update({ securing_template_id: newEmpty.id })
+        .eq('id', current.id);
+      if (linkErr) return { data: null, error: linkErr };
+      return { data: { id: newEmpty.id, created: true }, error: null };
+    }
+
+    // 2) Count how many rows reference this template id
+    const { data: others, error: countErr } = await supabase
+      .from('order_package_securing')
+      .select('id, securing_side')
+      .eq('securing_template_id', tmplId);
+    if (countErr) return { data: null, error: countErr };
+    if ((others || []).length <= 1) return { data: { id: tmplId, unchanged: true }, error: null };
+
+    // 3) Clone beams
+    const cloneBeam = async (b: any) => {
+      if (!b?.id) return null;
+      const { data: nb, error: bErr } = await supabase
+        .from('beam')
+        .insert({
+          quantity: b.quantity ?? null,
+          type: b.type ?? null,
+          width: b.width ?? null,
+          thickness: b.thickness ?? null,
+          space: b.space ?? null,
+        })
+        .select('id')
+        .single();
+      if (bErr) throw bErr;
+      return nb?.id || null;
+    };
+
+    let hbId: string | null = null; let vbId: string | null = null; let skId: string | null = null;
+    try {
+      hbId = await cloneBeam(current.securing_template?.horizontal_bar);
+      vbId = await cloneBeam(current.securing_template?.vertical_bar);
+      if (side === 'base' && current.securing_template?.skids) {
+        skId = await cloneBeam(current.securing_template?.skids);
+      }
+    } catch (e) {
+      return { data: null, error: e };
+    }
+
+    // 4) Clone template
+    const tmplPayload: any = {
+      quantity: current.securing_template?.quantity ?? null,
+      type_id: current.securing_template?.type_id ?? null,
+      thickness: current.securing_template?.thickness ?? null,
+      horizontal_bar: hbId,
+      vertical_bar: vbId,
+    };
+    if (skId) tmplPayload.skids = skId;
+
+    const { data: newTmpl, error: tmplErr } = await supabase
+      .from('securing_template')
+      .insert(tmplPayload)
+      .select('id')
       .single();
-    return { data, error };
+    if (tmplErr || !newTmpl) return { data: null, error: tmplErr };
+
+    // 5) Relink this side to new template
+    const { error: updErr } = await supabase
+      .from('order_package_securing')
+      .update({ securing_template_id: newTmpl.id })
+      .eq('id', current.id);
+    if (updErr) return { data: null, error: updErr };
+
+    return { data: { id: newTmpl.id, cloned: true }, error: null };
+  },
+
+  // Ensure final securing rows exist (empty) for any side that has an original
+  ensureFinalSecuringForPackage: async (orderPackageId: string) => {
+    // Load existing securing records for this package
+    const { data: rows, error } = await supabase
+      .from('order_package_securing')
+      .select('id, securing_side, is_final')
+      .eq('order_package_id', orderPackageId);
+    if (error) return { data: null, error };
+
+    const sides = ['big_sides','small_sides','lid','base'] as const;
+    const hasOriginal: Record<string, boolean> = {};
+    const hasFinal: Record<string, boolean> = {};
+    (rows || []).forEach((r: any) => {
+      if (r.is_final) hasFinal[r.securing_side] = true; else hasOriginal[r.securing_side] = true;
+    });
+
+    for (const side of sides) {
+      if (hasOriginal[side] && !hasFinal[side]) {
+        // Create empty beams
+        const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
+        const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
+        let skId: any = null;
+        if (side === 'base') {
+          const { data: sk } = await supabase.from('beam').insert({}).select('id').single();
+          skId = sk?.id || null;
+        }
+
+        // Create empty template pointing to empty beams
+        const tmplPayload: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
+        if (skId) tmplPayload.skids = skId;
+        const { data: tmpl, error: tmplErr } = await supabase
+          .from('securing_template')
+          .insert(tmplPayload)
+          .select('id')
+          .single();
+        if (tmplErr) return { data: null, error: tmplErr };
+
+        // Create final securing row
+        const { error: secErr } = await supabase
+          .from('order_package_securing')
+          .insert({ order_package_id: orderPackageId, securing_template_id: tmpl?.id, securing_side: side, is_final: true })
+          .select('id')
+          .single();
+        if (secErr) return { data: null, error: secErr };
+      }
+    }
+
+    return { data: { ensured: true }, error: null };
+  },
+
+  // Ensure Final templates are empty and isolated from Original or other sides for this package
+  decoupleAndClearFinalTemplates: async (orderPackageId: string) => {
+    // Load all securing rows with template id
+    const { data: rows, error } = await supabase
+      .from('order_package_securing')
+      .select('id, securing_side, is_final, securing_template_id')
+      .eq('order_package_id', orderPackageId);
+    if (error) return { data: null, error };
+
+    // Build reference counts for template usage within this package
+    const counts: Record<string, number> = {};
+    (rows || []).forEach((r: any) => { if (r.securing_template_id) counts[r.securing_template_id] = (counts[r.securing_template_id] || 0) + 1; });
+
+    // For each FINAL row, if its template is shared OR null, then create a brand new EMPTY template and link it
+    for (const r of (rows || [])) {
+      if (!r.is_final) continue;
+      const tmplId = r.securing_template_id;
+      const needsNew = !tmplId || (counts[tmplId] || 0) > 1;
+      if (!needsNew) continue;
+
+      // Create empty beams
+      const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
+      const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
+      let skId: any = null;
+      if (r.securing_side === 'base') { const { data: sk } = await supabase.from('beam').insert({}).select('id').single(); skId = sk?.id || null; }
+
+      // Empty template payload
+      const emptyTmpl: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
+      if (skId) emptyTmpl.skids = skId;
+      const { data: newTmpl, error: newErr } = await supabase
+        .from('securing_template')
+        .insert(emptyTmpl)
+        .select('id')
+        .single();
+      if (newErr || !newTmpl) return { data: null, error: newErr };
+
+      const { error: linkErr } = await supabase
+        .from('order_package_securing')
+        .update({ securing_template_id: newTmpl.id })
+        .eq('id', r.id);
+      if (linkErr) return { data: null, error: linkErr };
+    }
+
+    return { data: { normalized: true }, error: null };
+  },
+
+  // Ensure there is a securing row for a specific side and tier; create empty beams/template if missing
+  ensureSecuringRowForSide: async (orderPackageId: string, side: string, isFinal: boolean) => {
+    // Check existence
+    const { data: existing, error: existErr } = await supabase
+      .from('order_package_securing')
+      .select('id, securing_template_id')
+      .eq('order_package_id', orderPackageId)
+      .eq('securing_side', side)
+      .eq('is_final', isFinal)
+      .limit(1);
+    if (existErr) return { data: null, error: existErr };
+    if (existing && existing.length) return { data: existing[0], error: null };
+
+    // Create empty beams and template
+    const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
+    const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
+    let skId: any = null;
+    if (side === 'base') { const { data: sk } = await supabase.from('beam').insert({}).select('id').single(); skId = sk?.id || null; }
+
+    const tmplPayload: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
+    if (skId) tmplPayload.skids = skId;
+    const { data: tmpl, error: tmplErr } = await supabase
+      .from('securing_template')
+      .insert(tmplPayload)
+      .select('id')
+      .single();
+    if (tmplErr) return { data: null, error: tmplErr };
+
+    const { data: created, error: insErr } = await supabase
+      .from('order_package_securing')
+      .insert({ order_package_id: orderPackageId, securing_template_id: tmpl?.id, securing_side: side, is_final: isFinal })
+      .select('id, securing_template_id')
+      .single();
+    return { data: created, error: insErr };
+  },
+
+  // Ensure original securing rows exist (empty) if missing
+  ensureOriginalSecuringForPackage: async (orderPackageId: string) => {
+    const { data: rows, error } = await supabase
+      .from('order_package_securing')
+      .select('id, securing_side, is_final')
+      .eq('order_package_id', orderPackageId);
+    if (error) return { data: null, error };
+
+    const sides = ['big_sides','small_sides','lid','base'] as const;
+    const hasOriginal: Record<string, boolean> = {};
+    (rows || []).forEach((r: any) => { if (!r.is_final) hasOriginal[r.securing_side] = true; });
+
+    for (const side of sides) {
+      if (!hasOriginal[side]) {
+        const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
+        const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
+        let skId: any = null;
+        if (side === 'base') { const { data: sk } = await supabase.from('beam').insert({}).select('id').single(); skId = sk?.id || null; }
+        const tmplPayload: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
+        if (skId) tmplPayload.skids = skId;
+        const { data: tmpl, error: tmplErr } = await supabase
+          .from('securing_template')
+          .insert(tmplPayload)
+          .select('id')
+          .single();
+        if (tmplErr) return { data: null, error: tmplErr };
+
+        const { error: secErr } = await supabase
+          .from('order_package_securing')
+          .insert({ order_package_id: orderPackageId, securing_template_id: tmpl?.id, securing_side: side, is_final: false })
+          .select('id')
+          .single();
+        if (secErr) return { data: null, error: secErr };
+      }
+    }
+
+    return { data: { ensured: true }, error: null };
   },
 
   // Packaging: fetch package items for many order_package_ids
@@ -1013,6 +1721,16 @@ export const db = {
       .from('package_items')
       .select('order_package_id, designation, quantity')
       .in('order_package_id', orderPackageIds);
+    return { data, error };
+  },
+
+  // Packaging: add a single package item
+  addPackageItem: async ({ order_package_id, designation, quantity }) => {
+    const { data, error } = await supabase
+      .from('package_items')
+      .insert({ order_package_id, designation, quantity })
+      .select('id')
+      .single();
     return { data, error };
   },
 
@@ -1039,20 +1757,24 @@ export const db = {
   // Task logs by order package ids (aggregated)
   getTaskLogsByOrderPackageIds: async (orderPackageIds) => {
     if (!orderPackageIds || orderPackageIds.length === 0) return { data: [], error: null };
-    // Step 1: find task_log ids via task_packages
-    const { data: tps, error: tpErr } = await supabase
-      .from('task_packages')
-      .select('task_log_id')
-      .in('order_package_id', orderPackageIds);
-    if (tpErr) return { data: null, error: tpErr };
-    const logIds = Array.from(new Set((tps || []).map((t: any) => t.task_log_id).filter(Boolean)));
-    if (logIds.length === 0) return { data: [], error: null };
-
-    // Step 2: fetch logs with task name and assignments
+    
+    // More robust approach: use inner join with task_packages to guarantee scope
     const { data, error } = await supabase
       .from('task_logs')
-      .select('id, start_time, end_time, duration_minutes, pause_duration, task_id, update_counter, notes, tasks(name), task_assignments(packer_id, task_status, profiles(full_name))')
-      .in('id', logIds)
+      .select(`
+        id, 
+        start_time, 
+        end_time, 
+        duration_minutes, 
+        pause_duration, 
+        task_id, 
+        update_counter, 
+        notes,
+        tasks(name),
+        task_assignments(packer_id, task_status, profiles(full_name)),
+        task_packages!inner(order_package_id)
+      `)
+      .in('task_packages.order_package_id', orderPackageIds)
       .order('start_time', { ascending: false });
     return { data, error };
   },
@@ -1066,6 +1788,29 @@ export const db = {
     if (error) return { data: null, error };
     const ids = (data || []).map((r: any) => r.order_package_id).filter(Boolean);
     return { data: ids, error: null };
+  },
+
+  // Get task logs specifically for a single order package
+  getTaskLogsForPackage: async (orderPackageId: string) => {
+    if (!orderPackageId) return { data: [], error: null };
+    
+    // Step 1: find task_log ids via task_packages for this specific package
+    const { data: tps, error: tpErr } = await supabase
+      .from('task_packages')
+      .select('task_log_id')
+      .eq('order_package_id', orderPackageId);
+    if (tpErr) return { data: null, error: tpErr };
+    
+    const logIds = Array.from(new Set((tps || []).map((t: any) => t.task_log_id).filter(Boolean)));
+    if (logIds.length === 0) return { data: [], error: null };
+
+    // Step 2: fetch logs with task name and assignments
+    const { data, error } = await supabase
+      .from('task_logs')
+      .select('id, start_time, end_time, duration_minutes, pause_duration, task_id, update_counter, notes, tasks(name), task_assignments(packer_id, task_status, profiles(full_name))')
+      .in('id', logIds)
+      .order('start_time', { ascending: false });
+    return { data, error };
   },
 
   // Link additional order packages to an existing task log
@@ -1246,10 +1991,21 @@ export const db = {
       .from('task_logs')
       .select('id, end_time, task_assignments(packer_id, task_status)')
       .is('end_time', null);
-    if (error) return { data: null, error };
+    
+    // Defensive error handling - always return an array, never null
+    if (error) {
+      console.warn('getBusyPackerIds error:', error);
+      return { data: [], error };
+    }
+    
+    if (!data || !Array.isArray(data)) {
+      return { data: [], error: null };
+    }
+    
     const busySet = new Set<string>();
-    (data || []).forEach((log: any) => {
-      (log.task_assignments || []).forEach((a: any) => {
+    data.forEach((log: any) => {
+      if (!log || !Array.isArray(log.task_assignments)) return;
+      log.task_assignments.forEach((a: any) => {
         if (a && ['in_progress', 'paused'].includes(a.task_status) && a.packer_id) {
           busySet.add(a.packer_id);
         }

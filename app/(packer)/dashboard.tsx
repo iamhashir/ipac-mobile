@@ -368,36 +368,44 @@ export default function PackerDashboard() {
                   No projects available
                 </Text>
               ) : (
-                availableOrders.map((order) => (
-                  <TouchableOpacity
-                    key={order.id}
-                    onPress={() => order.production_status !== 'in_progress' ? setSelectedOrder(order.id) : null}
-                    className={`mb-2 ${isCompact ? 'p-2' : 'p-3'} rounded-lg border ${
-                      selectedOrder === order.id
-                        ? 'bg-primary-50 border-primary-500'
-                        : order.production_status === 'in_progress'
-                        ? 'bg-gray-100 border-gray-300 opacity-50'
-                        : 'bg-gray-50 border-gray-200'
-                    }`}
-                    disabled={order.production_status === 'in_progress'}
-                  >
-                    <View className="flex-row items-center">
-                      <View className={`w-4 h-4 rounded mr-3 ${
-                        selectedOrder === order.id ? 'bg-primary-500' : 'bg-gray-300'
-                      }`} />
-                      <View className="flex-1">
-                        <Text className={`font-medium ${
-                          selectedOrder === order.id ? 'text-primary-700' : 'text-gray-900'
-                        }`}>
-                          📄 {order.order_name}
-                        </Text>
-                        <Text className="text-gray-600 text-xs mt-1">
-                          {order.client_name}
-                        </Text>
+                availableOrders.map((order) => {
+                  const hasActiveSession = !!session?.order_id;
+                  const isUsersActiveOrder = hasActiveSession && session?.order_id === order.id;
+                  const isLockedBySession = hasActiveSession && !isUsersActiveOrder; // user already working on another order
+                  const isGloballyLocked = order.production_status === 'in_progress' && !isUsersActiveOrder;
+                  const isDisabled = isLockedBySession || isGloballyLocked;
+
+                  return (
+                    <TouchableOpacity
+                      key={order.id}
+                      onPress={() => !isDisabled ? setSelectedOrder(order.id) : null}
+                      className={`mb-2 ${isCompact ? 'p-2' : 'p-3'} rounded-lg border ${
+                        selectedOrder === order.id
+                          ? 'bg-primary-50 border-primary-500'
+                          : isDisabled
+                          ? 'bg-gray-100 border-gray-300 opacity-50'
+                          : 'bg-gray-50 border-gray-200'
+                      }`}
+                      disabled={isDisabled}
+                    >
+                      <View className="flex-row items-center">
+                        <View className={`w-4 h-4 rounded mr-3 ${
+                          selectedOrder === order.id ? 'bg-primary-500' : 'bg-gray-300'
+                        }`} />
+                        <View className="flex-1">
+                          <Text className={`font-medium ${
+                            selectedOrder === order.id ? 'text-primary-700' : 'text-gray-900'
+                          }`}>
+                            📄 {order.order_name}
+                          </Text>
+                          <Text className="text-gray-600 text-xs mt-1">
+                            {order.client_name}
+                          </Text>
+                        </View>
                       </View>
-                    </View>
-                  </TouchableOpacity>
-                ))
+                    </TouchableOpacity>
+                  );
+                })
               )}
             </ScrollView>
           </View>

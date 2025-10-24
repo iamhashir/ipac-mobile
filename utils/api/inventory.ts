@@ -1,6 +1,14 @@
 import { supabase } from './supabase';
 
-// Types for our inventory system
+// Utility function to sanitize unit names to prevent React Native text node errors
+export function sanitizeUnitName(name: string | null | undefined): string {
+  if (!name || !name.trim() || name.trim() === '.') {
+    return 'unit';
+  }
+  return name.trim();
+}
+
+// Types
 export interface Material {
   id: string;
   name: string;
@@ -12,18 +20,25 @@ export interface Material {
     name: string;
     description?: string;
   };
-  variants?: MaterialVariant[];
-  tags?: MaterialTag[];
+  material_variants?: MaterialVariant[];
+  material_tags?: MaterialTag[];
 }
 
 export interface MaterialVariant {
   id: string;
   material_id: string;
   variant_name: string;
+  description?: string;
   attributes?: Record<string, any>;
+  unit_id?: string;
+  length?: number | null;
+  width?: number | null;
+  thickness?: number | null;
+  weight_per_unit?: number | null;
   created_at?: string;
   material?: Material;
   supplier_pricing?: SupplierPricing[];
+  unit?: UnitOfMeasure | null;
 }
 
 export interface SupplierPricing {
@@ -31,11 +46,10 @@ export interface SupplierPricing {
   material_variant_id: string;
   supplier_id: string;
   price: number;
-  unit_id: string;
-  stock_level?: number;
+  price_per_unit: number;
+  supplier_quantity: number;
   updated_at?: string;
-  supplier?: Supplier;
-  unit?: UnitOfMeasure;
+  suppliers?: Supplier;  // API returns 'suppliers' not 'supplier'
 }
 
 export interface Supplier {
@@ -60,7 +74,7 @@ export interface MaterialTag {
   material_id: string;
   tag_id: string;
   material?: Material;
-  tag?: Tag;
+  tags?: Tag;  // API returns 'tags' not 'tag'
 }
 
 export interface UnitOfMeasure {
@@ -76,19 +90,87 @@ export const materialOperations = {
   // Get all materials with their units, variants, and tags
   getAll: async () => {
     try {
-      // First, get basic materials data
-      const { data, error } = await supabase
+      // Fetch minimal shapes to avoid PostgREST 400s on missing relationships
+      const { data: mats, error: matsErr } = await supabase
         .from('materials')
-        .select('*')
+        .select('id, name, description, unit_id')
         .order('name');
+      if (matsErr) return { data: null, error: matsErr };
 
-      if (error) {
-        console.error('Error fetching materials:', error);
-        return { data: null, error };
+      const matIds = (mats || []).map((m: any) => m.id);
+      let variants: any[] = [];
+      let variantPricing: any[] = [];
+      if (matIds.length) {
+        // Load variants
+        const { data: vars, error: varsErr } = await supabase
+          .from('material_variants')
+          .select('id, material_id, variant_name, description, attributes, unit_id, length, width, thickness, weight_per_unit, created_at')
+          .in('material_id', matIds);
+        if (varsErr) return { data: null, error: varsErr };
+        variants = vars || [];
+        
+        // Load supplier pricing for all variants
+        const variantIds = variants.map(v => v.id);
+        if (variantIds.length > 0) {
+          const { data: pricing, error: pricingErr } = await supabase
+            .from('supplier_pricing')
+            .select(`
+              id,
+              material_variant_id,
+              price,
+              price_per_unit,
+              supplier_quantity,
+              updated_at,
+              suppliers (
+                id,
+                name,
+                contact_person
+              )
+            `)
+            .in('material_variant_id', variantIds)
+            .order('price');
+          if (!pricingErr) {
+            variantPricing = pricing || [];
+          }
+        }
       }
 
-      // For now, return simple data - we can enhance with joins later
-      return { data, error };
+      const { data: units, error: unitsErr } = await supabase
+        .from('units_of_measure')
+        .select('id, name, description');
+      if (unitsErr) return { data: null, error: unitsErr };
+      const unitMap = new Map((units || []).map((u: any) => [u.id, u]));
+
+      const { data: matsTags, error: tagsErr } = await supabase
+        .from('material_tags')
+        .select('material_id, tag_id, tags(id, name)');
+      if (tagsErr) return { data: null, error: tagsErr };
+      const tagsByMat = new Map<string, any[]>([]);
+      (matsTags || []).forEach((r: any) => {
+        const arr = tagsByMat.get(r.material_id) || [];
+        arr.push(r.tags);
+        tagsByMat.set(r.material_id, arr);
+      });
+
+      // Assemble materials with variants and pricing
+      const materialRows = (mats || []).map((m: any) => {
+        const materialVariants = variants.filter((v: any) => v.material_id === m.id).map((v: any) => ({
+          ...v,
+          supplier_pricing: variantPricing.filter((p: any) => p.material_variant_id === v.id)
+        }));
+        
+        return {
+          id: m.id,
+          name: m.name,
+          description: m.description,
+          unit_id: m.unit_id,
+          unit: m.unit_id ? unitMap.get(m.unit_id) || null : null,
+          material_variants: materialVariants,
+          material_tags: (tagsByMat.get(m.id) || []).map((t: any) => ({ tag_id: t?.id, tags: t }))
+        };
+      });
+
+      return { data: materialRows, error: null };
     } catch (exception) {
       console.error('Exception in materialOperations.getAll:', exception);
       return { data: null, error: exception };
@@ -114,7 +196,8 @@ export const materialOperations = {
           supplier_pricing (
             id,
             price,
-            stock_level,
+            price_per_unit,
+            supplier_quantity,
             updated_at,
             suppliers (
               id,
@@ -122,11 +205,6 @@ export const materialOperations = {
               contact_person,
               email,
               phone
-            ),
-            units_of_measure:unit_id (
-              id,
-              name,
-              description
             )
           )
         ),
@@ -274,20 +352,21 @@ export const variantOperations = {
           name,
           description
         ),
+        units_of_measure:unit_id (
+          id,
+          name,
+          description
+        ),
         supplier_pricing (
           id,
           price,
-          stock_level,
+          price_per_unit,
+          supplier_quantity,
           updated_at,
           suppliers (
             id,
             name,
             contact_person
-          ),
-          units_of_measure:unit_id (
-            id,
-            name,
-            description
           )
         )
       `)
@@ -320,14 +399,156 @@ export const variantOperations = {
     return { data, error };
   },
 
-  // Delete variant
+  // Delete variant (cascade: supplier_pricing and variant tags)
   delete: async (id: string) => {
+    try {
+      // Delete supplier pricing referencing this variant
+      await supabase
+        .from('supplier_pricing')
+        .delete()
+        .eq('material_variant_id', id);
+
+      // Delete material_variant_tags if table exists
+      try {
+        await supabase
+          .from('material_variant_tags')
+          .delete()
+          .eq('material_variant_id', id);
+      } catch (_) {
+        // ignore if table doesn't exist
+      }
+
+      const { data, error } = await supabase
+        .from('material_variants')
+        .delete()
+        .eq('id', id);
+
+      return { data, error };
+    } catch (e) {
+      return { data: null, error: e as any };
+    }
+  },
+
+  // Get variant with tags
+  getWithTags: async (variantId: string) => {
     const { data, error } = await supabase
       .from('material_variants')
-      .delete()
-      .eq('id', id);
+      .select(`
+        *,
+        material_variant_tags (
+          tag_id,
+          tags (
+            id,
+            name
+          )
+        )
+      `)
+      .eq('id', variantId)
+      .single();
 
     return { data, error };
+  },
+
+  // Add tags to variant (idempotent - avoids 409 conflicts)
+  addTags: async (variantId: string, tagIds: string[]) => {
+    try {
+      // Load existing tag links to avoid duplicates
+      const { data: existing, error: existErr } = await supabase
+        .from('material_variant_tags')
+        .select('tag_id')
+        .eq('material_variant_id', variantId);
+      if (existErr) {
+        // Non-fatal: proceed with upsert as fallback
+        console.warn('addTags: could not read existing tags, falling back to upsert', existErr);
+      }
+
+      const existingSet = new Set((existing || []).map((r: any) => r.tag_id));
+      const toInsert = (tagIds || []).filter((id) => !!id && !existingSet.has(id));
+      if (toInsert.length === 0) {
+        return { data: [], error: null };
+      }
+
+      const entries = toInsert.map(tagId => ({
+        material_variant_id: variantId,
+        tag_id: tagId
+      }));
+
+      // Use upsert to be extra-safe in concurrent scenarios
+      const { data, error } = await supabase
+        .from('material_variant_tags')
+        .upsert(entries, { onConflict: 'material_variant_id,tag_id', ignoreDuplicates: true });
+
+      // Treat 409 conflicts as success (already linked)
+      if (error && (error.code === '409' || /duplicate key|conflict/i.test(String(error.message || '')))) {
+        return { data: [], error: null };
+      }
+
+      return { data, error };
+    } catch (e: any) {
+      return { data: null, error: e };
+    }
+  },
+
+  // Remove tags from variant
+  removeTags: async (variantId: string, tagIds?: string[]) => {
+    let query = supabase
+      .from('material_variant_tags')
+      .delete()
+      .eq('material_variant_id', variantId);
+
+    if (tagIds && tagIds.length > 0) {
+      query = query.in('tag_id', tagIds);
+    }
+
+    const { data, error } = await query;
+    return { data, error };
+  },
+
+  // Update variant tags (diff-based, avoids churn and conflicts)
+  updateTags: async (variantId: string, tagIds: string[]) => {
+    try {
+      const normalized = Array.from(new Set((tagIds || []).filter(Boolean)));
+
+      // Read current tags
+      const { data: currentRows, error: readErr } = await supabase
+        .from('material_variant_tags')
+        .select('tag_id')
+        .eq('material_variant_id', variantId);
+      if (readErr) {
+        console.warn('updateTags: readErr, falling back to replace strategy', readErr);
+        // Fallback: replace all (previous behavior)
+        await variantOperations.removeTags(variantId);
+        if (normalized.length > 0) {
+          return await variantOperations.addTags(variantId, normalized);
+        }
+        return { data: null, error: null };
+      }
+
+      const current = new Set((currentRows || []).map((r: any) => r.tag_id));
+      const desired = new Set(normalized);
+
+      const toAdd = normalized.filter(id => !current.has(id));
+      const toRemove = (currentRows || []).map((r: any) => r.tag_id).filter((id: string) => !desired.has(id));
+
+      // Remove first (if any)
+      if (toRemove.length > 0) {
+        await supabase
+          .from('material_variant_tags')
+          .delete()
+          .eq('material_variant_id', variantId)
+          .in('tag_id', toRemove);
+      }
+
+      // Add missing (idempotent)
+      if (toAdd.length > 0) {
+        const addRes = await variantOperations.addTags(variantId, toAdd);
+        return addRes;
+      }
+
+      return { data: null, error: null };
+    } catch (e: any) {
+      return { data: null, error: e };
+    }
   }
 };
 
@@ -339,6 +560,39 @@ export const supplierOperations = {
       .from('suppliers')
       .select('*')
       .order('name');
+
+    return { data, error };
+  },
+
+  // Get all variants for a specific supplier with pricing details
+  getSupplierVariants: async (supplierId: string) => {
+    const { data, error } = await supabase
+      .from('supplier_pricing')
+      .select(`
+        id,
+        price,
+        price_per_unit,
+        supplier_quantity,
+        updated_at,
+        material_variants:material_variant_id (
+          id,
+          variant_name,
+          description,
+          attributes,
+          unit_id,
+          length,
+          width,
+          thickness,
+          weight_per_unit,
+          materials:material_id (
+            id,
+            name,
+            description
+          )
+        )
+      `)
+      .eq('supplier_id', supplierId)
+      .order('price');
 
     return { data, error };
   },
@@ -402,11 +656,6 @@ export const pricingOperations = {
           contact_person,
           email,
           phone
-        ),
-        units_of_measure:unit_id (
-          id,
-          name,
-          description
         )
       `)
       .eq('material_variant_id', variantId)
@@ -426,11 +675,6 @@ export const pricingOperations = {
           id,
           name,
           contact_person
-        ),
-        units_of_measure:unit_id (
-          id,
-          name,
-          description
         )
       `)
       .single();
@@ -478,6 +722,18 @@ export const tagOperations = {
     const { data, error } = await supabase
       .from('tags')
       .insert([{ name: tagName }])
+      .select()
+      .single();
+
+    return { data, error };
+  },
+
+  // Update tag name
+  update: async (id: string, name: string) => {
+    const { data, error } = await supabase
+      .from('tags')
+      .update({ name })
+      .eq('id', id)
       .select()
       .single();
 

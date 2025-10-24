@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, TouchableOpacity, Modal } from 'react-native';
 
 interface Assignment { profiles?: { full_name?: string | null } | null; packer_id?: string; task_status?: string }
@@ -17,6 +17,8 @@ interface TaskLogsTableProps {
   onFinish?: (logId: string) => void;
   onRestart?: (logId: string) => void;
   onRowPress?: (logId: string) => void;
+  currentPackageId?: string; // For filtering tasks to specific package
+  getTaskPackages?: (taskLogId: string) => Promise<{ data: string[] | null; error: any }>;
 }
 
 const formatTime = (iso: string | null) => {
@@ -39,8 +41,53 @@ const formatDuration = (startIso: string, endIso: string | null, durationMinutes
   } catch { return '—'; }
 };
 
-const TaskLogsTable: React.FC<TaskLogsTableProps> = ({ rows, onPause, onFinish, onRestart, onRowPress }) => {
+const TaskLogsTable: React.FC<TaskLogsTableProps> = ({ 
+  rows, 
+  onPause, 
+  onFinish, 
+  onRestart, 
+  onRowPress, 
+  currentPackageId,
+  getTaskPackages 
+}) => {
   const [packersModal, setPackersModal] = useState<{ open: boolean; names: string[] }>({ open: false, names: []});
+  const [taskPackageMap, setTaskPackageMap] = useState<Record<string, string[]>>({});
+
+  // Cache task-package relationships when currentPackageId filtering is needed
+  useEffect(() => {
+    if (!currentPackageId || !getTaskPackages) return;
+    
+    const fetchTaskPackages = async () => {
+      const newMap: Record<string, string[]> = {};
+      for (const row of rows) {
+        if (!taskPackageMap[row.id]) {
+          try {
+            const { data } = await getTaskPackages(row.id);
+            if (data) {
+              newMap[row.id] = data;
+            }
+          } catch (error) {
+            console.warn(`Failed to fetch packages for task ${row.id}:`, error);
+          }
+        }
+      }
+      if (Object.keys(newMap).length > 0) {
+        setTaskPackageMap(prev => ({ ...prev, ...newMap }));
+      }
+    };
+    
+    fetchTaskPackages();
+  }, [currentPackageId, rows, getTaskPackages]);
+
+  // Filter rows based on currentPackageId
+  const filteredRows = useMemo(() => {
+    if (!currentPackageId) return rows;
+    
+    return rows.filter(row => {
+      const packages = taskPackageMap[row.id];
+      return packages ? packages.includes(currentPackageId) : false;
+    });
+  }, [rows, currentPackageId, taskPackageMap]);
 
   const openPackers = (assignments?: Assignment[]) => {
     const names = (assignments || []).map(a => a?.profiles?.full_name || '—');
@@ -64,7 +111,7 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({ rows, onPause, onFinish, 
       </View>
 
       {/* Rows */}
-      {rows.map((r) => {
+      {filteredRows.map((r) => {
         const completed = isTaskCompleted(r);
         const rowStyle = completed 
           ? "flex-row items-center px-3 py-2 border-x border-b border-gray-200 bg-gray-100"
@@ -90,10 +137,10 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({ rows, onPause, onFinish, 
                 </TouchableOpacity>
                 {/* Resume only */}
                 <TouchableOpacity 
-                  className="px-2 py-1 rounded bg-blue-600"
+                  className="px-2 py-1 rounded bg-blue-50 border border-blue-600"
                   onPress={() => onRestart?.(r.id)}
                 >
-                  <Text className="text-white text-sm font-semibold">Resume</Text>
+                  <Text className="text-blue-700 text-sm font-semibold">Resume</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -116,11 +163,11 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({ rows, onPause, onFinish, 
               >
                 <Text className="text-blue-800 text-sm">{(r.task_assignments || []).length} Packers</Text>
               </TouchableOpacity>
-              <TouchableOpacity className="px-2 py-1 rounded bg-yellow-100 mr-2" onPress={() => onPause?.(r.id)}>
-                <Text className="text-yellow-800 text-sm">Pause</Text>
+              <TouchableOpacity className="px-2 py-1 rounded bg-amber-50 border border-amber-600 mr-2" onPress={() => onPause?.(r.id)}>
+                <Text className="text-amber-700 text-sm">Pause</Text>
               </TouchableOpacity>
-              <TouchableOpacity className="px-2 py-1 rounded bg-green-600" onPress={() => onFinish?.(r.id)}>
-                <Text className="text-white text-sm">Finish</Text>
+              <TouchableOpacity className="px-2 py-1 rounded bg-green-50 border border-green-600" onPress={() => onFinish?.(r.id)}>
+                <Text className="text-green-700 text-sm">Finish</Text>
               </TouchableOpacity>
             </View>
           </TouchableOpacity>

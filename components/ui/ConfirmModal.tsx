@@ -1,5 +1,5 @@
 import React from 'react';
-import { Modal, View, Text, TouchableOpacity } from 'react-native';
+import { Modal, View, Text, TouchableOpacity, ScrollView } from 'react-native';
 
 interface ConfirmModalProps {
   visible: boolean;
@@ -11,6 +11,7 @@ interface ConfirmModalProps {
   loading?: boolean;
   onConfirm: () => void | Promise<void>;
   onCancel: () => void;
+  children?: React.ReactNode;
 }
 
 export function ConfirmModal({
@@ -23,20 +24,27 @@ export function ConfirmModal({
   loading = false,
   onConfirm,
   onCancel,
+  children,
 }: ConfirmModalProps) {
   const confirmBg = variant === 'danger' ? 'bg-red-600' : 'bg-blue-600';
   const confirmBgDisabled = variant === 'danger' ? 'bg-red-300' : 'bg-blue-300';
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View className="flex-1 bg-black/50 justify-center items-center p-4">
-        <View className="bg-white rounded-xl w-full max-w-md">
+      <TouchableOpacity className="flex-1 bg-black/50 justify-center items-center p-4" activeOpacity={1} onPress={onCancel}>
+        <TouchableOpacity className="bg-white rounded-xl w-full max-w-md" activeOpacity={1} onPress={(e) => e.stopPropagation()}>
           <View className="p-5 border-b border-gray-200">
             <Text className="text-lg font-bold text-gray-900">{title}</Text>
             {description ? (
               <Text className="text-gray-600 mt-2">{description}</Text>
             ) : null}
           </View>
+
+          {children ? (
+            <View className="px-5 py-3 border-b border-gray-200 max-h-64">
+              <ScrollView>{children}</ScrollView>
+            </View>
+          ) : null}
 
           <View className="flex-row p-4 space-x-3 justify-end">
             <TouchableOpacity
@@ -54,8 +62,8 @@ export function ConfirmModal({
               <Text className="text-white font-medium">{confirmText}</Text>
             </TouchableOpacity>
           </View>
-        </View>
-      </View>
+        </TouchableOpacity>
+      </TouchableOpacity>
     </Modal>
   );
 }

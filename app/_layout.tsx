@@ -1,20 +1,51 @@
+import 'react-native-url-polyfill/auto';
 import React, { useEffect } from 'react';
+import { LogBox, Platform } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider } from '../utils/AuthContext';
 import { PackerSessionProvider } from '../utils/PackerSessionContext';
+import { TextSizeProvider, useTextSize } from '../utils/TextSizeContext';
 import { Text, View, ActivityIndicator } from 'react-native';
 import { useFonts } from 'expo-font';
 import './globals.css';
 
+function AppStack() {
+  // Text nodes will pick up size changes via context
+  return (
+    <>
+      <StatusBar style="auto" />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="index" />
+        <Stack.Screen name="auth" />
+        <Stack.Screen name="(admin)" />
+        <Stack.Screen name="(packer)" />
+        <Stack.Screen name="+not-found" />
+      </Stack>
+    </>
+  );
+}
+
 export default function RootLayout() {
   // Load Calibri fonts from local folder
   const [fontsLoaded] = useFonts({
-'Calibri-Regular': require('../assets/fonts/calibri-regular.ttf'),
+    'Calibri-Regular': require('../assets/fonts/calibri-regular.ttf'),
     'Calibri-Bold': require('../assets/fonts/calibri-bold.ttf'),
     'Calibri-Italic': require('../assets/fonts/calibri-italic.ttf'),
     'Calibri-BoldItalic': require('../assets/fonts/calibri-bold-italic.ttf'),
   });
+
+  // Silence noisy dev-only warnings on web
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      LogBox.ignoreLogs([
+        'useNativeDriver is not supported',
+        // Reduce noise on web: RN Web warns when stray text nodes appear under View
+        'Unexpected text node',
+        'A text node cannot be a child of a <View>'
+      ]);
+    }
+  }, []);
 
   // Set default Text font to Calibri-Regular once fonts are loaded
   useEffect(() => {
@@ -42,16 +73,11 @@ export default function RootLayout() {
 
   return (
     <AuthProvider>
-      <PackerSessionProvider>
-        <StatusBar style="auto" />
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="index" />
-          <Stack.Screen name="auth" />
-          <Stack.Screen name="(admin)" />
-          <Stack.Screen name="(packer)" />
-          <Stack.Screen name="+not-found" />
-        </Stack>
-      </PackerSessionProvider>
+      <TextSizeProvider>
+        <PackerSessionProvider>
+          <AppStack />
+        </PackerSessionProvider>
+      </TextSizeProvider>
     </AuthProvider>
   );
 }

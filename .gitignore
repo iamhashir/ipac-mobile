@@ -8,6 +8,7 @@ node_modules/
 dist/
 web-build/
 expo-env.d.ts
+dist-bundle/
 
 # Native
 .kotlin/
@@ -18,6 +19,12 @@ expo-env.d.ts
 *.key
 *.mobileprovision
 
+# Android
+android/app/.cxx/
+android/app/build/
+android/.gradle/
+android/build/
+
 # Metro
 .metro-health-check*
 
@@ -25,6 +32,19 @@ expo-env.d.ts
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+*.log
+and-error-logs.txt
+order_page_architecture.html
+order_page_architecture_files/
+
+# Temporary documentation and fix files
+*-fixes-*.md
+*-fix-*.md
+*-summary.md
+fix_*.sql
+run-*.sql
+check-*.sql
+*_examples.sql
 
 # macOS
 .DS_Store
@@ -32,6 +52,10 @@ yarn-error.*
 
 # local env files
 .env*.local
+.env
 
 # typescript
 *.tsbuildinfo
+
+# Legacy Appwrite artifacts (remove when possible)
+functions/appwrite/

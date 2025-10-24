@@ -1,9 +1,11 @@
-import React, { useState, useEffect, Suspense, lazy } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, TextInput } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Search, Filter, Eye, Edit3, CheckCircle, Plus } from 'lucide-react-native';
-import { supabase } from '../../utils/api/supabase';
-const AddOrderModal = lazy(() => import('./components/AddOrderModal'));
+import { Search, Filter, Eye, Edit3, CheckCircle, Plus, Trash2 } from 'lucide-react-native';
+import { db, supabase } from '../../utils/api/supabase';
+import AddOrderModal from '../../components/admin/AddOrderModal';
+import { useRouter } from 'expo-router';
+import DeleteOrderModal from '../../components/admin/orders/DeleteOrderModal';
 
 interface Order {
   id: string;
@@ -18,7 +20,7 @@ interface Order {
 
 // Real orders will be fetched from database
 
-function OrderCard({ order }: { order: Order }) {
+function OrderCard({ order, expanded, onToggleExpand, onView, onDelete, children }: { order: Order; expanded: boolean; onToggleExpand: () => void; onView: () => void; onDelete: () => void; children?: React.ReactNode }) {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending': return 'bg-yellow-100 text-yellow-800';
@@ -35,7 +37,7 @@ function OrderCard({ order }: { order: Order }) {
   return (
     <View className="bg-white rounded-lg shadow-sm p-4 mb-3">
       <View className="flex-row justify-between items-start mb-3">
-        <View className="flex-1">
+        <View className="flex-1 pr-2">
           <Text className="text-lg font-semibold text-gray-900">
             {order.order_name}
           </Text>
@@ -48,8 +50,8 @@ function OrderCard({ order }: { order: Order }) {
             </Text>
           )}
         </View>
-        <View className="flex-col items-end">
-          <View className={`px-3 py-1 rounded-full mb-1 ${getStatusColor(order.production_status)}`}>
+        <View className="flex-row items-center space-x-2">
+          <View className={`px-3 py-1 rounded-full ${getStatusColor(order.production_status)}`}>
             <Text className="text-xs font-medium capitalize">
               {order.production_status.replace('_', ' ')}
             </Text>
@@ -59,6 +61,9 @@ function OrderCard({ order }: { order: Order }) {
               {order.commercial_status}
             </Text>
           </View>
+          <TouchableOpacity onPress={onDelete} className="w-8 h-8 rounded-md bg-red-50 border border-red-300 items-center justify-center z-10">
+            <Trash2 size={16} color="#dc2626" />
+          </TouchableOpacity>
         </View>
       </View>
       
@@ -72,14 +77,14 @@ function OrderCard({ order }: { order: Order }) {
       </View>
 
       <View className="flex-row space-x-2">
-        <TouchableOpacity className="flex-1 bg-blue-50 py-2 px-3 rounded-lg flex-row items-center justify-center">
+        <TouchableOpacity onPress={onView} className="flex-1 bg-blue-50 py-2 px-3 rounded-lg flex-row items-center justify-center">
           <Eye size={16} color="#3b82f6" />
           <Text className="ml-2 text-blue-600 font-medium">View</Text>
         </TouchableOpacity>
         
-        <TouchableOpacity className="flex-1 bg-green-50 py-2 px-3 rounded-lg flex-row items-center justify-center">
+        <TouchableOpacity onPress={onToggleExpand} className="flex-1 bg-green-50 py-2 px-3 rounded-lg flex-row items-center justify-center">
           <Edit3 size={16} color="#10b981" />
-          <Text className="ml-2 text-green-600 font-medium">Edit</Text>
+          <Text className="ml-2 text-green-600 font-medium">{expanded ? 'Close' : 'Edit'}</Text>
         </TouchableOpacity>
         
         {order.production_status === 'pending' && (
@@ -89,16 +94,28 @@ function OrderCard({ order }: { order: Order }) {
           </TouchableOpacity>
         )}
       </View>
+
+      {expanded && (
+        <View className="mt-3 border-t border-gray-200 pt-3">
+          {children}
+        </View>
+      )}
     </View>
   );
 }
 
+import OrderPackagesEditor from '../../components/admin/orders/OrderPackagesEditor';
+
 export default function OrdersPage() {
+  const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedFilter, setSelectedFilter] = useState('all');
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Order | null>(null);
 
   useEffect(() => {
     fetchOrders();
@@ -152,6 +169,24 @@ export default function OrdersPage() {
     { key: 'draft', label: 'Draft', count: orders.filter(o => o.commercial_status === 'draft').length }
   ];
 
+  const handleRequestDelete = async (order: Order) => {
+    try {
+      // Block deletion if there are active packer sessions on this order
+      const { data: sessions, error } = await db.getActiveSessionsForOrder(order.id);
+      if (error) {
+        console.warn('Error checking active sessions:', error);
+      }
+      if (sessions && sessions.length > 0) {
+        Alert.alert("Can't delete", "You can't delete an order when there are packers working on it!");
+        return;
+      }
+      setDeleteTarget(order);
+      setShowDeleteModal(true);
+    } catch (e) {
+      Alert.alert('Error', 'Failed to validate order deletion');
+    }
+  };
+
   return (
     <SafeAreaView className="flex-1 bg-gray-50">
       {/* Header */}
@@ -167,11 +202,6 @@ export default function OrdersPage() {
             <Plus size={16} color="white" />
             <Text className="ml-2 text-white font-medium">Add Order</Text>
           </TouchableOpacity>
-          {showAddModal && (
-            <Suspense fallback={<View className="p-4"><Text>Loading form...</Text></View>}>
-              <AddOrderModal visible={showAddModal} onClose={() => setShowAddModal(false)} />
-            </Suspense>
-          )}
         </View>
         
         {/* Search Bar */}
@@ -229,18 +259,28 @@ export default function OrdersPage() {
           </View>
         ) : (
           filteredOrders.map((order) => (
-            <OrderCard key={order.id} order={order} />
+            <OrderCard 
+              key={order.id}
+              order={order} 
+              expanded={expandedOrderId === order.id}
+              onToggleExpand={() => setExpandedOrderId(prev => prev === order.id ? null : order.id)}
+              onView={() => router.push({ pathname: '/orders/[orderId]', params: { orderId: order.id } })}
+              onDelete={() => handleRequestDelete(order)}
+            >
+              <Text className="text-base font-semibold text-gray-900 mb-2">Boxes for {order.order_name}</Text>
+              <OrderPackagesEditor orderId={order.id} onDone={() => setExpandedOrderId(null)} />
+            </OrderCard>
           ))
         )}
 
-        {filteredOrders.length === 0 && (
+        {filteredOrders.length === 0 ? (
           <View className="flex-1 justify-center items-center py-12">
             <Text className="text-gray-500 text-lg">No orders found</Text>
             <Text className="text-gray-400 text-sm mt-2">
               Try adjusting your search or filters
             </Text>
           </View>
-        )}
+        ) : null}
       </ScrollView>
 
       {/* Add Order Modal */}
@@ -249,6 +289,21 @@ export default function OrdersPage() {
         onClose={() => setShowAddModal(false)}
         onOrderAdded={fetchOrders}
       />
+
+      {/* Delete Order Modal */}
+      {deleteTarget && (
+        <DeleteOrderModal
+          visible={showDeleteModal}
+          orderId={deleteTarget.id}
+          orderName={deleteTarget.order_name}
+          onClose={() => { setShowDeleteModal(false); setDeleteTarget(null); }}
+          onDeleted={async () => {
+            setShowDeleteModal(false);
+            setDeleteTarget(null);
+            await fetchOrders();
+          }}
+        />
+      )}
     </SafeAreaView>
   );
 }

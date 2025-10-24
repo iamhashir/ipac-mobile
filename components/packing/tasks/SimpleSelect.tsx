@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, Modal, FlatList } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, Text, TouchableOpacity, Modal, FlatList, TextInput } from 'react-native';
+import { ChevronDown } from 'lucide-react-native';
 
 interface Item { label: string; value: string; labelShort?: string; tooltip?: string; }
 
@@ -11,14 +12,34 @@ interface SimpleSelectProps {
   placeholder?: string;
   widthPercent?: number; // 0..1
   disabled?: boolean;
+  centerText?: boolean;
 }
 
-const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChange, placeholder = 'Select...', widthPercent = 0.75, disabled = false }) => {
+const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChange, placeholder = 'Select...', widthPercent = 0.75, disabled = false, centerText = false }) => {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
 
   const selected = items.find(i => i.value === value);
   const selectedText = selected ? (selected.labelShort || selected.label) : placeholder;
   const tooltip = selected?.tooltip || (selected ? selected.label : undefined);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [...items].sort((a, b) => a.label.localeCompare(b.label));
+    const withScore = items.map(it => {
+      const labelLc = it.label.toLowerCase();
+      const idx = labelLc.indexOf(q);
+      const starts = labelLc.startsWith(q);
+      const score = idx < 0 ? 9999 : idx;
+      return { it, score, starts };
+    });
+    withScore.sort((a, b) => {
+      if (a.starts !== b.starts) return a.starts ? -1 : 1;
+      if (a.score !== b.score) return a.score - b.score;
+      return a.it.label.localeCompare(b.it.label);
+    });
+    return withScore.filter(x => x.score !== 9999).map(x => x.it);
+  }, [items, query]);
 
   return (
     <View style={{ width: `${Math.round(widthPercent * 100)}%` }}>
@@ -31,30 +52,43 @@ const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChan
         accessibilityLabel={tooltip}
         disabled={disabled}
       >
-        <Text className="text-gray-800">{selectedText}</Text>
+        <View className="flex-row items-center justify-between">
+          <Text className={`text-gray-800 ${centerText ? 'text-center' : ''}`}>{selectedText}</Text>
+          <ChevronDown size={16} color="#374151" />
+        </View>
       </TouchableOpacity>
 
       <Modal visible={open} animationType="slide" transparent onRequestClose={() => setOpen(false)}>
-        <View className="flex-1 justify-end bg-black/30">
-          <View className="bg-white rounded-t-2xl p-4 max-h-[60%]">
+        <TouchableOpacity className="flex-1 justify-end bg-black/30" activeOpacity={1} onPress={() => setOpen(false)}>
+          <TouchableOpacity className="bg-white rounded-t-2xl p-4 max-h-[70%]" activeOpacity={1} onPress={(e) => e.stopPropagation()}>
             <Text className="text-gray-800 font-semibold mb-2">{label || 'Select'}</Text>
+            <View className="mb-2">
+              <TextInput
+                value={query}
+                onChangeText={setQuery}
+                placeholder="Type to filter..."
+                className="border border-gray-300 bg-white rounded px-3 py-2"
+                autoFocus
+              />
+            </View>
             <FlatList
-              data={items}
+              data={filtered}
               keyExtractor={(it) => it.value}
+              keyboardShouldPersistTaps="handled"
               renderItem={({ item }) => (
                 <TouchableOpacity
                   className="px-3 py-3 border-b border-gray-100"
-                  onPress={() => { onChange(item.value); setOpen(false); }}
+                  onPress={() => { onChange(item.value); setOpen(false); setQuery(''); }}
                 >
                   <Text className="text-gray-800">{item.label}</Text>
                 </TouchableOpacity>
               )}
             />
-            <TouchableOpacity onPress={() => setOpen(false)} className="mt-3 self-end">
+            <TouchableOpacity onPress={() => { setOpen(false); setQuery(''); }} className="mt-3 self-end">
               <Text className="text-primary-700 font-semibold">Close</Text>
             </TouchableOpacity>
-          </View>
-        </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
     </View>
   );

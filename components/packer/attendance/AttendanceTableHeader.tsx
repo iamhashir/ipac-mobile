@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, TouchableOpacity } from "react-native";
+import { View, Text, TouchableOpacity, useWindowDimensions } from "react-native";
 import { CheckCircle, XCircle, Clock } from "lucide-react-native";
 
 type TimePeriod = "morning" | "afternoon";
@@ -17,6 +17,9 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
   onBulkPresenceToggle,
   onBulkTimeToggle,
 }) => {
+  const { width } = useWindowDimensions();
+  const isMediumOrLarger = width >= 850; // md breakpoint
+  
   return (
     <View
       className="bg-white border-b border-t border-x-2 border-gray-200"
@@ -24,19 +27,19 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
       {/* First Header Row */}
       <View className="flex-row justify-between bg-blue-100 border-b border-gray-300">
         <View className="w-[14.3%] p-3 border-r border-gray-300">
-          <Text className="text-left font-medium text-gray-800">Name</Text>
+          <Text className="text-left font-medium text-gray-800 text-lg">Name</Text>
         </View>
         <View className="w-[85.7%] flex-row">
           <View className="w-1/2 p-3 border-r border-gray-300 flex-row items-center justify-center">
-            <Text className="font-medium text-gray-800">Morning</Text>
+            <Text className="font-medium text-gray-800 text-lg">Morning</Text>
             {isAfternoon && (
-              <Text className="text-red-500 ml-1 text-xs">
+              <Text className="text-red-500 ml-1 text-lg">
                 (Disabled after 12:00)
               </Text>
             )}
           </View>
           <View className="w-1/2 p-3 flex-row items-center justify-center">
-            <Text className="font-medium text-gray-800">Afternoon</Text>
+            <Text className="font-medium text-gray-800 text-lg">Afternoon</Text>
           </View>
         </View>
       </View>
@@ -56,7 +59,7 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
             style={{ minWidth: 200 }}
           >
             <View className="flex-col items-center">
-              <Text className="text-xs mb-1 text-center">Present / Absent</Text>
+              <Text className="text-lg mb-1 text-center">Present / Absent</Text>
               <View className="flex-row items-center gap-1 justify-center">
                 <TouchableOpacity
                   className={`rounded-full p-1 ${
@@ -87,13 +90,13 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
             <View className={`bg-blue-50 rounded-full p-1 flex-row ${
               isAfternoon ? "opacity-50" : ""
             }`}>
-              <Clock size={16} color={isAfternoon ? "#9CA3AF" : "#2563EB"} />
+              <Clock size={16} color={isAfternoon ? "#9CA3AF" : "#2563EB"} className={"mt-[6%]"} />
               <Text
-                className={`ml-1 text-xs ${
+                className={`ml-1 text-lg ${
                   isAfternoon ? "text-gray-400" : "text-blue-600"
                 }`}
               >
-                Start (Auto)
+                Start
               </Text>
             </View>
           </View>
@@ -106,9 +109,9 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
               onPress={() => onBulkTimeToggle("morning", "end")}
               disabled={isAfternoon}
             >
-              <Clock size={16} color={isAfternoon ? "#9CA3AF" : "#1E40AF"} />
+              <Clock size={16} color={isAfternoon ? "#9CA3AF" : "#1E40AF"} className={"mt-[15%]"} />
               <Text
-                className={`ml-1 text-xs ${
+                className={`ml-1 text-lg ${
                   isAfternoon ? "text-gray-400" : "text-blue-800"
                 }`}
               >
@@ -123,7 +126,7 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
             style={{ minWidth: 200 }}
           >
             <View className="flex-col items-center">
-              <Text className="text-xs mb-1 text-center">Present / Absent</Text>
+              <Text className="text-lg mb-1 text-center">Present / Absent</Text>
               <View className="flex-row items-center gap-1 justify-center">
                 <TouchableOpacity
                   className={`bg-green-50 rounded-full p-1 ${
@@ -151,10 +154,10 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
             <View className={`bg-blue-50 rounded-full p-1 flex-row ${
               isMorning ? "opacity-50" : ""
             }`}>
-              <Clock size={16} color={isMorning ? "#9CA3AF" : "#2563EB"} />
-              <Text className={`ml-1 text-xs ${
+              <Clock size={16} color={isMorning ? "#9CA3AF" : "#2563EB"} className={"mt-[6%]"} />
+              <Text className={`ml-1 text-lg ${
                 isMorning ? "text-gray-400" : "text-blue-600"
-              }`}>Start (Auto)</Text>
+              }`}>Start</Text>
             </View>
           </View>
 
@@ -166,8 +169,8 @@ export const AttendanceTableHeader: React.FC<AttendanceTableHeaderProps> = ({
               onPress={() => onBulkTimeToggle("afternoon", "end")}
               disabled={isMorning}
             >
-              <Clock size={16} color={isMorning ? "#9CA3AF" : "#1E40AF"} />
-              <Text className={`ml-1 text-xs ${
+              <Clock size={16} color={isMorning ? "#9CA3AF" : "#1E40AF"} className={"mt-[15%]"} />
+              <Text className={`ml-1 text-lg ${
                 isMorning ? "text-gray-400" : "text-blue-800"
               }`}>End</Text>
             </TouchableOpacity>

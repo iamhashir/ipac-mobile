@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, Modal, TextInput, ScrollView, Alert } from 'react-native';
 import CollapsibleCard from './common/CollapsibleCard';
 import { db } from '../../utils/api/supabase';
-import { Check, X } from 'lucide-react-native';
+import { Check, X, ChevronDown } from 'lucide-react-native';
 
 interface AccessoriesSectionProps {
   orderPackageId: string;
@@ -32,6 +32,8 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
   const [triedSubmit, setTriedSubmit] = useState(false);
   const [errors, setErrors] = useState<{ variant?: string; quantity?: string; unit?: string }>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [variantSearchQuery, setVariantSearchQuery] = useState('');
+  const [unitSearchQuery, setUnitSearchQuery] = useState('');
 
   // Form state
   const [formVariant, setFormVariant] = useState<string | null>(null);
@@ -53,6 +55,11 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
       db.getOrderPackageMaterials(orderPackageId),
     ] as any);
 
+    console.log('📦 Accessories: loaded variants', v?.length || 0, 'units', u?.length || 0);
+    if (!v || v.length === 0) {
+      console.warn('⚠️ No variants found with tag "accessories". Please add the "accessories" tag to materials in inventory.');
+    }
+
     setVariants((v || []).map((x: any) => ({ label: x.label, value: x.id || x.value })));
     setUnits((u || []).map((x: any) => ({ label: x.name || x.label, value: x.id || x.value })));
     // Build variant -> unit map (from material's default unit)
@@ -61,10 +68,13 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
       vMap[x.id || x.value] = x.unit_id || null;
     });
     setVariantUnitIdMap(vMap);
-    setItems(rows || []);
+    // Only show accessories added in this section
+    setItems((rows || []).filter((r: any) => r.material_type === 'Accessories'));
   };
 
   useEffect(() => {
+    // Clear old items immediately to prevent cross-box bleed while loading
+    setItems([]);
     load();
   }, [orderPackageId]);
 
@@ -77,6 +87,8 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
     setFormComment('');
     setVariantPickerOpen(false);
     setUnitPickerOpen(false);
+    setVariantSearchQuery('');
+    setUnitSearchQuery('');
     setTriedSubmit(false);
     setErrors({});
     setIsSaving(false);
@@ -202,20 +214,20 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
         <View className="flex-row gap-2">
           <TouchableOpacity
             onPress={() => markUsed(row.id)}
-            className={`px-2 py-1 rounded ${row.item_used ? 'bg-green-600' : 'bg-green-500'}`}
+            className={`px-2 py-1 rounded bg-green-50 border border-green-600`}
           >
             <View className="flex-row items-center">
-              <Check size={18} color="#fff" />
-              <Text className="text-white text-xs ml-1">Use</Text>
+              <Check size={18} color="#15803d" />
+              <Text className="text-green-700 text-xs ml-1">Use</Text>
             </View>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => removeRow(row.id)}
-            className="px-2 py-1 rounded bg-red-500"
+            className="px-2 py-1 rounded bg-red-50 border border-red-600"
           >
             <View className="flex-row items-center">
-              <X size={18} color="#fff" />
-              <Text className="text-white text-xs ml-1">Remove</Text>
+              <X size={18} color="#ff0000" />
+              <Text className="text-red-800 text-xs ml-1">Remove</Text>
             </View>
           </TouchableOpacity>
         </View>
@@ -231,8 +243,8 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
           {/* Top bar: title + Add item button */}
           <View className="flex-row justify-between items-center mb-2">
             <Text className="text-gray-800 font-semibold">Accessory items</Text>
-            <TouchableOpacity onPress={() => setAddOpen(true)} className="bg-primary-600 px-3 py-1.5 rounded">
-              <Text className="text-white text-sm">Add item</Text>
+            <TouchableOpacity onPress={() => setAddOpen(true)} className="bg-blue-50 border border-blue-600 px-3 py-1.5 rounded">
+              <Text className="text-blue-700 text-sm">Add item</Text>
             </TouchableOpacity>
           </View>
 
@@ -246,8 +258,16 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
 
       {/* Add Item Modal */}
       <Modal visible={addOpen} transparent animationType="fade" onRequestClose={() => setAddOpen(false)}>
-        <View className="flex-1 bg-black/40 justify-center items-center">
-          <View className="w-11/12 bg-white rounded-lg p-4">
+        <TouchableOpacity 
+          activeOpacity={1}
+          className="flex-1 bg-black/40 justify-center items-center"
+          onPress={() => { setAddOpen(false); resetForm(); }}
+        >
+          <TouchableOpacity 
+            activeOpacity={1}
+            className="w-11/12 bg-white rounded-lg p-4"
+            onPress={(e) => e.stopPropagation()}
+          >
             <Text className="text-lg font-semibold text-gray-800 mb-3">Add accessory item</Text>
 
             {/* Variant Picker */}
@@ -256,38 +276,66 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
               onPress={() => setVariantPickerOpen(v => !v)}
               className="border border-gray-300 rounded p-2 mb-1 bg-white"
             >
-              <Text className="text-gray-800">{variantLabelById(formVariant)}</Text>
+              <View className="flex-row items-center justify-between">
+                <Text className="text-gray-800">{variantLabelById(formVariant)}</Text>
+                <ChevronDown size={16} color="#374151" />
+              </View>
             </TouchableOpacity>
             {triedSubmit && errors.variant ? (
               <Text className="text-red-600 text-xs mb-2">{errors.variant}</Text>
             ) : <View className="mb-1" />}
             {variantPickerOpen && (
-              <View className="max-h-40 border border-gray-200 rounded mb-2 bg-white">
+              <View className="max-h-60 border border-gray-200 rounded mb-2 bg-white">
+                {/* Search input */}
+                <View className="p-2 border-b border-gray-200">
+                  <TextInput
+                    value={variantSearchQuery}
+                    onChangeText={setVariantSearchQuery}
+                    placeholder="Type to search items..."
+                    className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+                    autoFocus
+                  />
+                </View>
                 <ScrollView>
-                  {variants.map((opt) => (
-                    <TouchableOpacity
-                      key={opt.value}
-                      onPress={() => {
-                        setFormVariant(opt.value);
-                        setErrors((e) => ({ ...e, variant: undefined }));
-                        // Auto-assign unit from variant's material default
-                        const autoUnit = variantUnitIdMap[opt.value] || null;
-                        setFormUnit(autoUnit);
-                        setErrors((e) => ({ ...e, unit: undefined }));
-                        setVariantPickerOpen(false);
-                      }}
-                      className="px-3 py-2"
-                    >
-                      <View className="flex-row justify-between items-center">
-                        <Text className="text-gray-800">{opt.label}</Text>
-                        {variantUnitIdMap[opt.value] ? (
-                          <View className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
-                            <Text className="text-[10px] text-slate-700">{unitsMap[variantUnitIdMap[opt.value] as string] || '—'}</Text>
+                  {variants.length === 0 ? (
+                    <View className="px-3 py-4">
+                      <Text className="text-gray-500 text-sm text-center">No items found.</Text>
+                      <Text className="text-gray-400 text-xs text-center mt-1">
+                        Make sure materials are tagged with "accessories" in inventory.
+                      </Text>
+                    </View>
+                  ) : (
+                    variants
+                      .filter((opt) => {
+                        if (!variantSearchQuery.trim()) return true;
+                        return opt.label.toLowerCase().includes(variantSearchQuery.toLowerCase());
+                      })
+                      .map((opt) => (
+                        <TouchableOpacity
+                          key={opt.value}
+                          onPress={() => {
+                            setFormVariant(opt.value);
+                            setErrors((e) => ({ ...e, variant: undefined }));
+                            // Auto-assign unit from variant's material default
+                            const autoUnit = variantUnitIdMap[opt.value] || null;
+                            setFormUnit(autoUnit);
+                            setErrors((e) => ({ ...e, unit: undefined }));
+                            setVariantPickerOpen(false);
+                            setVariantSearchQuery('');
+                          }}
+                          className="px-3 py-2 border-b border-gray-100"
+                        >
+                          <View className="flex-row justify-between items-center">
+                            <Text className="text-gray-800">{opt.label}</Text>
+                            {variantUnitIdMap[opt.value] ? (
+                              <View className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
+                                <Text className="text-[10px] text-slate-700">{unitsMap[variantUnitIdMap[opt.value] as string] || '—'}</Text>
+                              </View>
+                            ) : null}
                           </View>
-                        ) : null}
-                      </View>
-                    </TouchableOpacity>
-                  ))}
+                        </TouchableOpacity>
+                      ))
+                  )}
                 </ScrollView>
               </View>
             )}
@@ -317,19 +365,46 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
             ) : (
               <>
                 <TouchableOpacity onPress={() => setUnitPickerOpen(v => !v)} className="border border-gray-300 rounded p-2 mb-1 bg-white">
-                  <Text className="text-gray-800">{formUnit ? (unitsMap[formUnit] || '—') : 'Select unit'}</Text>
+                  <View className="flex-row items-center justify-between">
+                    <Text className="text-gray-800">{formUnit ? (unitsMap[formUnit] || '—') : 'Select unit'}</Text>
+                    <ChevronDown size={16} color="#374151" />
+                  </View>
                 </TouchableOpacity>
                 {triedSubmit && errors.unit ? (
                   <Text className="text-red-600 text-xs mb-2">{errors.unit}</Text>
                 ) : <View className="mb-1" />}
                 {unitPickerOpen && (
-                  <View className="max-h-40 border border-gray-200 rounded mb-2 bg-white">
+                  <View className="max-h-60 border border-gray-200 rounded mb-2 bg-white">
+                    {/* Search input */}
+                    <View className="p-2 border-b border-gray-200">
+                      <TextInput
+                        value={unitSearchQuery}
+                        onChangeText={setUnitSearchQuery}
+                        placeholder="Type to search units..."
+                        className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+                        autoFocus
+                      />
+                    </View>
                     <ScrollView>
-                      {units.map((opt) => (
-                        <TouchableOpacity key={opt.value} onPress={() => { setFormUnit(opt.value); setErrors((e)=>({ ...e, unit: undefined })); setUnitPickerOpen(false); }} className="px-3 py-2">
-                          <Text className="text-gray-800">{opt.label}</Text>
-                        </TouchableOpacity>
-                      ))}
+                      {units
+                        .filter((opt) => {
+                          if (!unitSearchQuery.trim()) return true;
+                          return opt.label.toLowerCase().includes(unitSearchQuery.toLowerCase());
+                        })
+                        .map((opt) => (
+                          <TouchableOpacity
+                            key={opt.value}
+                            onPress={() => {
+                              setFormUnit(opt.value);
+                              setErrors((e) => ({ ...e, unit: undefined }));
+                              setUnitPickerOpen(false);
+                              setUnitSearchQuery('');
+                            }}
+                            className="px-3 py-2 border-b border-gray-100"
+                          >
+                            <Text className="text-gray-800">{opt.label}</Text>
+                          </TouchableOpacity>
+                        ))}
                     </ScrollView>
                   </View>
                 )}
@@ -353,15 +428,15 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
             <TextInput value={formComment} onChangeText={setFormComment} className="border border-gray-300 rounded p-2 mb-3" placeholder="Optional notes" />
 
             <View className="flex-row justify-end gap-2">
-              <TouchableOpacity onPress={() => { setAddOpen(false); resetForm(); }} className="px-3 py-2 rounded bg-gray-200">
-                <Text className="text-gray-800">Cancel</Text>
+              <TouchableOpacity onPress={() => { setAddOpen(false); resetForm(); }} className="px-3 py-2 rounded bg-red-50 border border-red-600">
+                <Text className="text-red-800">Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={saveNew} className="px-3 py-2 rounded bg-primary-600">
-                <Text className="text-white">{isSaving ? 'Saving...' : 'Save'}</Text>
+              <TouchableOpacity onPress={saveNew} className="px-3 py-2 rounded bg-blue-50 border border-blue-600">
+                <Text className="text-blue-700">{isSaving ? 'Saving...' : 'Save'}</Text>
               </TouchableOpacity>
             </View>
-          </View>
-        </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
     </View>
   );
