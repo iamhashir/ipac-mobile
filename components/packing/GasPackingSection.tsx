@@ -20,6 +20,7 @@ const GasPackingSection: React.FC<GasPackingSectionProps> = ({ orderPackageId })
             materialTypeLabel="Gas Packing"
             quantityLabel="in Bands"
             sources={[{ type: 'material', value: 'Laminate' }]}
+            mediaDesignation="gas_packing"
           />
 
           {/* Desiccant */}
@@ -28,6 +29,7 @@ const GasPackingSection: React.FC<GasPackingSectionProps> = ({ orderPackageId })
             title="Desiccant"
             materialTypeLabel="Gas Packing"
             sources={[{ type: 'material', value: 'Desiccant' }]}
+            mediaDesignation="gas_packing"
           />
 
           {/* Gas (new subsection) */}
@@ -39,6 +41,7 @@ const GasPackingSection: React.FC<GasPackingSectionProps> = ({ orderPackageId })
             title="Gas Accessories"
             materialTypeLabel="Gas Packing"
             sources={[{ type: 'tag', value: 'gas accessories' }]}
+            mediaDesignation="gas_packing"
           />
         </View>
       </CollapsibleCard>

@@ -6,12 +6,6 @@ import { Platform } from 'react-native';
 const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl || process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabasePublishableKey = Constants.expoConfig?.extra?.supabasePublishableKey || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
-//get rid of these test logs later
-console.warn("😭😭😭 sup url constants:'", Constants.expoConfig?.extra?.supabaseUrl,"'");
-console.warn("😭😭😭 sup key constants:'", Constants.expoConfig?.extra?.supabasePublishableKey,"'");
-console.warn("😭😭😭 sup url env:'", process.env.EXPO_PUBLIC_SUPABASE_URL,"'");
-console.warn("😭😭😭 sup key env:'", process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,"'");
-
 if (!supabaseUrl || !supabasePublishableKey) {
   throw new Error('Missing Supabase environment variables. Please check your .env file.');
 }
@@ -1280,6 +1274,7 @@ export const db = {
 
   // Upload image to Supabase storage bucket 'order_media'.
   // Returns path and publicUrl (if bucket is public).
+  // @deprecated Use uploadMediaToStorage instead for structured uploads
   uploadOrderPackageImage: async (orderPackageId, fileUri) => {
     try {
       const resp = await fetch(fileUri);
@@ -1294,6 +1289,214 @@ export const db = {
       const { data: pub } = await supabase.storage.from('order_media').getPublicUrl(filename);
       return { data: { path: data?.path || filename, publicUrl: pub?.publicUrl || null }, error: null };
     } catch (e) {
+      return { data: null, error: e };
+    }
+  },
+
+  /**
+   * Upload media (image/video) to the 'media' bucket with structured folder path
+   * Path: orders/{order_uuid}/{package_number}/{section}/{filename}
+   * Also creates a record in the media table
+   * 
+   * @param orderPackageId - UUID of the order_package
+   * @param fileUri - Local file URI from camera/gallery
+   * @param designation - Enum value from media_category
+   * @param notes - Optional notes (e.g., item name, task name, accessory name)
+   * @returns { data: { mediaId, path, signedUrl }, error }
+   */
+  uploadMediaToStorage: async (orderPackageId: string, fileUri: string, designation: string, notes?: string) => {
+    try {
+      // 1. Get order_id and package_number from order_package
+      const { data: packageData, error: pkgError } = await supabase
+        .from('order_packages')
+        .select('order_id, package_number')
+        .eq('id', orderPackageId)
+        .single();
+
+      if (pkgError || !packageData) {
+        return { data: null, error: pkgError || new Error('Order package not found') };
+      }
+
+      const { order_id, package_number } = packageData;
+
+      // 2. Determine file type from URI
+      const uriLower = fileUri.toLowerCase();
+      let mimeType = 'image/jpeg';
+      let ext = 'jpg';
+      
+      // Determine file extension and MIME type from URI
+      if (uriLower.endsWith('.png')) {
+        ext = 'png';
+        mimeType = 'image/png';
+      } else if (uriLower.endsWith('.jpg') || uriLower.endsWith('.jpeg')) {
+        ext = 'jpg';
+        mimeType = 'image/jpeg';
+      } else if (uriLower.endsWith('.gif')) {
+        ext = 'gif';
+        mimeType = 'image/gif';
+      } else if (uriLower.endsWith('.webp')) {
+        ext = 'webp';
+        mimeType = 'image/webp';
+      } else if (uriLower.endsWith('.mp4')) {
+        ext = 'mp4';
+        mimeType = 'video/mp4';
+      } else if (uriLower.endsWith('.mov')) {
+        ext = 'mov';
+        mimeType = 'video/quicktime';
+      } else if (uriLower.endsWith('.avi')) {
+        ext = 'avi';
+        mimeType = 'video/x-msvideo';
+      }
+
+      // 3. Build folder structure: orders/{order_uuid}/{package_number}/{section}/
+      const sectionFolder = designation; // Use designation as folder name
+      const timestamp = Date.now();
+      const filename = `${timestamp}.${ext}`;
+      const fullPath = `orders/${order_id}/${package_number}/${sectionFolder}/${filename}`;
+
+      // 4. Create file data for React Native
+      // React Native needs ArrayBuffer or Blob-like structure
+      const response = await fetch(fileUri);
+      const arrayBuffer = await response.arrayBuffer();
+      const fileData = new Uint8Array(arrayBuffer);
+
+      // 5. Upload to 'media' bucket
+      const { data: uploadData, error: uploadError } = await supabase
+        .storage
+        .from('media')
+        .upload(fullPath, fileData, { 
+          contentType: mimeType,
+          upsert: false // Don't overwrite existing files
+        });
+
+      if (uploadError) {
+        console.error('Upload error:', uploadError);
+        return { data: null, error: uploadError };
+      }
+
+      const storagePath = uploadData?.path || fullPath;
+
+      // 6. Generate a signed URL (valid for 1 year) for private bucket access
+      const { data: signedUrlData, error: urlError } = await supabase
+        .storage
+        .from('media')
+        .createSignedUrl(storagePath, 31536000); // 1 year in seconds
+
+      if (urlError) {
+        console.warn('Could not create signed URL:', urlError);
+      }
+
+      const signedUrl = signedUrlData?.signedUrl || null;
+
+      // 7. Insert record into media table
+      const { data: mediaRecord, error: insertError } = await supabase
+        .from('media')
+        .insert({
+          image_url: storagePath,
+          notes: notes || null,
+          order_package_id: orderPackageId,
+          designation: designation
+        })
+        .select('id')
+        .single();
+
+      if (insertError) {
+        console.error('Media record insert error:', insertError);
+        // Try to clean up the uploaded file
+        await supabase.storage.from('media').remove([storagePath]);
+        return { data: null, error: insertError };
+      }
+
+      return { 
+        data: { 
+          mediaId: mediaRecord.id,
+          path: storagePath,
+          signedUrl: signedUrl
+        }, 
+        error: null 
+      };
+    } catch (e: any) {
+      console.error('Unexpected error in uploadMediaToStorage:', e);
+      return { data: null, error: e };
+    }
+  },
+
+  /**
+   * Get all media records for a specific order package
+   * @param orderPackageId - UUID of the order_package
+   * @returns Array of media records with signed URLs
+   */
+  getMediaForPackage: async (orderPackageId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('media')
+        .select('*')
+        .eq('order_package_id', orderPackageId)
+        .order('created_at', { ascending: false });
+
+      if (error) return { data: null, error };
+
+      // Generate signed URLs for each media item
+      const mediaWithUrls = await Promise.all(
+        (data || []).map(async (item: any) => {
+          const { data: signedUrlData } = await supabase
+            .storage
+            .from('media')
+            .createSignedUrl(item.image_url, 31536000); // 1 year
+
+          return {
+            ...item,
+            signedUrl: signedUrlData?.signedUrl || null
+          };
+        })
+      );
+
+      return { data: mediaWithUrls, error: null };
+    } catch (e: any) {
+      return { data: null, error: e };
+    }
+  },
+
+  /**
+   * Delete a media record and its associated file from storage
+   * @param mediaId - UUID of the media record
+   */
+  deleteMedia: async (mediaId: string) => {
+    try {
+      // Get the media record first to find the storage path
+      const { data: mediaRecord, error: fetchError } = await supabase
+        .from('media')
+        .select('image_url')
+        .eq('id', mediaId)
+        .single();
+
+      if (fetchError || !mediaRecord) {
+        return { data: null, error: fetchError || new Error('Media record not found') };
+      }
+
+      // Delete from storage
+      const { error: storageError } = await supabase
+        .storage
+        .from('media')
+        .remove([mediaRecord.image_url]);
+
+      if (storageError) {
+        console.warn('Storage deletion error:', storageError);
+        // Continue with database deletion even if storage deletion fails
+      }
+
+      // Delete from database
+      const { error: deleteError } = await supabase
+        .from('media')
+        .delete()
+        .eq('id', mediaId);
+
+      if (deleteError) {
+        return { data: null, error: deleteError };
+      }
+
+      return { data: { success: true }, error: null };
+    } catch (e: any) {
       return { data: null, error: e };
     }
   },

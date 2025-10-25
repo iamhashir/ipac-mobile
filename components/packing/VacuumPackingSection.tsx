@@ -19,6 +19,7 @@ const VacuumPackingSection: React.FC<VacuumPackingSectionProps> = ({ orderPackag
             materialTypeLabel="Vacuum Packing"
             quantityLabel="in Bands"
             sources={[{ type: 'material', value: 'Laminate' }]}
+            mediaDesignation="vacuum_packing"
           />
 
           {/* Desiccant */}
@@ -27,6 +28,7 @@ const VacuumPackingSection: React.FC<VacuumPackingSectionProps> = ({ orderPackag
             title="Desiccant"
             materialTypeLabel="Vacuum Packing"
             sources={[{ type: 'material', value: 'Desiccant' }]}
+            mediaDesignation="vacuum_packing"
           />
 
           {/* Vacuum Accessories */}
@@ -35,9 +37,11 @@ const VacuumPackingSection: React.FC<VacuumPackingSectionProps> = ({ orderPackag
             title="Vacuum Accessories"
             materialTypeLabel="Vacuum Packing"
             sources={[{ type: 'tag', value: 'Vacuum Accessories' }]}
+            mediaDesignation="vacuum_packing"
           />
 
           {/* Service - placeholder input only; wire to DB later if needed */}
+          {/* TODO: Add camera icon for service when service functionality is implemented */}
           <View className="bg-white rounded-xl border border-gray-400 p-3 m-1 self-start w-full">
             <View className="px-3 py-1 rounded-full self-start mb-2">
               <Text className="text-blue-800 text-xs font-semibold">Service</Text>

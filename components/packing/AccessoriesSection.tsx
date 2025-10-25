@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, Modal, TextInput, ScrollView, Alert } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import CollapsibleCard from './common/CollapsibleCard';
 import { db } from '../../utils/api/supabase';
-import { Check, X, ChevronDown } from 'lucide-react-native';
+import { Check, X, ChevronDown, Camera } from 'lucide-react-native';
 
 interface AccessoriesSectionProps {
   orderPackageId: string;
@@ -170,12 +171,63 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
     ]);
   };
 
+  const handleCameraPress = async (row: any) => {
+    Alert.alert('Attach image', 'Choose source', [
+      { text: 'Gallery', onPress: () => pickFromGallery(row) },
+      { text: 'Camera', onPress: () => takePhoto(row) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const pickFromGallery = async (row: any) => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Media library access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({ 
+      mediaTypes: ImagePicker.MediaTypeOptions.Images, 
+      quality: 0.8 
+    });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadAsset(res.assets[0].uri, row);
+    }
+  };
+
+  const takePhoto = async (row: any) => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Camera access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadAsset(res.assets[0].uri, row);
+    }
+  };
+
+  const uploadAsset = async (uri: string, row: any) => {
+    try {
+      const accessoryName = variantLabelById(row.material_variant_id);
+      const notes = `Accessory: ${accessoryName} (Qty: ${row.quantity || 0})`;
+      const { data, error } = await db.uploadMediaToStorage(orderPackageId, uri, 'accessory', notes);
+      if (error) {
+        Alert.alert('Upload failed', 'Could not upload image to storage.');
+      } else {
+        Alert.alert('Uploaded', 'Image uploaded successfully.');
+      }
+    } catch (e) {
+      Alert.alert('Upload error', 'Unexpected error while uploading.');
+    }
+  };
+
   // Layout helpers: assign relative flex weights per spec
   const FLEX = {
     item: 30,
     small: 5, // quantity, unit, length, width
     comment: 30,
     actions: 20,
+    camera: 4, // camera icon
   };
 
   const HeaderRow = () => (
@@ -187,6 +239,7 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
       <View style={{ flex: FLEX.small }}><Text className="text-xs font-semibold text-gray-700">Wid</Text></View>
       <View style={{ flex: FLEX.comment }}><Text className="text-xs font-semibold text-gray-700">Comment</Text></View>
       <View style={{ flex: FLEX.actions }}><Text className="text-xs font-semibold text-gray-700">Item Used</Text></View>
+      <View style={{ flex: FLEX.camera }}><Text className="text-xs font-semibold text-gray-700"></Text></View>
     </View>
   );
 
@@ -231,6 +284,15 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
             </View>
           </TouchableOpacity>
         </View>
+      </View>
+      <View style={{ flex: FLEX.camera }} className="items-center justify-center">
+        <TouchableOpacity
+          onPress={() => handleCameraPress(row)}
+          className="p-1"
+          activeOpacity={0.7}
+        >
+          <Camera size={16} color="#2563eb" />
+        </TouchableOpacity>
       </View>
     </View>
   );

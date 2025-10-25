@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, TouchableOpacity, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, Alert } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { Camera } from 'lucide-react-native';
+import { db } from '../../../utils/api/supabase';
+import { useTextSize } from '../../../utils/TextSizeContext';
 
 interface Assignment { profiles?: { full_name?: string | null } | null; packer_id?: string; task_status?: string }
 interface LogRow {
@@ -19,6 +23,7 @@ interface TaskLogsTableProps {
   onRowPress?: (logId: string) => void;
   currentPackageId?: string; // For filtering tasks to specific package
   getTaskPackages?: (taskLogId: string) => Promise<{ data: string[] | null; error: any }>;
+  orderPackageId?: string; // For media uploads
 }
 
 const formatTime = (iso: string | null) => {
@@ -48,10 +53,67 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
   onRestart, 
   onRowPress, 
   currentPackageId,
-  getTaskPackages 
+  getTaskPackages,
+  orderPackageId 
 }) => {
+  const { size } = useTextSize();
   const [packersModal, setPackersModal] = useState<{ open: boolean; names: string[] }>({ open: false, names: []});
   const [taskPackageMap, setTaskPackageMap] = useState<Record<string, string[]>>({});
+
+  const handleCameraPress = async (taskRow: LogRow) => {
+    if (!orderPackageId) {
+      Alert.alert('Error', 'Order package ID not available');
+      return;
+    }
+    Alert.alert('Attach image', 'Choose source', [
+      { text: 'Gallery', onPress: () => pickFromGallery(taskRow) },
+      { text: 'Camera', onPress: () => takePhoto(taskRow) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const pickFromGallery = async (taskRow: LogRow) => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Media library access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({ 
+      mediaTypes: ImagePicker.MediaTypeOptions.Images, 
+      quality: 0.8 
+    });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadAsset(res.assets[0].uri, taskRow);
+    }
+  };
+
+  const takePhoto = async (taskRow: LogRow) => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Camera access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadAsset(res.assets[0].uri, taskRow);
+    }
+  };
+
+  const uploadAsset = async (uri: string, taskRow: LogRow) => {
+    if (!orderPackageId) return;
+    try {
+      const taskName = taskRow.tasks?.name || 'Unknown Task';
+      const notes = `Task: ${taskName}`;
+      const { data, error } = await db.uploadMediaToStorage(orderPackageId, uri, 'task', notes);
+      if (error) {
+        Alert.alert('Upload failed', 'Could not upload image to storage.');
+      } else {
+        Alert.alert('Uploaded', 'Image uploaded successfully.');
+      }
+    } catch (e) {
+      Alert.alert('Upload error', 'Unexpected error while uploading.');
+    }
+  };
 
   // Cache task-package relationships when currentPackageId filtering is needed
   useEffect(() => {
@@ -99,15 +161,21 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
            (row.task_assignments || []).every(a => a?.task_status === 'completed');
   };
 
+  const headerFontSize = size === 'small' ? 13 : size === 'large' ? 16 : size === 'xl' ? 18 : size === 'xxl' ? 20 : 14;
+  const cellFontSize = size === 'small' ? 12 : size === 'large' ? 15 : size === 'xl' ? 17 : size === 'xxl' ? 19 : 13;
+  const buttonFontSize = size === 'small' ? 11 : size === 'large' ? 14 : size === 'xl' ? 16 : size === 'xxl' ? 18 : 12;
+  const buttonPadding = size === 'xxl' ? 10 : size === 'xl' ? 8 : 6;
+
   return (
     <View>
       {/* Header */}
       <View className="flex-row bg-gray-100 px-3 py-2 rounded-t-md border border-gray-200 mt-2">
-        <Text style={{ flex: 2.5 }} className="font-semibold text-gray-700">Tasks log</Text>
-        <Text style={{ flex: 1 }} className="font-semibold text-gray-700">Start time</Text>
-        <Text style={{ flex: 1 }} className="font-semibold text-gray-700">End time</Text>
-        <Text style={{ flex: 1 }} className="font-semibold text-gray-700">Duration</Text>
-        <Text style={{ flex: 1.5 }} className="font-semibold text-gray-700">Actions</Text>
+        <Text style={{ flex: 2.5, fontSize: headerFontSize }} className="font-semibold text-gray-700">Tasks log</Text>
+        <Text style={{ flex: 1, fontSize: headerFontSize }} className="font-semibold text-gray-700">Start time</Text>
+        <Text style={{ flex: 1, fontSize: headerFontSize }} className="font-semibold text-gray-700">End time</Text>
+        <Text style={{ flex: 1, fontSize: headerFontSize }} className="font-semibold text-gray-700">Duration</Text>
+        <Text style={{ flex: 2 , fontSize: headerFontSize}} className="font-semibold text-gray-700">Actions</Text>
+        {orderPackageId && <Text style={{ flex: 0.5, fontSize: headerFontSize }} className="font-semibold text-gray-700"></Text>}
       </View>
 
       {/* Rows */}
@@ -122,27 +190,40 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
           // Completed: row not clickable, restart remains prominent
           return (
             <View key={r.id} className={rowStyle}>
-              <Text style={{ flex: 2.5 }} className={`${textStyle}`} numberOfLines={1}>{r.tasks?.name || '—'}</Text>
-              <Text style={{ flex: 1 }} className={`${textStyle}`}>{formatTime(r.start_time)}</Text>
-              <Text style={{ flex: 1 }} className={`${textStyle}`}>{formatTime(r.end_time)}</Text>
-              <Text style={{ flex: 1 }} className={`${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
+              <Text style={{ flex: 2.5, fontSize: cellFontSize }} className={`${textStyle}`} numberOfLines={1}>{r.tasks?.name || '—'}</Text>
+              <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatTime(r.start_time)}</Text>
+              <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatTime(r.end_time)}</Text>
+              <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
 
               {/* Action buttons */}
-              <View style={{ flex: 1.5 }} className="flex-row">
+              <View style={{ flex: 2 }} className="flex-row flex-wrap">
                 <TouchableOpacity
-                  className="px-2 py-1 rounded bg-blue-100 mr-2"
+                  style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
+                  className="rounded bg-blue-100"
                   onPress={() => openPackers(r.task_assignments)}
                 >
-                  <Text className="text-blue-800 text-sm">{(r.task_assignments || []).length} Packers</Text>
+                  <Text style={{ fontSize: buttonFontSize }} className="text-blue-800">{(r.task_assignments || []).length} Packers</Text>
                 </TouchableOpacity>
                 {/* Resume only */}
                 <TouchableOpacity 
-                  className="px-2 py-1 rounded bg-blue-50 border border-blue-600"
+                  style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginBottom: 2 }}
+                  className="rounded bg-blue-50 border border-blue-600"
                   onPress={() => onRestart?.(r.id)}
                 >
-                  <Text className="text-blue-700 text-sm font-semibold">Resume</Text>
+                  <Text style={{ fontSize: buttonFontSize }} className="text-blue-700 font-semibold">Resume</Text>
                 </TouchableOpacity>
               </View>
+              {/* Camera icon */}
+              {orderPackageId && (
+                <TouchableOpacity
+                  style={{ flex: 0.5 }}
+                  className="items-center justify-center"
+                  onPress={() => handleCameraPress(r)}
+                  activeOpacity={0.7}
+                >
+                  <Camera size={18} color="#2563eb" />
+                </TouchableOpacity>
+              )}
             </View>
           );
         }
@@ -150,26 +231,49 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
         // Active: row clickable
         return (
           <TouchableOpacity key={r.id} className={rowStyle} onPress={() => onRowPress?.(r.id)} activeOpacity={0.7}>
-            <Text style={{ flex: 2.5 }} className={`${textStyle}`} numberOfLines={1}>{r.tasks?.name || '—'}</Text>
-            <Text style={{ flex: 1 }} className={`${textStyle}`}>{formatTime(r.start_time)}</Text>
-            <Text style={{ flex: 1 }} className={`${textStyle}`}>{formatTime(r.end_time)}</Text>
-            <Text style={{ flex: 1 }} className={`${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
+            <Text style={{ flex: 2.5, fontSize: cellFontSize }} className={`${textStyle}`} numberOfLines={1}>{r.tasks?.name || '—'}</Text>
+            <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatTime(r.start_time)}</Text>
+            <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatTime(r.end_time)}</Text>
+            <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
 
             {/* Action buttons */}
-            <View style={{ flex: 1.5 }} className="flex-row">
+            <View style={{ flex: 2 }} className="flex-row flex-wrap">
               <TouchableOpacity
-                className="px-2 py-1 rounded bg-blue-100 mr-2"
+                style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
+                className="rounded bg-blue-100"
                 onPress={() => openPackers(r.task_assignments)}
               >
-                <Text className="text-blue-800 text-sm">{(r.task_assignments || []).length} Packers</Text>
+                <Text style={{ fontSize: buttonFontSize }} className="text-blue-800">{(r.task_assignments || []).length} Packers</Text>
               </TouchableOpacity>
-              <TouchableOpacity className="px-2 py-1 rounded bg-amber-50 border border-amber-600 mr-2" onPress={() => onPause?.(r.id)}>
-                <Text className="text-amber-700 text-sm">Pause</Text>
+              <TouchableOpacity 
+                style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
+                className="rounded bg-amber-50 border border-amber-600" 
+                onPress={() => onPause?.(r.id)}
+              >
+                <Text style={{ fontSize: buttonFontSize }} className="text-amber-700">Pause</Text>
               </TouchableOpacity>
-              <TouchableOpacity className="px-2 py-1 rounded bg-green-50 border border-green-600" onPress={() => onFinish?.(r.id)}>
-                <Text className="text-green-700 text-sm">Finish</Text>
+              <TouchableOpacity 
+                style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginBottom: 2 }}
+                className="rounded bg-green-50 border border-green-600" 
+                onPress={() => onFinish?.(r.id)}
+              >
+                <Text style={{ fontSize: buttonFontSize }} className="text-green-700">Finish</Text>
               </TouchableOpacity>
             </View>
+            {/* Camera icon */}
+            {orderPackageId && (
+              <TouchableOpacity
+                style={{ flex: 0.5 }}
+                className="items-center justify-center"
+                onPress={(e) => {
+                  e.stopPropagation();
+                  handleCameraPress(r);
+                }}
+                activeOpacity={0.7}
+              >
+                <Camera size={18} color="#2563eb" />
+              </TouchableOpacity>
+            )}
           </TouchableOpacity>
         );
       })}

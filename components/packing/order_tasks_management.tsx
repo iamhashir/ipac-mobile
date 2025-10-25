@@ -198,6 +198,7 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
             <View className="px-4 py-3">
               <TaskLogsTable
                 rows={taskLogs as any}
+                orderPackageId={orderPackages.length === 1 ? orderPackages[0].id : undefined}
                 onRowPress={(id) => {
                   if (!openTaskIds.includes(id)) setOpenTaskIds(prev => [...prev, id]);
                   setActiveKey(`task:${id}`);
@@ -370,7 +371,8 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                     await refreshBusyStatus();
                     // persist detail tab for the new task
                     setOpenTaskIds(prev => [...prev, data.task_log_id]);
-                    setActiveKey(`task:${data.task_log_id}`);
+                    // Switch to overview tab after starting task
+                    setActiveKey('overview');
                     // reset selections (keep task for convenience)
                     setSelectedPackerIds([]);
                     setNotes('');

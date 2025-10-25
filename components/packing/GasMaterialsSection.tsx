@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, Modal, TextInput, ScrollView, Alert } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import CollapsibleCard from './common/CollapsibleCard';
 import { db } from '../../utils/api/supabase';
-import { Check, X, ChevronDown } from 'lucide-react-native';
+import { Check, X, ChevronDown, Camera } from 'lucide-react-native';
 
 interface GasMaterialsSectionProps {
   orderPackageId: string;
@@ -117,8 +118,58 @@ const GasMaterialsSection: React.FC<GasMaterialsSectionProps> = ({ orderPackageI
     ]);
   };
 
+  const handleCameraPress = async (row: any) => {
+    Alert.alert('Attach image', 'Choose source', [
+      { text: 'Gallery', onPress: () => pickFromGallery(row) },
+      { text: 'Camera', onPress: () => takePhoto(row) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const pickFromGallery = async (row: any) => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Media library access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({ 
+      mediaTypes: ImagePicker.MediaTypeOptions.Images, 
+      quality: 0.8 
+    });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadAsset(res.assets[0].uri, row);
+    }
+  };
+
+  const takePhoto = async (row: any) => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Camera access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadAsset(res.assets[0].uri, row);
+    }
+  };
+
+  const uploadAsset = async (uri: string, row: any) => {
+    try {
+      const gasName = variantLabelById(row.material_variant_id);
+      const notes = `Gas Packing - Gas: ${gasName} (Cylinders: ${row.quantity || 0}, Used: ${row.quantity_used || 0})`;
+      const { data, error } = await db.uploadMediaToStorage(orderPackageId, uri, 'gas_packing', notes);
+      if (error) {
+        Alert.alert('Upload failed', 'Could not upload image to storage.');
+      } else {
+        Alert.alert('Uploaded', 'Image uploaded successfully.');
+      }
+    } catch (e) {
+      Alert.alert('Upload error', 'Unexpected error while uploading.');
+    }
+  };
+
   // Layout proportions
-  const FLEX = { item: 30, qty: 10, qtyUsed: 15, unit: 10, comment: 25, actions: 20 };
+  const FLEX = { item: 30, qty: 10, qtyUsed: 15, unit: 10, comment: 25, actions: 20, camera: 4 };
 
   const HeaderRow = () => (
     <View className="flex-row items-center bg-white/70 border border-gray-300 rounded px-2 py-2">
@@ -128,6 +179,7 @@ const GasMaterialsSection: React.FC<GasMaterialsSectionProps> = ({ orderPackageI
       <View style={{ flex: FLEX.unit }}><Text className="text-xs font-semibold text-gray-700">Unit</Text></View>
       <View style={{ flex: FLEX.comment }}><Text className="text-xs font-semibold text-gray-700">Comment</Text></View>
       <View style={{ flex: FLEX.actions }}><Text className="text-xs font-semibold text-gray-700">Item Used</Text></View>
+      <View style={{ flex: FLEX.camera }}><Text className="text-xs font-semibold text-gray-700"></Text></View>
     </View>
   );
 
@@ -153,6 +205,15 @@ const GasMaterialsSection: React.FC<GasMaterialsSectionProps> = ({ orderPackageI
           <TouchableOpacity onPress={() => markUsed(row.id)} className="px-2 py-1 rounded bg-green-50 border border-green-600"><View className="flex-row items-center"><Check size={18} color="#15803d" /><Text className="text-green-700 text-xs ml-1">Use</Text></View></TouchableOpacity>
           <TouchableOpacity onPress={() => removeRow(row.id)} className="px-2 py-1 rounded bg-red-50 border border-red-600"><View className="flex-row items-center"><X size={18} color="#ff0000" /><Text className="text-red-800 text-xs ml-1">Remove</Text></View></TouchableOpacity>
         </View>
+      </View>
+      <View style={{ flex: FLEX.camera }} className="items-center justify-center">
+        <TouchableOpacity
+          onPress={() => handleCameraPress(row)}
+          className="p-1"
+          activeOpacity={0.7}
+        >
+          <Camera size={16} color="#2563eb" />
+        </TouchableOpacity>
       </View>
     </View>
   );

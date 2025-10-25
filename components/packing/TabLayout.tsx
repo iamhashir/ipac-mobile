@@ -1,5 +1,6 @@
 import React from 'react';
 import { ScrollView, View, Text, TouchableOpacity } from 'react-native';
+import { useTextSize } from '../../utils/TextSizeContext';
 
 export interface TabDefinition {
   key: string;
@@ -14,6 +15,11 @@ interface TabLayoutProps {
 }
 
 const TabLayout: React.FC<TabLayoutProps> = ({ tabs, activeKey, onChange }) => {
+  const { size } = useTextSize();
+  const tabFontSize = size === 'small' ? 13 : size === 'large' ? 16 : size === 'xl' ? 18 : size === 'xxl' ? 21 : 14;
+  const tabPaddingH = size === 'xxl' ? 20 : size === 'xl' ? 18 : 16;
+  const tabPaddingV = size === 'xxl' ? 12 : size === 'xl' ? 10 : 8;
+
   return (
     <View>
       <ScrollView
@@ -26,13 +32,21 @@ const TabLayout: React.FC<TabLayoutProps> = ({ tabs, activeKey, onChange }) => {
             <TouchableOpacity
               key={tab.key}
               onPress={() => onChange(tab.key)}
-              className={`px-4 py-2 rounded-t-lg border ${
+              style={{ 
+                paddingHorizontal: tabPaddingH, 
+                paddingVertical: tabPaddingV,
+                borderTopLeftRadius: 8,
+                borderTopRightRadius: 8,
+                borderWidth: 1
+              }}
+              className={`${
                 activeKey === tab.key
                   ? 'bg-white border-primary-500'
                   : 'bg-gray-100 border-gray-300'
               }`}
             >
               <Text
+                style={{ fontSize: tabFontSize }}
                 className={`${
                   activeKey === tab.key ? 'text-primary-700' : 'text-gray-700'
                 } font-semibold`}

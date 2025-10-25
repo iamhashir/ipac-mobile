@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
 import { usePackerSession } from '../../utils/PackerSessionContext';
+import { useTextSize } from '../../utils/TextSizeContext';
 import { db } from '../../utils/api/supabase';
 import { ArrowLeft } from 'lucide-react-native';
 import { NavigationButtons } from '../../components/NavigationButtons';
@@ -51,6 +52,7 @@ export default function PackingReportPage() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const { loading: sessionLoading, canAccessPackaging, canAccessAttendance, session } = usePackerSession();
+  const { size } = useTextSize();
   const orderId = (params.orderId as string) || session?.order_id || '';
   
   const scrollViewRef = useRef<ScrollView>(null);
@@ -361,6 +363,11 @@ export default function PackingReportPage() {
     else router.replace('/auth/login');
   };
 
+  const headerFontSize = size === 'small' ? 16 : size === 'large' ? 22 : size === 'xl' ? 26 : size === 'xxl' ? 30 : 20;
+  const titleFontSize = size === 'small' ? 14 : size === 'large' ? 17 : size === 'xl' ? 19 : size === 'xxl' ? 22 : 16;
+  const textFontSize = size === 'small' ? 13 : size === 'large' ? 15 : size === 'xl' ? 17 : size === 'xxl' ? 20 : 14;
+  const buttonFontSize = size === 'small' ? 12 : size === 'large' ? 14 : size === 'xl' ? 16 : size === 'xxl' ? 18 : 13;
+
   // Show loading screen for session loading or data loading
   if (sessionLoading || loading) {
     return (
@@ -404,11 +411,11 @@ export default function PackingReportPage() {
         <View className="flex-row justify-between items-center p-4 bg-primary-500">
           <TouchableOpacity onPress={handleBack} className="flex-row items-center">
             <ArrowLeft size={24} color="#fff" />
-            <Text className="ml-2 text-white text-base font-semibold">Back</Text>
+            <Text style={{ fontSize: titleFontSize }} className="ml-2 text-white font-semibold">Back</Text>
           </TouchableOpacity>
-          <Text className="text-white text-xl font-semibold">Packing List</Text>
+          <Text style={{ fontSize: headerFontSize }} className="text-white font-semibold">Packing List</Text>
           <TouchableOpacity onPress={handleSignOut} className="bg-primary-600 px-3 py-1 rounded">
-            <Text className="text-white text-sm">Sign Out</Text>
+            <Text style={{ fontSize: buttonFontSize }} className="text-white">Sign Out</Text>
           </TouchableOpacity>
         </View>
 
@@ -419,10 +426,10 @@ export default function PackingReportPage() {
         {order && (
           <View className="bg-white rounded-lg border border-gray-200 m-4 p-4">
             <View className="flex-row justify-between">
-              <Text className="text-gray-800 font-semibold">Project: <Text className="font-bold">{order.order_name}</Text></Text>
-              <Text className="text-gray-600">Client: {order.client_name}</Text>
+              <Text style={{ fontSize: titleFontSize }} className="text-gray-800 font-semibold">Project: <Text className="font-bold">{order.order_name}</Text></Text>
+              <Text style={{ fontSize: textFontSize }} className="text-gray-600">Client: {order.client_name}</Text>
             </View>
-            <Text className="mt-3 text-gray-600">Click a row or tab to view specific box details.</Text>
+            <Text style={{ fontSize: textFontSize }} className="mt-3 text-gray-600">Click a row or tab to view specific box details.</Text>
           </View>
         )}
 

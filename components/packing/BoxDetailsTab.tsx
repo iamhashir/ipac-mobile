@@ -67,7 +67,8 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
   const uploadAsset = async (uri: string) => {
     try {
       const { db } = await import('../../utils/api/supabase');
-      const { data, error } = await db.uploadOrderPackageImage(orderPackageId, uri);
+      const notes = `Package #${packageNumber || 'N/A'}`;
+      const { data, error } = await db.uploadMediaToStorage(orderPackageId, uri, 'package', notes);
       if (error) {
         Alert.alert('Upload failed', 'Could not upload image to storage.');
       } else {
@@ -86,9 +87,10 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
           <TouchableOpacity 
             onPress={askSource} 
             accessibilityLabel="Attach images"
-            className="bg-primary-600 px-3 py-1 rounded"
+            className="bg-primary-500 px-3 py-2 rounded flex items-center justify-center"
+            style={{ minWidth: 44, minHeight: 44 }}
           >
-            <Camera size={18} color="#ffffff" />
+            <Camera size={20} color="#ffffff" />
           </TouchableOpacity>
           <TouchableOpacity onPress={() => { /* Placeholder - no action yet */ }} className="bg-green-600 px-3 py-1 rounded">
             <Text className="text-white text-sm">Mark box as completed</Text>

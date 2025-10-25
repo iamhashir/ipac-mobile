@@ -19,10 +19,12 @@ export default function PackerSettings() {
       case 'small': return 'Small';
       case 'medium': return 'Medium';
       case 'large': return 'Large';
+      case 'xl': return 'XL';
+      case 'xxl': return 'XXL';
     }
   };
 
-  const previewTextCls = size === 'small' ? 'text-sm' : size === 'large' ? 'text-lg' : 'text-base';
+  const previewTextCls = size === 'small' ? 'text-sm' : size === 'large' ? 'text-lg' : size === 'xl' ? 'text-xl' : size === 'xxl' ? 'text-2xl' : 'text-base';
 
   return (
     <SafeAreaView className="flex-1 bg-gray-50" edges={['top','bottom','left','right']}>
@@ -41,8 +43,8 @@ export default function PackerSettings() {
           <Text className="text-gray-800 text-base font-semibold">Text size</Text>
           <Text className="text-gray-500 text-xs mt-1">Choose how large text should appear in the app</Text>
 
-          <View className="flex-row mt-4 gap-2">
-            {(['small','medium','large'] as TextSizeOption[]).map((opt) => {
+          <View className="flex-row flex-wrap mt-4 gap-2">
+            {(['small','medium','large','xl','xxl'] as TextSizeOption[]).map((opt) => {
               const active = size === opt;
               return (
                 <TouchableOpacity

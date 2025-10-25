@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, Modal, TextInput, ScrollView, Alert } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import CollapsibleCard from './common/CollapsibleCard';
 import { db } from '../../utils/api/supabase';
-import { Check, X, ChevronDown } from 'lucide-react-native';
+import { Check, X, ChevronDown, Camera } from 'lucide-react-native';
 
 interface SourceSpec {
   type: 'tag' | 'material';
@@ -15,9 +16,10 @@ interface FilteredMaterialsSectionProps {
   sources: SourceSpec[]; // union of tags or material names
   quantityLabel?: string; // default: Quantity
   materialTypeLabel: string; // stored to DB in material_type column
+  mediaDesignation?: 'vacuum_packing' | 'gas_packing'; // for media uploads
 }
 
-const FilteredMaterialsSection: React.FC<FilteredMaterialsSectionProps> = ({ orderPackageId, title, sources, quantityLabel = 'Quantity', materialTypeLabel }) => {
+const FilteredMaterialsSection: React.FC<FilteredMaterialsSectionProps> = ({ orderPackageId, title, sources, quantityLabel = 'Quantity', materialTypeLabel, mediaDesignation }) => {
   const [items, setItems] = useState<any[]>([]);
   const [variants, setVariants] = useState<{ label: string; value: string; unit_id?: string | null; unit_name?: string | null }[]>([]);
   const [units, setUnits] = useState<{ label: string; value: string }[]>([]);
@@ -148,8 +150,61 @@ const FilteredMaterialsSection: React.FC<FilteredMaterialsSectionProps> = ({ ord
     ]);
   };
 
+  const handleCameraPress = async (row: any) => {
+    if (!mediaDesignation) return;
+    Alert.alert('Attach image', 'Choose source', [
+      { text: 'Gallery', onPress: () => pickFromGallery(row) },
+      { text: 'Camera', onPress: () => takePhoto(row) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const pickFromGallery = async (row: any) => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Media library access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({ 
+      mediaTypes: ImagePicker.MediaTypeOptions.Images, 
+      quality: 0.8 
+    });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadAsset(res.assets[0].uri, row);
+    }
+  };
+
+  const takePhoto = async (row: any) => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Camera access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadAsset(res.assets[0].uri, row);
+    }
+  };
+
+  const uploadAsset = async (uri: string, row: any) => {
+    if (!mediaDesignation) return;
+    try {
+      const materialName = variantLabelById(row.material_variant_id);
+      const sectionLabel = mediaDesignation === 'vacuum_packing' ? 'Vacuum Packing' : 'Gas Packing';
+      const notes = `${sectionLabel} - ${materialName} (${title})`;
+      const { data, error } = await db.uploadMediaToStorage(orderPackageId, uri, mediaDesignation, notes);
+      if (error) {
+        Alert.alert('Upload failed', 'Could not upload image to storage.');
+      } else {
+        Alert.alert('Uploaded', 'Image uploaded successfully.');
+      }
+    } catch (e) {
+      Alert.alert('Upload error', 'Unexpected error while uploading.');
+    }
+  };
+
   // Layout proportions similar to Accessories
-  const FLEX = { item: 30, small: 5, comment: 30, actions: 20 };
+  const FLEX = { item: 30, small: 5, comment: 30, actions: 20, camera: mediaDesignation ? 4 : 0 };
 
   const HeaderRow = () => (
     <View className="flex-row items-center bg-white/70 border border-gray-300 rounded px-2 py-2">
@@ -160,6 +215,7 @@ const FilteredMaterialsSection: React.FC<FilteredMaterialsSectionProps> = ({ ord
       <View style={{ flex: FLEX.small }}><Text className="text-xs font-semibold text-gray-700">Wid</Text></View>
       <View style={{ flex: FLEX.comment }}><Text className="text-xs font-semibold text-gray-700">Comment</Text></View>
       <View style={{ flex: FLEX.actions }}><Text className="text-xs font-semibold text-gray-700">Item Used</Text></View>
+      {mediaDesignation && <View style={{ flex: FLEX.camera }}><Text className="text-xs font-semibold text-gray-700"></Text></View>}
     </View>
   );
 
@@ -189,6 +245,17 @@ const FilteredMaterialsSection: React.FC<FilteredMaterialsSectionProps> = ({ ord
           <TouchableOpacity onPress={() => removeRow(row.id)} className="px-2 py-1 rounded bg-red-50 border border-red-600"><View className="flex-row items-center"><X size={18} color="#ff0000" /><Text className="text-red-800 text-xs ml-1">Remove</Text></View></TouchableOpacity>
         </View>
       </View>
+      {mediaDesignation && (
+        <View style={{ flex: FLEX.camera }} className="items-center justify-center">
+          <TouchableOpacity
+            onPress={() => handleCameraPress(row)}
+            className="p-1"
+            activeOpacity={0.7}
+          >
+            <Camera size={16} color="#2563eb" />
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 

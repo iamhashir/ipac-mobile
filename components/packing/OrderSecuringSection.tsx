@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, Platform, Alert } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { Camera } from 'lucide-react-native';
 import GroupBox from './common/GroupBox';
 import TwoTierEditableCard from './common/TwoTierEditableCard';
 import { db } from '../../utils/api/supabase';
+import { useTextSize } from '../../utils/TextSizeContext';
 
 interface OrderSecuringSectionProps {
   orderPackageId: string;
@@ -14,6 +17,7 @@ interface OrderSecuringSectionProps {
  const typeWideWidth = 240;
  
  const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 'original' | 'final'; editable?: boolean; autoSave?: boolean }> = ({ orderPackageId, editTarget = 'final', editable = true, autoSave = true }) => {
+  const { size } = useTextSize();
   // Separate variant lists for different sections
   const [bodyVariants, setBodyVariants] = useState<{ label: string; value: string }[]>([]);
   const [barVariants, setBarVariants] = useState<{ label: string; value: string }[]>([]);
@@ -23,6 +27,65 @@ interface OrderSecuringSectionProps {
   // Simplified tabs: remove horizontal ScrollView state to avoid jitter
   // Pending changes when autoSave is disabled (keyed by side)
   const [pending, setPending] = useState<Partial<Record<Side, { template?: any; beams?: Partial<Record<'horizontal_bar' | 'vertical_bar' | 'skids', any>> }>>>({});
+
+  const handleCameraPress = async () => {
+    Alert.alert('Attach image', 'Choose source', [
+      { text: 'Gallery', onPress: pickFromGallery },
+      { text: 'Camera', onPress: takePhoto },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const pickFromGallery = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Media library access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({ 
+      mediaTypes: ImagePicker.MediaTypeOptions.Images, 
+      quality: 0.8 
+    });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadAsset(res.assets[0].uri);
+    }
+  };
+
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Camera access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadAsset(res.assets[0].uri);
+    }
+  };
+
+  const uploadAsset = async (uri: string) => {
+    try {
+      // Map activeTab to designation enum value
+      const designationMap: Record<Side, string> = {
+        'big_sides': 'big_side',
+        'small_sides': 'small_side',
+        'lid': 'lid',
+        'base': 'base',
+      };
+      const designation = designationMap[activeTab];
+      const sideLabel = activeTab.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+      const notes = `Securing - ${sideLabel}`;
+      
+      const { data, error } = await db.uploadMediaToStorage(orderPackageId, uri, designation, notes);
+      if (error) {
+        Alert.alert('Upload failed', 'Could not upload image to storage.');
+      } else {
+        Alert.alert('Uploaded', 'Image uploaded successfully.');
+      }
+    } catch (e) {
+      Alert.alert('Upload error', 'Unexpected error while uploading.');
+    }
+  };
 
   // Compute pending state by side for unsaved indicator
   const pendingBySide = useMemo(() => {
@@ -246,14 +309,28 @@ interface OrderSecuringSectionProps {
     { key: 'base', label: 'Base' },
   ];
 
+  const titleFontSize = size === 'small' ? 16 : size === 'large' ? 20 : size === 'xl' ? 22 : size === 'xxl' ? 26 : 18;
+  const tabFontSize = size === 'small' ? 13 : size === 'large' ? 16 : size === 'xl' ? 18 : size === 'xxl' ? 21 : 14;
+  const buttonFontSize = size === 'small' ? 13 : size === 'large' ? 16 : size === 'xl' ? 18 : size === 'xxl' ? 20 : 14;
+  const tabPadding = size === 'xxl' ? 12 : size === 'xl' ? 10 : 8;
+
   return (
     <View style={{ marginTop: 8, marginBottom: 24, borderWidth: 1, borderColor: '#bfdbfe', borderRadius: 12, marginHorizontal: 16, backgroundColor: '#eff6ff' }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 16 }}>
-        <Text style={{ color: '#1e40af', fontWeight: '600', fontSize: 18 }}>Securing</Text>
-        {(editTarget === 'original' || !autoSave) && (
+        <Text style={{ color: '#1e40af', fontWeight: '600', fontSize: titleFontSize }}>Securing</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {/* Camera button */}
+          <TouchableOpacity
+            onPress={handleCameraPress}
+            style={{ padding: 8, borderRadius: 6, backgroundColor: '#2563eb' }}
+            activeOpacity={0.7}
+          >
+            <Camera size={18} color="#ffffff" />
+          </TouchableOpacity>
+          {(editTarget === 'original' || !autoSave) && (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             {!autoSave && (
-              <Text style={{ color: anyPending ? '#b45309' : '#16a34a', fontSize: 12 }}>{anyPending ? 'Unsaved changes' : 'All changes saved'}</Text>
+              <Text style={{ color: anyPending ? '#b45309' : '#16a34a', fontSize: buttonFontSize - 2 }}>{anyPending ? 'Unsaved changes' : 'All changes saved'}</Text>
             )}
             <TouchableOpacity
               onPress={async () => {
@@ -337,10 +414,11 @@ interface OrderSecuringSectionProps {
             disabled={!editable || (!autoSave && !anyPending)}
             style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, backgroundColor: (!editable || (!autoSave && !anyPending)) ? '#d1d5db' : '#2563eb' }}
           >
-            <Text style={{ color: 'white' }}>Save</Text>
+            <Text style={{ color: 'white', fontSize: buttonFontSize }}>Save</Text>
           </TouchableOpacity>
           </View>
         )}
+        </View>
       </View>
       
       {/* Tabs header (no className to avoid css-interop navigation checks) */}
@@ -362,7 +440,7 @@ interface OrderSecuringSectionProps {
                 borderTopLeftRadius: 12,
                 borderTopRightRadius: 12,
                 paddingHorizontal: 16,
-                paddingVertical: isActive ? 8 : 0,
+                paddingVertical: isActive ? tabPadding : 0,
                 marginBottom: isActive ? -1 : 0,
                 shadowColor: isActive ? '#000' : 'transparent',
                 shadowOpacity: isActive ? 0.05 : 0,
@@ -371,7 +449,7 @@ interface OrderSecuringSectionProps {
                 alignItems: 'center',
                 columnGap: 6,
               }}>
-                <Text style={{ color: isActive ? '#1d4ed8' : '#2563eb99', fontWeight: isActive ? '600' : '400' }}>{tab.label}</Text>
+                <Text style={{ color: isActive ? '#1d4ed8' : '#2563eb99', fontWeight: isActive ? '600' : '400', fontSize: tabFontSize }}>{tab.label}</Text>
                 {showDot ? (<View style={{ width: 8, height: 8, borderRadius: 9999, backgroundColor: '#f59e0b' }} />) : null}
               </View>
             </TouchableOpacity>

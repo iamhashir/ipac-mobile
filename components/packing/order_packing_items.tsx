@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { Camera } from 'lucide-react-native';
 import { db } from '../../utils/api/supabase';
 
@@ -17,6 +18,55 @@ interface OrderPackingItemsProps {
 const OrderPackingItems: React.FC<OrderPackingItemsProps> = ({ orderPackageId, onAttachPics }) => {
   const [items, setItems] = useState<PackingItemRow[]>([]);
   const [loading, setLoading] = useState(false);
+
+  const handleCameraPress = async (item: PackingItemRow) => {
+    Alert.alert('Attach image', 'Choose source', [
+      { text: 'Gallery', onPress: () => pickFromGallery(item) },
+      { text: 'Camera', onPress: () => takePhoto(item) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const pickFromGallery = async (item: PackingItemRow) => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Media library access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({ 
+      mediaTypes: ImagePicker.MediaTypeOptions.Images, 
+      quality: 0.8 
+    });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadAsset(res.assets[0].uri, item);
+    }
+  };
+
+  const takePhoto = async (item: PackingItemRow) => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Camera access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadAsset(res.assets[0].uri, item);
+    }
+  };
+
+  const uploadAsset = async (uri: string, item: PackingItemRow) => {
+    try {
+      const notes = `Item: ${item.designation || 'N/A'} (Qty: ${item.quantity || 0})`;
+      const { data, error } = await db.uploadMediaToStorage(orderPackageId, uri, 'item', notes);
+      if (error) {
+        Alert.alert('Upload failed', 'Could not upload image to storage.');
+      } else {
+        Alert.alert('Uploaded', 'Image uploaded successfully.');
+      }
+    } catch (e) {
+      Alert.alert('Upload error', 'Unexpected error while uploading.');
+    }
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -63,7 +113,7 @@ const OrderPackingItems: React.FC<OrderPackingItemsProps> = ({ orderPackageId, o
                     <Text className="text-gray-700">{it.designation || '—'}</Text>
                   </View>
                   <TouchableOpacity
-                    onPress={() => onAttachPics?.(it)}
+                    onPress={() => handleCameraPress(it)}
                     className="px-3 py-1 rounded bg-primary-600"
                     activeOpacity={0.8}
                     accessibilityLabel="Attach images"

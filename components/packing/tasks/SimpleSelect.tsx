@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, Modal, FlatList, TextInput } from 'react-native';
 import { ChevronDown } from 'lucide-react-native';
+import { useTextSize } from '../../../utils/TextSizeContext';
 
 interface Item { label: string; value: string; labelShort?: string; tooltip?: string; }
 
@@ -16,8 +17,12 @@ interface SimpleSelectProps {
 }
 
 const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChange, placeholder = 'Select...', widthPercent = 0.75, disabled = false, centerText = false }) => {
+  const { size } = useTextSize();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  
+  const textFontSize = size === 'small' ? 13 : size === 'large' ? 16 : size === 'xl' ? 18 : size === 'xxl' ? 21 : 14;
+  const labelFontSize = size === 'small' ? 13 : size === 'large' ? 15 : size === 'xl' ? 17 : size === 'xxl' ? 19 : 14;
 
   const selected = items.find(i => i.value === value);
   const selectedText = selected ? (selected.labelShort || selected.label) : placeholder;
@@ -43,7 +48,7 @@ const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChan
 
   return (
     <View style={{ width: `${Math.round(widthPercent * 100)}%` }}>
-      {label ? <Text className="text-gray-600 mb-1">{label}</Text> : null}
+      {label ? <Text style={{ fontSize: labelFontSize }} className="text-gray-600 mb-1">{label}</Text> : null}
       <TouchableOpacity
         className={`border border-gray-300 rounded-md px-3 py-2 ${disabled ? 'bg-gray-100 opacity-70' : 'bg-white'}`}
         onPress={() => { if (!disabled) setOpen(true); }}
@@ -53,7 +58,7 @@ const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChan
         disabled={disabled}
       >
         <View className="flex-row items-center justify-between">
-          <Text className={`text-gray-800 ${centerText ? 'text-center' : ''}`}>{selectedText}</Text>
+          <Text style={{ fontSize: textFontSize }} className={`text-gray-800 ${centerText ? 'text-center' : ''}`}>{selectedText}</Text>
           <ChevronDown size={16} color="#374151" />
         </View>
       </TouchableOpacity>
@@ -61,12 +66,13 @@ const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChan
       <Modal visible={open} animationType="slide" transparent onRequestClose={() => setOpen(false)}>
         <TouchableOpacity className="flex-1 justify-end bg-black/30" activeOpacity={1} onPress={() => setOpen(false)}>
           <TouchableOpacity className="bg-white rounded-t-2xl p-4 max-h-[70%]" activeOpacity={1} onPress={(e) => e.stopPropagation()}>
-            <Text className="text-gray-800 font-semibold mb-2">{label || 'Select'}</Text>
+            <Text style={{ fontSize: textFontSize }} className="text-gray-800 font-semibold mb-2">{label || 'Select'}</Text>
             <View className="mb-2">
               <TextInput
                 value={query}
                 onChangeText={setQuery}
                 placeholder="Type to filter..."
+                style={{ fontSize: textFontSize }}
                 className="border border-gray-300 bg-white rounded px-3 py-2"
                 autoFocus
               />
@@ -80,12 +86,12 @@ const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChan
                   className="px-3 py-3 border-b border-gray-100"
                   onPress={() => { onChange(item.value); setOpen(false); setQuery(''); }}
                 >
-                  <Text className="text-gray-800">{item.label}</Text>
+                  <Text style={{ fontSize: textFontSize }} className="text-gray-800">{item.label}</Text>
                 </TouchableOpacity>
               )}
             />
             <TouchableOpacity onPress={() => { setOpen(false); setQuery(''); }} className="mt-3 self-end">
-              <Text className="text-primary-700 font-semibold">Close</Text>
+              <Text style={{ fontSize: textFontSize }} className="text-primary-700 font-semibold">Close</Text>
             </TouchableOpacity>
           </TouchableOpacity>
         </TouchableOpacity>

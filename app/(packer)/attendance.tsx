@@ -84,6 +84,87 @@ export default function AttendanceScreen() {
     }
   }, [orderId]);
 
+  // Auto-mark afternoon attendance when crossing 12pm for packers present in morning
+  useEffect(() => {
+    if (!orderId || packers.length === 0) return;
+
+    const checkAndAutoMarkAfternoon = async () => {
+      const now = new Date();
+      const hour = now.getHours();
+      
+      // Only auto-mark when it's afternoon (>= 12pm) and hasn't been done yet
+      if (hour >= 12) {
+        // Check each packer who was present in morning but not marked for afternoon yet
+        for (const name of packers) {
+          const packerAttendance = attendance[name];
+          
+          // If packer was present in morning and afternoon is not yet marked
+          if (packerAttendance?.morning.present === true && 
+              packerAttendance?.afternoon.present !== true &&
+              packerAttendance?.afternoon.present !== false) {
+            
+            const packerData = packersData.find(p => p.full_name === name);
+            if (!packerData) continue;
+
+            try {
+              // Check if we can record afternoon attendance
+              const { data: canRecord } = await db.canRecordAttendance(
+                orderId,
+                packerData.packer_id || packerData.id,
+                'afternoon'
+              );
+
+              if (canRecord) {
+                // Automatically mark afternoon attendance
+                const currentTime = getCurrentTime();
+                const today = new Date().toISOString().split('T')[0];
+                const startTimeISO = new Date(`${today} ${currentTime}`).toISOString();
+
+                const { error } = await db.logAttendance(
+                  orderId,
+                  packerData.packer_id || packerData.id,
+                  'afternoon',
+                  'present',
+                  startTimeISO,
+                  null,
+                  toolboxCompleted,
+                  false
+                );
+
+                if (!error) {
+                  // Update local state
+                  setAttendance(prevAttendance => ({
+                    ...prevAttendance,
+                    [name]: {
+                      ...prevAttendance[name],
+                      afternoon: {
+                        ...prevAttendance[name].afternoon,
+                        present: true,
+                        startTime: currentTime,
+                        endTime: null
+                      }
+                    }
+                  }));
+                  console.log(`Auto-marked afternoon attendance for ${name}`);
+                }
+              }
+            } catch (error) {
+              console.error(`Error auto-marking afternoon for ${name}:`, error);
+            }
+          }
+        }
+      }
+    };
+
+    // Check immediately
+    checkAndAutoMarkAfternoon();
+
+    // Check every minute for time changes
+    const interval = setInterval(checkAndAutoMarkAfternoon, 60000);
+
+    return () => clearInterval(interval);
+  }, [orderId, packers, packersData, attendance, toolboxCompleted]);
+
   const loadData = async () => {
     try {
       // Load order details
