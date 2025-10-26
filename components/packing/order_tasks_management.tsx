@@ -31,6 +31,9 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
   const [activeKey, setActiveKey] = useState('overview');
   const [openTaskIds, setOpenTaskIds] = useState<string[]>([]);
   const [pauseStartMap, setPauseStartMap] = useState<Record<string, number>>({}); // taskId -> epoch ms
+  const [pausedTaskIds, setPausedTaskIds] = useState<Set<string>>(new Set()); // Track paused tasks
+  const [isOnBreak, setIsOnBreak] = useState(false); // Track if all packers are on break
+  const [breakStartTime, setBreakStartTime] = useState<number | null>(null); // Break start timestamp
 
   // New Task form state
   const [selectedTaskTypeId, setSelectedTaskTypeId] = useState<string | null>(null);
@@ -107,12 +110,18 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
     let data;
     if (orderPackages.length === 1) {
       // Single package mode - use package-specific query to only get tasks for this package
-      const { data: packageData } = await db.getTaskLogsForPackage(orderPackages[0].id);
+      const { data: packageData, error: packageError } = await db.getTaskLogsForPackage(orderPackages[0].id);
+      if (packageError) {
+        console.error('Error fetching task logs for package:', packageError);
+      }
       data = packageData;
     } else {
       // Multi-package mode (overview) - get tasks for all packages
       const ids = orderPackages.map(op => op.id);
-      const { data: allData } = await db.getTaskLogsByOrderPackageIds(ids);
+      const { data: allData, error: allError } = await db.getTaskLogsByOrderPackageIds(ids);
+      if (allError) {
+        console.error('Error fetching task logs by package IDs:', allError);
+      }
       data = allData;
     }
     
@@ -133,6 +142,27 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
       return new Date(b.start_time).getTime() - new Date(a.start_time).getTime();
     });
     setTaskLogs(rows);
+    
+    // Update paused task IDs set based on assignments
+    const newPausedSet = new Set<string>();
+    rows.forEach((r: any) => {
+      const hasPaused = (r.task_assignments || []).some((a: any) => a.task_status === 'paused');
+      if (hasPaused && !r.end_time) {
+        newPausedSet.add(r.id);
+      }
+    });
+    setPausedTaskIds(newPausedSet);
+    
+    // Check if we're currently on break (all active tasks are paused)
+    const activeTasks = rows.filter((r: any) => !r.end_time);
+    if (activeTasks.length > 0) {
+      const allPaused = activeTasks.every((r: any) => 
+        (r.task_assignments || []).every((a: any) => a.task_status === 'paused' || a.task_status === 'completed')
+      );
+      setIsOnBreak(allPaused && activeTasks.length > 0);
+    } else {
+      setIsOnBreak(false);
+    }
   };
 
   const refreshBusyStatus = async (team?: TeamPacker[]) => {
@@ -157,17 +187,85 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
     }
   };
 
-  // When switching to a task detail tab, preload its assignments and linked packages
+  // Handle Break button - pause all active tasks for all packers
+  const handleBreak = async () => {
+    const now = Date.now();
+    
+    if (!isOnBreak) {
+      // START BREAK: Pause all active tasks
+      const activeTasks = taskLogs.filter((log: any) => !log.end_time);
+      
+      if (activeTasks.length === 0) {
+        Alert.alert('No Active Tasks', 'There are no active tasks to pause.');
+        return;
+      }
+      
+      // Pause each active task
+      for (const task of activeTasks) {
+        const taskId = task.id;
+        const alreadyPaused = pausedTaskIds.has(taskId);
+        
+        if (!alreadyPaused) {
+          await db.updateTaskAssignmentsStatus(taskId, 'paused');
+          await db.incrementTaskLogCounter(taskId);
+          setPauseStartMap(prev => ({ ...prev, [taskId]: now }));
+        }
+      }
+      
+      setBreakStartTime(now);
+      Alert.alert('Break Started', 'All active tasks have been paused.');
+    } else {
+      // END BREAK: Resume all paused tasks
+      const pausedTasks = Array.from(pausedTaskIds);
+      
+      if (pausedTasks.length === 0) {
+        setIsOnBreak(false);
+        setBreakStartTime(null);
+        return;
+      }
+      
+      // Resume each paused task
+      for (const taskId of pausedTasks) {
+        const pauseStartTime = pauseStartMap[taskId] || breakStartTime || now;
+        const deltaSec = Math.max(0, Math.floor((now - pauseStartTime) / 1000));
+        
+        // Add pause duration and set status back to in_progress
+        await db.addPauseDuration(taskId, deltaSec);
+        await db.updateTaskAssignmentsStatus(taskId, 'in_progress');
+      }
+      
+      // Clear all pause states
+      setPauseStartMap({});
+      setBreakStartTime(null);
+      Alert.alert('Break Ended', 'All tasks have been resumed.');
+    }
+    
+    await refreshLogs();
+    await refreshBusyStatus();
+  };
+
+  // When switching tabs, reset or load appropriate form values
   useEffect(() => {
+    if (activeKey === 'new') {
+      // Reset to fresh state for new task
+      setSelectedPackerIds([]);
+      setSelectedPackageIds(orderPackages.length ? [orderPackages[0].id] : []);
+      setNotes('');
+      return;
+    }
+    
     if (!activeKey.startsWith('task:')) return;
+    
     const id = activeKey.replace('task:', '');
     const log = (taskLogs as any[]).find(l => l.id === id);
     if (!log) return;
+    
     setCurrentDetailTaskId(id);
     const assigned = (log.task_assignments || []).map((a: any) => a.packer_id).filter(Boolean);
     setCurrentDetailAssignedPackers(assigned);
     setSelectedPackerIds(assigned);
     setDetailNotesMap(prev => ({ ...prev, [id]: prev[id] ?? (log?.notes || '') }));
+    
     (async () => {
       const { data: linked } = await db.getTaskPackages(id);
       setCurrentDetailPackages(linked || []);
@@ -199,6 +297,8 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
               <TaskLogsTable
                 rows={taskLogs as any}
                 orderPackageId={orderPackages.length === 1 ? orderPackages[0].id : undefined}
+                pausedTaskIds={pausedTaskIds}
+                allOrderPackages={allOrderPackages}
                 onRowPress={(id) => {
                   if (!openTaskIds.includes(id)) setOpenTaskIds(prev => [...prev, id]);
                   setActiveKey(`task:${id}`);
@@ -206,17 +306,28 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                 onPause={async (id) => {
                   // Toggle pause/resume based on current state
                   const now = Date.now();
-                  const paused = pauseStartMap[id] != null;
-                  if (!paused) {
+                  const isPaused = pausedTaskIds.has(id);
+                  
+                  if (!isPaused) {
+                    // PAUSE: Set status to paused, increment counter, record start time
                     await db.updateTaskAssignmentsStatus(id, 'paused');
+                    await db.incrementTaskLogCounter(id);
                     setPauseStartMap(prev => ({ ...prev, [id]: now }));
                   } else {
-                    // Resume: set to in_progress and add pause seconds
-                    const deltaSec = Math.max(0, Math.floor((now - (pauseStartMap[id] || now)) / 1000));
-                    await db.updateTaskAssignmentsStatus(id, 'in_progress');
+                    // RESUME: Calculate pause duration, add to total, set status back to in_progress, increment counter
+                    const pauseStartTime = pauseStartMap[id] || now;
+                    const deltaSec = Math.max(0, Math.floor((now - pauseStartTime) / 1000));
+                    
+                    // Add pause duration and increment counter
                     await db.addPauseDuration(id, deltaSec);
-                    const copy = { ...pauseStartMap }; delete copy[id]; setPauseStartMap(copy);
+                    await db.updateTaskAssignmentsStatus(id, 'in_progress');
+                    
+                    // Clear pause start time
+                    const copy = { ...pauseStartMap };
+                    delete copy[id];
+                    setPauseStartMap(copy);
                   }
+                  
                   await refreshLogs();
                   await refreshBusyStatus();
                 }}
@@ -620,6 +731,8 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
         busyCount={busyCount}
         onAvailablePress={() => setShowAvailableModal(true)}
         onBusyPress={() => setShowBusyModal(true)}
+        onBreakPress={handleBreak}
+        isOnBreak={isOnBreak}
       />
       <TabLayout tabs={tabs} activeKey={activeKey} onChange={setActiveKey} />
 

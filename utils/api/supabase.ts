@@ -612,6 +612,17 @@ export const db = {
     return { data, error };
   },
 
+  // Remove self from order (packer self-removal)
+  removeSelfFromOrder: async (orderId, packerId) => {
+    const { data, error } = await supabase
+      .rpc('remove_self_from_order', {
+        order_uuid: orderId,
+        packer_uuid: packerId
+      });
+    
+    return { data, error };
+  },
+
   // Get all packers with their current assignment status
   getAllPackersWithStatus: async () => {
     const { data, error } = await supabase
@@ -887,6 +898,16 @@ export const db = {
     return { data, error };
   },
 
+  // Packaging: box types lookup
+  getBoxTypesByIds: async (ids) => {
+    if (!ids || ids.length === 0) return { data: [], error: null };
+    const { data, error } = await supabase
+      .from('box_type')
+      .select('id, name')
+      .in('id', ids);
+    return { data, error };
+  },
+
   // Packaging: packing types lookup (support multiple column names for vacuum/gas flags)
   getPackingTypesByIds: async (ids) => {
     if (!ids || ids.length === 0) return { data: [], error: null };
@@ -971,6 +992,14 @@ export const db = {
   getAllMaterials: async () => {
     const { data, error } = await supabase
       .from('materials')
+      .select('id, name')
+      .order('name');
+    return { data, error };
+  },
+
+  getAllBoxTypes: async () => {
+    const { data, error } = await supabase
+      .from('box_type')
       .select('id, name')
       .order('name');
     return { data, error };
@@ -1230,7 +1259,7 @@ export const db = {
       order_package_id: payload.order_package_id,
       material_variant_id: payload.material_variant_id,
       material_type: canonType,
-      is_final: payload.is_final ?? true,
+      is_final: payload.is_final ?? false,
       quantity: (typeof payload.quantity === 'number' && isFinite(payload.quantity))
         ? payload.quantity
         : Number(payload.quantity ?? 0),
@@ -1504,7 +1533,7 @@ export const db = {
   addPackageItem: async ({ orderPackageId, designation, quantity }) => {
     const { data, error } = await supabase
       .from('package_items')
-      .insert({ order_package_id: orderPackageId, designation, quantity })
+      .insert({ order_package_id: orderPackageId, designation: designation, quantity: quantity })
       .select('id')
       .single();
     return { data, error };
@@ -1931,9 +1960,15 @@ export const db = {
   addPackageItem: async ({ order_package_id, designation, quantity }) => {
     const { data, error } = await supabase
       .from('package_items')
-      .insert({ order_package_id, designation, quantity })
+      .insert({ order_package_id, designation: designation, quantity: quantity })
       .select('id')
       .single();
+    return { data, error };
+  },
+
+  // Packaging: delete an order package (with cascade cleanup of orphaned data)
+  deleteOrderPackage: async (packageId) => {
+    const { data, error } = await supabase.rpc('delete_order_package_cascade', { package_id_param: packageId });
     return { data, error };
   },
 
@@ -1961,7 +1996,18 @@ export const db = {
   getTaskLogsByOrderPackageIds: async (orderPackageIds) => {
     if (!orderPackageIds || orderPackageIds.length === 0) return { data: [], error: null };
     
-    // More robust approach: use inner join with task_packages to guarantee scope
+    // First get all task_log_ids associated with these packages
+    const { data: taskPackages, error: tpErr } = await supabase
+      .from('task_packages')
+      .select('task_log_id')
+      .in('order_package_id', orderPackageIds);
+    
+    if (tpErr) return { data: null, error: tpErr };
+    
+    const taskLogIds = Array.from(new Set((taskPackages || []).map((tp: any) => tp.task_log_id).filter(Boolean)));
+    if (taskLogIds.length === 0) return { data: [], error: null };
+    
+    // Then fetch the full task logs with all related data
     const { data, error } = await supabase
       .from('task_logs')
       .select(`
@@ -1970,14 +2016,15 @@ export const db = {
         end_time, 
         duration_minutes, 
         pause_duration, 
+        restart_time,
         task_id, 
         update_counter, 
         notes,
         tasks(name),
         task_assignments(packer_id, task_status, profiles(full_name)),
-        task_packages!inner(order_package_id)
+        task_packages(order_package_id)
       `)
-      .in('task_packages.order_package_id', orderPackageIds)
+      .in('id', taskLogIds)
       .order('start_time', { ascending: false });
     return { data, error };
   },
@@ -2010,7 +2057,7 @@ export const db = {
     // Step 2: fetch logs with task name and assignments
     const { data, error } = await supabase
       .from('task_logs')
-      .select('id, start_time, end_time, duration_minutes, pause_duration, task_id, update_counter, notes, tasks(name), task_assignments(packer_id, task_status, profiles(full_name))')
+      .select('id, start_time, end_time, duration_minutes, pause_duration, restart_time, task_id, update_counter, notes, tasks(name), task_assignments(packer_id, task_status, profiles(full_name)), task_packages(order_package_id)')
       .in('id', logIds)
       .order('start_time', { ascending: false });
     return { data, error };
@@ -2035,7 +2082,7 @@ export const db = {
   getTaskLogById: async (id) => {
     const { data, error } = await supabase
       .from('task_logs')
-      .select('id, start_time, end_time, duration_minutes, pause_duration, task_id, update_counter, notes, tasks(name)')
+      .select('id, start_time, end_time, duration_minutes, pause_duration, restart_time, task_id, update_counter, notes, tasks(name)')
       .eq('id', id)
       .single();
     return { data, error };

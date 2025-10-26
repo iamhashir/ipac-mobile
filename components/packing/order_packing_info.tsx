@@ -28,14 +28,14 @@ export interface OrderPackingInfoProps {
 }
 
 const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, originalInfoId, finalInfoId, orderPackageId, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, editTarget = 'final', editable = true }) => {
-  const [materials, setMaterials] = useState<{ label: string; value: string }[]>([]);
+  const [boxTypes, setBoxTypes] = useState<{ label: string; value: string }[]>([]);
   const [packTypes, setPackTypes] = useState<{ label: string; value: string; labelShort?: string; tooltip?: string }[]>([]);
   const [finalId, setFinalId] = useState<string | null>(finalInfoId || null);
 
   useEffect(() => {
     const load = async () => {
-      const { data: mats } = await db.getAllMaterials();
-      setMaterials((mats || []).map((m: any) => ({ label: m.name, value: m.id })));
+      const { data: boxes } = await db.getAllBoxTypes();
+      setBoxTypes((boxes || []).map((m: any) => ({ label: m.name, value: m.id })));
       const { data: pts } = await db.getAllPackingTypes();
       setPackTypes((pts || []).map((t: any) => ({ label: `${t.code} - ${t.name}`, labelShort: t.code, tooltip: t.name, value: t.id })));
     };
@@ -66,7 +66,7 @@ const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, or
       {/* Use flex to ensure all 7 cards stay on one line and fill parent width */}
       <TwoTierEditableCard editTarget={editTarget} editable={editable} label="Quantity" original={original?.quantity ?? null} final={final?.quantity ?? null} type="number" onChange={(v) => save({ quantity: v })} flex={1} />
       <TwoTierEditableCard editTarget={editTarget} editable={editable} label="S.E.I" original={original?.sei ?? null} final={final?.sei ?? null} type="select" selectItems={packTypes} onChange={(v) => save({ packing_type_id: v })} flex={1} finalSelectValue={finalPackingTypeId || null} defaultSelectValue={originalPackingTypeId || null} />
-      <TwoTierEditableCard editTarget={editTarget} editable={editable} label="Box Type" original={original?.boxType ?? null} final={final?.boxType ?? null} type="select" selectItems={materials} onChange={(v) => save({ box_type_id: v })} flex={1.3} finalSelectValue={finalBoxTypeId || null} defaultSelectValue={originalBoxTypeId || null} />
+      <TwoTierEditableCard editTarget={editTarget} editable={editable} label="Box Type" original={original?.boxType ?? null} final={final?.boxType ?? null} type="select" selectItems={boxTypes} onChange={(v) => save({ box_type_id: v })} flex={1.3} finalSelectValue={finalBoxTypeId || null} defaultSelectValue={originalBoxTypeId || null} />
       <TwoTierEditableCard editTarget={editTarget} editable={editable} label="Tare" original={original?.tare ?? null} final={final?.tare ?? null} type="number" onChange={(v) => save({ tare: v })} flex={1.2} />
       <TwoTierEditableCard editTarget={editTarget} editable={editable} label="Net Weight" original={original?.netWeight ?? null} final={final?.netWeight ?? null} type="number" onChange={(v) => save({ net_weight: v })} flex={1.3} />
       <TwoTierEditableCard editTarget={editTarget} editable={editable} label="Gross Weight" original={original?.grossWeight ?? null} final={final?.grossWeight ?? null} type="number" onChange={(v) => save({ gross_weight: v })} flex={1.3} />

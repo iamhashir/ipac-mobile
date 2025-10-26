@@ -40,7 +40,7 @@ export default function PackerDashboard() {
   const [allPackers, setAllPackers] = useState<Packer[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<string | null>(null);
   const [selectedPackers, setSelectedPackers] = useState<string[]>([]);
-  const [projectLead, setProjectLead] = useState<string | null>(null);
+  const [projectLeads, setProjectLeads] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [successAlert, setSuccessAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
   const [errorAlert, setErrorAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
@@ -56,6 +56,33 @@ export default function PackerDashboard() {
       restoreSessionState();
     }
   }, [session]);
+
+  // Load team leads when order is selected
+  useEffect(() => {
+    const loadOrderTeamLeads = async () => {
+      if (!selectedOrder) return;
+      
+      try {
+        // Use the new getOrderTeamLeads function
+        const { data: teamLeadsData, error } = await teamLead.getOrderTeamLeads(selectedOrder);
+        
+        if (error) {
+          console.error('Error loading team leads:', error);
+          return;
+        }
+        
+        if (teamLeadsData && teamLeadsData.length > 0) {
+          const leadIds = teamLeadsData.map((lead: any) => lead.packer_id);
+          setProjectLeads(leadIds);
+          console.log('Loaded existing team leads for order:', leadIds);
+        }
+      } catch (error) {
+        console.error('Error loading team leads:', error);
+      }
+    };
+    
+    loadOrderTeamLeads();
+  }, [selectedOrder]);
 
   const restoreSessionState = async () => {
     if (!session || !session.order_id) return;
@@ -76,10 +103,12 @@ export default function PackerDashboard() {
         const packerIds = orderPackers.map(p => p.packer_id || p.id);
         setSelectedPackers(packerIds);
         
-        // Find project lead if exists
-        const leadPacker = orderPackers.find(p => p.is_project_lead);
-        if (leadPacker) {
-          setProjectLead(leadPacker.packer_id || leadPacker.id);
+        // Find all project leads
+        const leadPackers = orderPackers.filter(p => p.is_team_lead || p.is_project_lead);
+        if (leadPackers.length > 0) {
+          const leadIds = leadPackers.map(p => p.packer_id || p.id);
+          setProjectLeads(leadIds);
+          console.log('Restored project leads:', leadIds);
         }
       }
       
@@ -145,9 +174,9 @@ export default function PackerDashboard() {
       const isCurrentlySelected = prev.includes(packerId);
       
       if (isCurrentlySelected) {
-        // If deselecting this packer and they're the project lead, clear project lead
-        if (projectLead === packerId) {
-          setProjectLead(null);
+        // If deselecting this packer and they're a project lead, remove from leads
+        if (projectLeads.includes(packerId)) {
+          setProjectLeads(prevLeads => prevLeads.filter(id => id !== packerId));
         }
         return prev.filter(id => id !== packerId);
       } else {
@@ -160,8 +189,16 @@ export default function PackerDashboard() {
     // Only allow project lead selection from selected packers
     if (!selectedPackers.includes(packerId)) return;
     
-    // Only one project lead can be selected
-    setProjectLead(prev => prev === packerId ? null : packerId);
+    // Toggle this packer as a project lead (supports multiple leads)
+    setProjectLeads(prev => {
+      if (prev.includes(packerId)) {
+        // Remove from leads
+        return prev.filter(id => id !== packerId);
+      } else {
+        // Add to leads
+        return [...prev, packerId];
+      }
+    });
   };
 
   const handleNext = async () => {
@@ -175,8 +212,8 @@ export default function PackerDashboard() {
       return;
     }
 
-    if (!projectLead) {
-      setErrorAlert({visible: true, title: 'Project Lead Required', message: 'Please select a project lead from the team members'});
+    if (projectLeads.length === 0) {
+      setErrorAlert({visible: true, title: 'Project Lead Required', message: 'Please select at least one project lead from the team members'});
       return;
     }
 
@@ -189,21 +226,28 @@ export default function PackerDashboard() {
         return;
       }
 
-      // Assign team lead using the new temporary role system
-      if (projectLead) {
-        const { error: teamLeadError } = await teamLead.assignTeamLead(selectedOrder, projectLead);
-        if (teamLeadError) {
-          console.error('Error assigning team lead:', teamLeadError);
-          // Don't block navigation for this error, just log it
-        } else {
-          console.log('Team lead assigned successfully:', projectLead);
-          // Also update order.project_lead_id and ensure status is in_progress
-          const { error: updateLeadError } = await db.updateProjectLead(selectedOrder, projectLead);
-          if (updateLeadError) {
-            console.warn('Project lead update (orders table) failed:', updateLeadError);
+      // Assign team leads using the new multi-lead system
+      if (projectLeads.length > 0) {
+        // Clear existing leads first for clean assignment
+        await teamLead.removeAllTeamLeads(selectedOrder);
+        
+        // Add each selected lead
+        for (const leadId of projectLeads) {
+          const { error: teamLeadError } = await teamLead.addTeamLead(selectedOrder, leadId);
+          if (teamLeadError) {
+            console.error('Error assigning team lead:', leadId, teamLeadError);
+            // Don't block navigation, continue with other leads
           } else {
-            console.log('Order updated with project lead and status set to in_progress (if pending).');
+            console.log('Team lead assigned successfully:', leadId);
           }
+        }
+        
+        // Update order.project_lead_id with the first lead (for backward compatibility)
+        const { error: updateLeadError } = await db.updateProjectLead(selectedOrder, projectLeads[0]);
+        if (updateLeadError) {
+          console.warn('Project lead update (orders table) failed:', updateLeadError);
+        } else {
+          console.log('Order updated with project lead and status set to in_progress (if pending).');
         }
       }
 
@@ -433,7 +477,7 @@ export default function PackerDashboard() {
               ) : (
                 allPackers.map((packer) => {
                   const isSelected = selectedPackers.includes(packer.id);
-                  const isProjectLead = projectLead === packer.id;
+                  const isProjectLead = projectLeads.includes(packer.id);
                   const canBeProjectLead = isSelected && packer.is_available;
 
                   const cardCls = `${isCompact ? 'p-2' : 'p-3'} mb-2 rounded-lg border flex-row items-center justify-between ${

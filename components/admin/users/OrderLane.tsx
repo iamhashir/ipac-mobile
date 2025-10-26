@@ -8,7 +8,8 @@ export interface OrderLaneModel {
   order_name: string;
   client_name?: string;
   packers: PackerRow[];
-  teamLeadId?: string | null;
+  teamLeadId?: string | null; // kept for backward compatibility
+  teamLeadIds?: string[]; // new: support multiple leads
 }
 
 interface OrderLaneProps {
@@ -17,9 +18,12 @@ interface OrderLaneProps {
   onDropPacker?: (orderId: string, packerId: string, packerName?: string, originOrderId?: string | null) => void;
   onOpenProfile?: (packerId: string) => void;
   onMakeLead?: (orderId: string, packerId: string) => void;
+  onRemoveLead?: (orderId: string, packerId: string) => void;
 }
 
-export default function OrderLane({ order, allOrders = [], onDropPacker, onOpenProfile, onMakeLead }: OrderLaneProps) {
+export default function OrderLane({ order, allOrders = [], onDropPacker, onOpenProfile, onMakeLead, onRemoveLead }: OrderLaneProps) {
+  // Support both single and multiple leads
+  const teamLeadIds = order.teamLeadIds || (order.teamLeadId ? [order.teamLeadId] : []);
   const [isOver, setIsOver] = useState(false);
   const dropProps: any = {};
   if (Platform.OS === 'web') {
@@ -73,15 +77,22 @@ export default function OrderLane({ order, allOrders = [], onDropPacker, onOpenP
                     { id: 'POOL', label: 'Available Packers (Unassign)' },
                     ...allOrders.filter((o) => o.id !== order.id).map((o) => ({ id: o.id, label: o.order_name }))
                   ];
+                  const isLead = teamLeadIds.includes(p.id);
                   return (
                     <PackerCard
                       key={p.id}
                       packer={p}
                       draggable={true}
-                      isLead={order.teamLeadId === p.id}
+                      isLead={isLead}
                       originOrderId={order.id}
                       onPress={onOpenProfile}
-                      onMakeLead={(pid) => onMakeLead?.(order.id, pid)}
+                      onMakeLead={(pid) => {
+                        if (isLead) {
+                          onRemoveLead?.(order.id, pid);
+                        } else {
+                          onMakeLead?.(order.id, pid);
+                        }
+                      }}
                       moveOptions={options}
                       onMoveTo={(destId) => {
                         if (destId === 'POOL') onDropPacker?.('POOL', p.id, p.full_name, order.id);
@@ -119,15 +130,22 @@ export default function OrderLane({ order, allOrders = [], onDropPacker, onOpenP
                   { id: 'POOL', label: 'Available Packers (Unassign)' },
                   ...allOrders.filter((o) => o.id !== order.id).map((o) => ({ id: o.id, label: o.order_name }))
                 ];
+                const isLead = teamLeadIds.includes(p.id);
                 return (
                   <PackerCard
                     key={p.id}
                     packer={p}
                     draggable={false}
-                    isLead={order.teamLeadId === p.id}
+                    isLead={isLead}
                     originOrderId={order.id}
                     onPress={onOpenProfile}
-                    onMakeLead={(pid) => onMakeLead?.(order.id, pid)}
+                    onMakeLead={(pid) => {
+                      if (isLead) {
+                        onRemoveLead?.(order.id, pid);
+                      } else {
+                        onMakeLead?.(order.id, pid);
+                      }
+                    }}
                     moveOptions={options}
                     onMoveTo={(destId) => {
                       if (destId === 'POOL') onDropPacker?.('POOL', p.id, p.full_name, order.id);

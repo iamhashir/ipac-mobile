@@ -24,7 +24,7 @@ export const teamLead = {
     return { data, error };
   },
 
-  // Get team lead for an order
+  // Get team lead for an order (returns first lead for backward compatibility)
   getOrderTeamLead: async (orderId: string) => {
     const { data, error } = await supabase
       .from('order_team_members')
@@ -43,8 +43,60 @@ export const teamLead = {
     return { data, error };
   },
 
-  // Remove team lead status (but keep them as team member)
-  removeTeamLead: async (orderId: string) => {
+  // Get all team leads for an order
+  getOrderTeamLeads: async (orderId: string) => {
+    const { data, error } = await supabase
+      .rpc('get_order_team_leads', {
+        order_uuid: orderId
+      });
+    
+    return { data, error };
+  },
+
+  // Check if order has at least one team lead
+  orderHasTeamLead: async (orderId: string) => {
+    const { data, error } = await supabase
+      .rpc('order_has_team_lead', {
+        order_uuid: orderId
+      });
+    
+    return { data, error };
+  },
+
+  // Get count of team leads for an order
+  countOrderTeamLeads: async (orderId: string) => {
+    const { data, error } = await supabase
+      .rpc('count_order_team_leads', {
+        order_uuid: orderId
+      });
+    
+    return { data, error };
+  },
+
+  // Add a team lead (keeps existing leads) - for multiple leads support
+  addTeamLead: async (orderId: string, packerId: string) => {
+    const { data, error } = await supabase
+      .rpc('add_team_lead', {
+        order_uuid: orderId,
+        packer_uuid: packerId
+      });
+    
+    return { data, error };
+  },
+
+  // Remove a specific team lead status (but keep them as team member)
+  removeTeamLead: async (orderId: string, packerId: string) => {
+    const { data, error } = await supabase
+      .rpc('remove_team_lead', {
+        order_uuid: orderId,
+        packer_uuid: packerId
+      });
+    
+    return { data, error };
+  },
+
+  // Remove all team leads for an order
+  removeAllTeamLeads: async (orderId: string) => {
     const { data, error } = await supabase
       .from('order_team_members')
       .update({ is_team_lead: false })

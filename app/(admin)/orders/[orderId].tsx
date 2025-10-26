@@ -2,15 +2,18 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Alert, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { X, Trash2 } from 'lucide-react-native';
 import { db } from '../../../utils/api/supabase';
 import OrderSecuringSection from '../../../components/packing/OrderSecuringSection';
 import { ConfirmModal } from '../../../components/ui/ConfirmModal';
 import PackageInfoFields, { PackageInfoValue } from '../../../components/admin/orders/PackageInfoFields';
+import OrderPackingInfo, { BoxInfoDetails } from '../../../components/packing/order_packing_info';
 import OrderPackingItems from '../../../components/packing/order_packing_items';
 import PackageForm from '../../../components/admin/orders/PackageForm';
 import AccessoriesSection from '../../../components/packing/AccessoriesSection';
 import VacuumPackingSection from '../../../components/packing/VacuumPackingSection';
 import GasPackingSection from '../../../components/packing/GasPackingSection';
+import DeletePackageModal from '../../../components/admin/orders/DeletePackageModal';
 
 interface OrderPkg { id: string; package_number: number | null; description: string | null; status: string; original_pkg_info?: string | null; final_pkg_info?: string | null; }
 
@@ -28,6 +31,8 @@ export default function OrderDetailsPage() {
   const [showAddBox, setShowAddBox] = useState(false);
   const [packTypeHasVacuum, setPackTypeHasVacuum] = useState<Record<string, boolean>>({});
   const [packTypeHasGas, setPackTypeHasGas] = useState<Record<string, boolean>>({});
+  const [activeTab, setActiveTab] = useState<string | null>(null);
+  const [deleteModal, setDeleteModal] = useState<{ visible: boolean; packageId: string; packageNumber: number | null }>({ visible: false, packageId: '', packageNumber: null });
 
   useEffect(() => { if (orderId) load(); }, [orderId]);
 
@@ -128,44 +133,83 @@ export default function OrderDetailsPage() {
           </View>
         )}
 
-        {/* Boxes */}
+        {/* Boxes - Tabs Layout */}
         <View className="mb-3">
-          <Text className="text-lg font-semibold text-gray-900 mb-2">Boxes</Text>
-          {packages.map((p) => (
-            <View key={p.id} className="bg-white rounded-lg border border-gray-200 p-4 mb-3">
-              <Text className="text-base font-semibold text-gray-900">Box #{p.package_number}</Text>
-              {p.description ? (
-                <Text className="text-xs text-gray-600 mb-2">{p.description}</Text>
-              ) : null}
+          {/* Tab buttons */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mb-0 flex-row">
+            {packages.map((p) => (
+              <TouchableOpacity
+                key={p.id}
+                onPress={() => setActiveTab(activeTab === p.id ? null : p.id)}
+                className={`px-4 py-2.5 mr-1.5 rounded-t-lg border-b-2 ${
+                  activeTab === p.id
+                    ? 'bg-blue-50 border-blue-600'
+                    : 'bg-gray-50 border-gray-300'
+                }`}
+              >
+                <Text className={`font-medium text-sm ${
+                  activeTab === p.id ? 'text-blue-700' : 'text-gray-700'
+                }`}>
+                  Box #{p.package_number}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
 
-              {/* Package Info (Original) */}
-              <View className="mt-2 p-2 border border-blue-200 rounded-lg bg-blue-50">
-                <Text className="text-blue-800 font-semibold mb-2">Package Info (Original)</Text>
-                <PackageInfoFields
-                  value={infoDrafts[p.id] || {}}
-                  onChange={(v) => setInfoDrafts(prev => ({ ...prev, [p.id]: v }))}
-                />
-                <TouchableOpacity
-                  onPress={async () => {
-                    try {
-                      const draft = infoDrafts[p.id];
-                      const { data: ensured } = await db.ensureOriginalPackageInfo({ orderPackageId: p.id, originalInfoId: (p as any).original_pkg_info || null });
-                      const id = ensured?.id || (p as any).original_pkg_info;
-                      if (!id) { Alert.alert('Error', 'Failed to ensure original package info'); return; }
-                      await db.updatePackageInfo(id, draft);
-                      Alert.alert('Saved', `Package info saved for box #${p.package_number}`);
-                    } catch (e) { Alert.alert('Error', 'Failed to save package info'); }
-                  }}
-                  className={`self-start mt-2 px-3 py-2 rounded ${allowOriginalEdits ? 'bg-blue-600' : 'bg-gray-300'}`}
-                  disabled={!allowOriginalEdits}
-                >
-                  <Text className="text-white font-medium">Save Package Info</Text>
-                </TouchableOpacity>
+          {/* Tab content */}
+          {packages.map((p) => (
+            activeTab === p.id && (
+              <View key={`content-${p.id}`} className="bg-white rounded-b-lg border-l border-r border-b border-gray-200 p-4">
+                {/* Header with delete button */}
+                <View className="flex-row items-center justify-between mb-3">
+                  <View>
+                    <Text className="text-base font-semibold text-gray-900">Box #{p.package_number}</Text>
+                    {p.description ? (
+                      <Text className="text-xs text-gray-600 mt-0.5">{p.description}</Text>
+                    ) : null}
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setDeleteModal({ visible: true, packageId: p.id, packageNumber: p.package_number })}
+                    className="p-2 bg-red-50 rounded-lg"
+                  >
+                    <Trash2 size={18} color="#dc2626" />
+                  </TouchableOpacity>
+                </View>
+
+              {/* Package Info (Original) - Using Packer Portal Style */}
+              <View className="mt-2">
+                {(() => {
+                  const draft = infoDrafts[p.id] || {};
+                  const originalDetails: BoxInfoDetails = {
+                    quantity: draft.quantity ?? null,
+                    sei: null, // Will be populated from packing type
+                    boxType: null, // Will be populated from material
+                    tare: draft.tare ?? null,
+                    netWeight: draft.net_weight ?? null,
+                    grossWeight: draft.gross_weight ?? null,
+                    centerOfGravity: draft.center_of_gravity ?? null,
+                  };
+                  return (
+                    <OrderPackingInfo
+                      original={originalDetails}
+                      final={null}
+                      originalInfoId={(p as any).original_pkg_info}
+                      finalInfoId={null}
+                      orderPackageId={p.id}
+                      originalBoxTypeId={draft.box_type_id || null}
+                      finalBoxTypeId={null}
+                      originalPackingTypeId={draft.packing_type_id || null}
+                      finalPackingTypeId={null}
+                      editTarget="original"
+                      editable={allowOriginalEdits}
+                    />
+                  );
+                })()}
               </View>
 
               {/* Package Items (add) */}
-              <View className="mt-3 p-2 border border-green-200 rounded-lg bg-green-50">
-                <Text className="text-green-800 font-semibold mb-2">Package Items</Text>
+              <View className="mt-2.5 p-2.5 border border-green-200 rounded-lg bg-green-50">
+                <Text className="text-green-800 font-semibold text-sm mb-2">Package Items</Text>
                 <View className="flex-row gap-2 mb-2">
                   <View className="flex-1 bg-white border border-gray-300 rounded-lg">
                     <Text className="text-xs text-gray-600 px-2 pt-1">Designation</Text>
@@ -185,7 +229,7 @@ export default function OrderDetailsPage() {
                       const qtyStr = (newItem[p.id]?.qty || '').trim();
                       const qty = qtyStr === '' ? null : Number(qtyStr);
                       if (!des || !qty || qty <= 0) { Alert.alert('Enter item and qty'); return; }
-                      try { await db.addPackageItem({ orderPackageId: p.id, designation: des, quantity: qty }); setNewItem(prev => ({ ...prev, [p.id]: { designation: '', qty: '' } })); } catch { Alert.alert('Error', 'Failed to add item'); }
+                      try { await db.addPackageItem({ order_package_id: p.id, designation: des, quantity: qty }); setNewItem(prev => ({ ...prev, [p.id]: { designation: '', qty: '' } })); await load(); } catch (e) { console.error('Add item error:', e); Alert.alert('Error', 'Failed to add item'); }
                     }}
                     className={`px-3 py-2 rounded ${allowOriginalEdits ? 'bg-green-600' : 'bg-gray-300'}`}
                     disabled={!allowOriginalEdits}
@@ -231,10 +275,20 @@ export default function OrderDetailsPage() {
                   </View>
                 ) : null;
               })()}
-            </View>
+              </View>
+            )
           ))}
         </View>
       </ScrollView>
+
+      {/* Delete Package Modal */}
+      <DeletePackageModal
+        visible={deleteModal.visible}
+        packageId={deleteModal.packageId}
+        packageNumber={deleteModal.packageNumber}
+        onClose={() => setDeleteModal({ visible: false, packageId: '', packageNumber: null })}
+        onDeleted={async () => { await load(); }}
+      />
 
       {/* Add Box Modal */}
       {showAddBox && (

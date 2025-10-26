@@ -65,7 +65,7 @@ export default function PackingReportPage() {
 
   const [orderPackages, setOrderPackages] = useState<OrderPackage[]>([]);
   const [pkgInfoMap, setPkgInfoMap] = useState<Record<string, PackageInfo>>({});
-  const [materials, setMaterials] = useState<Record<string, string>>({});
+  const [boxTypes, setBoxTypes] = useState<Record<string, string>>({});
   const [packingTypes, setPackingTypes] = useState<Record<string, string>>({});
   const [equipmentMap, setEquipmentMap] = useState<Record<string, string>>({}); // order_package_id -> aggregated names
 
@@ -139,13 +139,13 @@ export default function PackingReportPage() {
         (infos || []).forEach((i: any) => { map[i.id] = i; });
         setPkgInfoMap(map);
 
-        const materialIds = Array.from(new Set((infos || []).map((i: any) => i.box_type_id).filter(Boolean)));
+        const boxTypeIds = Array.from(new Set((infos || []).map((i: any) => i.box_type_id).filter(Boolean)));
         const packingIds = Array.from(new Set((infos || []).map((i: any) => i.packing_type_id).filter(Boolean)));
-        if (materialIds.length) {
-          const { data: mats } = await db.getMaterialsByIds(materialIds);
+        if (boxTypeIds.length) {
+          const { data: boxes } = await db.getBoxTypesByIds(boxTypeIds);
           const m: Record<string, string> = {};
-          (mats || []).forEach((mt: any) => { m[mt.id] = mt.name; });
-          setMaterials(m);
+          (boxes || []).forEach((mt: any) => { m[mt.id] = mt.name; });
+          setBoxTypes(m);
         }
         if (packingIds.length) {
           const { data: types } = await db.getPackingTypesByIds(packingIds);
@@ -196,14 +196,14 @@ export default function PackingReportPage() {
         equipmentName: equipmentMap[p.id] || '—',
         centerOfGravity: info?.center_of_gravity ?? null,
         boxQuantity: info?.quantity ?? null,
-        boxTypeName: info?.box_type_id ? (materials[info.box_type_id] || '—') : '—',
+        boxTypeName: info?.box_type_id ? (boxTypes[info.box_type_id] || '—') : '—',
         packingTypeName: info?.packing_type_id ? (packingTypes[info.packing_type_id] || '—') : '—',
         tare: info?.tare ?? null,
         netWeight: info?.net_weight ?? null,
         grossWeight: info?.gross_weight ?? null,
       };
     });
-  }, [orderPackages, pkgInfoMap, equipmentMap, materials, packingTypes]);
+  }, [orderPackages, pkgInfoMap, equipmentMap, boxTypes, packingTypes]);
 
   const tabs: TabDefinition[] = useMemo(() => {
     const listTab: TabDefinition = {
@@ -224,7 +224,7 @@ export default function PackingReportPage() {
       const infoOriginal = {
         quantity: original?.quantity ?? null,
         sei: original?.packing_type_id ? (packingTypes[original.packing_type_id] || '—') : '—',
-        boxType: original?.box_type_id ? (materials[original.box_type_id] || '—') : '—',
+        boxType: original?.box_type_id ? (boxTypes[original.box_type_id] || '—') : '—',
         tare: original?.tare ?? null,
         netWeight: original?.net_weight ?? null,
         grossWeight: original?.gross_weight ?? null,
@@ -233,7 +233,7 @@ export default function PackingReportPage() {
       const infoFinal = {
         quantity: final?.quantity ?? null,
         sei: final?.packing_type_id ? (packingTypes[final.packing_type_id] || '—') : '—',
-        boxType: final?.box_type_id ? (materials[final?.box_type_id] || '—') : '—',
+        boxType: final?.box_type_id ? (boxTypes[final?.box_type_id] || '—') : '—',
         tare: final?.tare ?? null,
         netWeight: final?.net_weight ?? null,
         grossWeight: final?.gross_weight ?? null,
@@ -354,7 +354,7 @@ export default function PackingReportPage() {
     });
 
     return [listTab, ...boxTabs];
-  }, [rows, orderPackages, orderId, pkgInfoMap, materials, packingTypes]);
+  }, [rows, orderPackages, orderId, pkgInfoMap, boxTypes, packingTypes]);
 
   const handleBack = () => router.back();
   const handleSignOut = async () => {

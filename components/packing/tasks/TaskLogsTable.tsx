@@ -6,13 +6,17 @@ import { db } from '../../../utils/api/supabase';
 import { useTextSize } from '../../../utils/TextSizeContext';
 
 interface Assignment { profiles?: { full_name?: string | null } | null; packer_id?: string; task_status?: string }
+interface TaskPackage { order_package_id?: string }
 interface LogRow {
   id: string;
   start_time: string;
   end_time: string | null;
   duration_minutes: number | null;
+  restart_time?: string | null;
+  pause_duration?: number | null;
   tasks?: { name?: string } | null;
   task_assignments?: Assignment[];
+  task_packages?: TaskPackage[];
 }
 
 interface TaskLogsTableProps {
@@ -24,6 +28,8 @@ interface TaskLogsTableProps {
   currentPackageId?: string; // For filtering tasks to specific package
   getTaskPackages?: (taskLogId: string) => Promise<{ data: string[] | null; error: any }>;
   orderPackageId?: string; // For media uploads
+  pausedTaskIds?: Set<string>; // Track which tasks are paused
+  allOrderPackages?: { id: string; package_number: number | null }[]; // All boxes for displaying box numbers
 }
 
 const formatTime = (iso: string | null) => {
@@ -54,10 +60,13 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
   onRowPress, 
   currentPackageId,
   getTaskPackages,
-  orderPackageId 
+  orderPackageId,
+  pausedTaskIds = new Set(),
+  allOrderPackages = []
 }) => {
   const { size } = useTextSize();
   const [packersModal, setPackersModal] = useState<{ open: boolean; names: string[] }>({ open: false, names: []});
+  const [boxesModal, setBoxesModal] = useState<{ open: boolean; boxNumbers: (number | null)[] }>({ open: false, boxNumbers: []});
   const [taskPackageMap, setTaskPackageMap] = useState<Record<string, string[]>>({});
 
   const handleCameraPress = async (taskRow: LogRow) => {
@@ -156,9 +165,23 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
     setPackersModal({ open: true, names });
   };
 
+  const openBoxes = (taskPackages?: TaskPackage[]) => {
+    const packageIds = (taskPackages || []).map(tp => tp.order_package_id).filter(Boolean) as string[];
+    const boxNumbers = packageIds.map(id => {
+      const pkg = allOrderPackages.find(p => p.id === id);
+      return pkg?.package_number ?? null;
+    });
+    setBoxesModal({ open: true, boxNumbers });
+  };
+
   const isTaskCompleted = (row: LogRow) => {
     return row.end_time !== null || 
            (row.task_assignments || []).every(a => a?.task_status === 'completed');
+  };
+
+  const isTaskPaused = (row: LogRow) => {
+    return pausedTaskIds.has(row.id) || 
+           (row.task_assignments || []).some(a => a?.task_status === 'paused');
   };
 
   const headerFontSize = size === 'small' ? 13 : size === 'large' ? 16 : size === 'xl' ? 18 : size === 'xxl' ? 20 : 14;
@@ -174,7 +197,7 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
         <Text style={{ flex: 1, fontSize: headerFontSize }} className="font-semibold text-gray-700">Start time</Text>
         <Text style={{ flex: 1, fontSize: headerFontSize }} className="font-semibold text-gray-700">End time</Text>
         <Text style={{ flex: 1, fontSize: headerFontSize }} className="font-semibold text-gray-700">Duration</Text>
-        <Text style={{ flex: 2 , fontSize: headerFontSize}} className="font-semibold text-gray-700">Actions</Text>
+        <Text style={{ flex: 2.5 , fontSize: headerFontSize}} className="font-semibold text-gray-700">Actions</Text>
         {orderPackageId && <Text style={{ flex: 0.5, fontSize: headerFontSize }} className="font-semibold text-gray-700"></Text>}
       </View>
 
@@ -196,13 +219,20 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
               <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
 
               {/* Action buttons */}
-              <View style={{ flex: 2 }} className="flex-row flex-wrap">
+              <View style={{ flex: 2.5 }} className="flex-row flex-wrap">
                 <TouchableOpacity
                   style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
                   className="rounded bg-blue-100"
                   onPress={() => openPackers(r.task_assignments)}
                 >
                   <Text style={{ fontSize: buttonFontSize }} className="text-blue-800">{(r.task_assignments || []).length} Packers</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
+                  className="rounded bg-purple-100"
+                  onPress={() => openBoxes(r.task_packages)}
+                >
+                  <Text style={{ fontSize: buttonFontSize }} className="text-purple-800">{(r.task_packages || []).length} Boxes</Text>
                 </TouchableOpacity>
                 {/* Resume only */}
                 <TouchableOpacity 
@@ -237,7 +267,7 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
             <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
 
             {/* Action buttons */}
-            <View style={{ flex: 2 }} className="flex-row flex-wrap">
+            <View style={{ flex: 2.5 }} className="flex-row flex-wrap">
               <TouchableOpacity
                 style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
                 className="rounded bg-blue-100"
@@ -245,12 +275,19 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
               >
                 <Text style={{ fontSize: buttonFontSize }} className="text-blue-800">{(r.task_assignments || []).length} Packers</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
+                className="rounded bg-purple-100"
+                onPress={() => openBoxes(r.task_packages)}
+              >
+                <Text style={{ fontSize: buttonFontSize }} className="text-purple-800">{(r.task_packages || []).length} Boxes</Text>
+              </TouchableOpacity>
               <TouchableOpacity 
                 style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
-                className="rounded bg-amber-50 border border-amber-600" 
+                className={`rounded ${isTaskPaused(r) ? 'bg-blue-50 border border-blue-600' : 'bg-amber-50 border border-amber-600'}`}
                 onPress={() => onPause?.(r.id)}
               >
-                <Text style={{ fontSize: buttonFontSize }} className="text-amber-700">Pause</Text>
+                <Text style={{ fontSize: buttonFontSize }} className={isTaskPaused(r) ? 'text-blue-700' : 'text-amber-700'}>{isTaskPaused(r) ? 'Resume' : 'Pause'}</Text>
               </TouchableOpacity>
               <TouchableOpacity 
                 style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginBottom: 2 }}
@@ -291,6 +328,25 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
               ))
             )}
             <TouchableOpacity className="mt-3 self-end" onPress={() => setPackersModal({ open: false, names: []})}>
+              <Text className="text-primary-700 font-semibold">Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Boxes modal */}
+      <Modal visible={boxesModal.open} transparent animationType="fade" onRequestClose={() => setBoxesModal({ open: false, boxNumbers: []})}>
+        <View className="flex-1 bg-black/30 justify-center items-center">
+          <View className="bg-white rounded-xl p-4 w-4/5">
+            <Text className="text-gray-800 font-semibold mb-2">Related Boxes</Text>
+            {boxesModal.boxNumbers.length === 0 ? (
+              <Text className="text-gray-600">No boxes assigned.</Text>
+            ) : (
+              boxesModal.boxNumbers.map((num, idx) => (
+                <Text key={idx} className="text-gray-800 mb-1">• Box #{num ?? '—'}</Text>
+              ))
+            )}
+            <TouchableOpacity className="mt-3 self-end" onPress={() => setBoxesModal({ open: false, boxNumbers: []})}>
               <Text className="text-primary-700 font-semibold">Close</Text>
             </TouchableOpacity>
           </View>

@@ -122,7 +122,16 @@ export default function PackerCard({
               </Badge>
               {inOrder ? (
                 isLead ? (
-                  <Badge variant="secondary">Team Lead</Badge>
+                  <button
+                    className="px-2 py-1 text-xs rounded border border-amber-600 text-amber-700 bg-amber-50 hover:bg-amber-100"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onMakeLead?.(packer.id);
+                    }}
+                    title="Click to remove lead status"
+                  >
+                    Team Lead ✕
+                  </button>
                 ) : (
                   <button
                     className="px-2 py-1 text-xs rounded border border-blue-600 text-blue-700 bg-blue-50 hover:bg-blue-100"
@@ -186,7 +195,12 @@ export default function PackerCard({
             <View className="flex-row items-center">
               {inOrder ? (
                 isLead ? (
-                  <Badge variant="secondary">Team Lead</Badge>
+                  <TouchableOpacity
+                    onPress={() => onMakeLead?.(packer.id)}
+                    className="px-2 py-1 rounded border border-amber-600 bg-amber-50 mr-2"
+                  >
+                    <Text className="text-amber-700 text-xs">Team Lead ✕</Text>
+                  </TouchableOpacity>
                 ) : (
                   <TouchableOpacity
                     onPress={() => onMakeLead?.(packer.id)}

@@ -100,6 +100,7 @@ export const materialOperations = {
       const matIds = (mats || []).map((m: any) => m.id);
       let variants: any[] = [];
       let variantPricing: any[] = [];
+      let variantTagsMap = new Map<string, any[]>();
       if (matIds.length) {
         // Load variants
         const { data: vars, error: varsErr } = await supabase
@@ -132,6 +133,19 @@ export const materialOperations = {
           if (!pricingErr) {
             variantPricing = pricing || [];
           }
+          
+          // Load variant tags
+          const { data: variantTags, error: variantTagsErr } = await supabase
+            .from('material_variant_tags')
+            .select('material_variant_id, tag_id, tags(id, name)')
+            .in('material_variant_id', variantIds);
+          if (!variantTagsErr && variantTags) {
+            variantTags.forEach((vt: any) => {
+              const arr = variantTagsMap.get(vt.material_variant_id) || [];
+              arr.push({ tag_id: vt.tag_id, tags: vt.tags });
+              variantTagsMap.set(vt.material_variant_id, arr);
+            });
+          }
         }
       }
 
@@ -156,7 +170,8 @@ export const materialOperations = {
       const materialRows = (mats || []).map((m: any) => {
         const materialVariants = variants.filter((v: any) => v.material_id === m.id).map((v: any) => ({
           ...v,
-          supplier_pricing: variantPricing.filter((p: any) => p.material_variant_id === v.id)
+          supplier_pricing: variantPricing.filter((p: any) => p.material_variant_id === v.id),
+          material_variant_tags: variantTagsMap.get(v.id) || []
         }));
         
         return {
@@ -588,6 +603,13 @@ export const supplierOperations = {
             id,
             name,
             description
+          ),
+          material_variant_tags (
+            tag_id,
+            tags (
+              id,
+              name
+            )
           )
         )
       `)
