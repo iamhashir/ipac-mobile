@@ -29,9 +29,39 @@ interface BoxDetailsTabProps {
   finalBoxTypeId?: string | null;
   originalPackingTypeId?: string | null;
   finalPackingTypeId?: string | null;
+  status?: string;
+  onStatusChange?: () => void;
 }
 
-const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId }) => {
+const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, status, onStatusChange }) => {
+  const handleMarkComplete = async () => {
+    try {
+      const { supabase } = await import('../../utils/api/supabase');
+      const { error } = await supabase.rpc('mark_order_package_packed', { op_id: orderPackageId });
+      if (!error) {
+        onStatusChange?.();
+      } else {
+        console.warn('Mark complete failed:', error);
+      }
+    } catch (e) {
+      console.error('Unexpected error while updating package status:', e);
+    }
+  };
+
+  const handleUndo = async () => {
+    try {
+      const { supabase } = await import('../../utils/api/supabase');
+      const { error } = await supabase.rpc('unpack_order_package', { op_id: orderPackageId });
+      if (!error) {
+        onStatusChange?.();
+      } else {
+        console.warn('Undo failed:', error);
+      }
+    } catch (e) {
+      console.error('Unexpected error while undoing package status:', e);
+    }
+  };
+
   const askSource = async () => {
     Alert.alert('Attach image', 'Choose source', [
       { text: 'Gallery', onPress: pickFromGallery },
@@ -92,9 +122,25 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
           >
             <Camera size={20} color="#ffffff" />
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => { /* Placeholder - no action yet */ }} className="bg-green-600 px-3 py-1 rounded">
-            <Text className="text-white text-sm">Mark box as completed</Text>
-          </TouchableOpacity>
+          {status === 'packed' ? (
+            <TouchableOpacity 
+              onPress={handleUndo} 
+              className="px-3 py-1 rounded bg-orange-500"
+            >
+              <Text className="text-white text-sm">
+                Undo Completion
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity 
+              onPress={handleMarkComplete} 
+              className="px-3 py-1 rounded bg-green-600"
+            >
+              <Text className="text-white text-sm">
+                Mark box as completed
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
       {description ? (

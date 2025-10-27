@@ -6,6 +6,7 @@ export interface TabDefinition {
   key: string;
   title: string;
   content: React.ReactNode;
+  isPacked?: boolean;
 }
 
 interface TabLayoutProps {
@@ -40,7 +41,11 @@ const TabLayout: React.FC<TabLayoutProps> = ({ tabs, activeKey, onChange }) => {
                 borderWidth: 1
               }}
               className={`${
-                activeKey === tab.key
+                tab.isPacked
+                  ? activeKey === tab.key
+                    ? 'bg-green-100 border-green-500'
+                    : 'bg-green-50 border-green-300'
+                  : activeKey === tab.key
                   ? 'bg-white border-primary-500'
                   : 'bg-gray-100 border-gray-300'
               }`}
@@ -48,10 +53,12 @@ const TabLayout: React.FC<TabLayoutProps> = ({ tabs, activeKey, onChange }) => {
               <Text
                 style={{ fontSize: tabFontSize }}
                 className={`${
-                  activeKey === tab.key ? 'text-primary-700' : 'text-gray-700'
+                  tab.isPacked
+                    ? activeKey === tab.key ? 'text-green-800' : 'text-green-700'
+                    : activeKey === tab.key ? 'text-primary-700' : 'text-gray-700'
                 } font-semibold`}
               >
-                {tab.title}
+                {tab.title}{tab.isPacked ? ' ✓' : ''}
               </Text>
             </TouchableOpacity>
           ))}

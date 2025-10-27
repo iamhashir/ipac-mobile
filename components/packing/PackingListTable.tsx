@@ -13,6 +13,7 @@ export interface PackingRow {
   tare: number | null;
   netWeight: number | null;
   grossWeight: number | null;
+  isPacked?: boolean;
 }
 
 interface PackingListTableProps {
@@ -70,9 +71,15 @@ const PackingListTable: React.FC<PackingListTableProps> = ({ rows, onRowPress })
               key={r.id}
               activeOpacity={onRowPress ? 0.7 : 1}
               onPress={() => onRowPress && onRowPress(r.id)}
-              className={`m-2 p-3 rounded-lg border ${idx % 2 === 0 ? 'bg-white border-gray-200' : 'bg-gray-50 border-gray-200'}`}
+              className={`m-2 p-3 rounded-lg border ${
+                r.isPacked
+                  ? 'bg-green-50 border-green-300'
+                  : idx % 2 === 0 ? 'bg-white border-gray-200' : 'bg-gray-50 border-gray-200'
+              }`}
             >
-              <Text className="text-gray-800 font-semibold mb-2">Box #{r.packageNumber ?? '—'}</Text>
+              <Text className="text-gray-800 font-semibold mb-2">
+                Box #{r.packageNumber ?? '—'}{r.isPacked ? ' ✓' : ''}
+              </Text>
               <View className="flex-row flex-wrap">
                 {[
                   { label: 'Name of Equipment', value: r.equipmentName || '—' },
@@ -126,7 +133,11 @@ const PackingListTable: React.FC<PackingListTableProps> = ({ rows, onRowPress })
                 key={r.id}
                 activeOpacity={onRowPress ? 0.7 : 1}
                 onPress={() => onRowPress && onRowPress(r.id)}
-                className={`flex-row ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} border-b border-gray-100`}
+                className={`flex-row ${
+                  r.isPacked
+                    ? 'bg-green-50'
+                    : idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                } border-b border-gray-100`}
               >
                 {columns.map((c) => {
                   let value: string = '';

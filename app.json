@@ -6,7 +6,7 @@
     "orientation": "default",
     "icon": "./assets/ios-light.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "scheme": "ipac-operations-app",
     "splash": {
       "image": "./assets/splash-icon-dark.png",

@@ -51,14 +51,14 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
 
   const load = async () => {
     const [{ data: v }, { data: u }, { data: rows }] = await Promise.all([
-      db.getMaterialVariantsByTag('accessories'),
+      db.getMaterialVariantsByVariantTag('accessories'),
       db.getAllUnits(),
       db.getOrderPackageMaterials(orderPackageId),
     ] as any);
 
     console.log('📦 Accessories: loaded variants', v?.length || 0, 'units', u?.length || 0);
     if (!v || v.length === 0) {
-      console.warn('⚠️ No variants found with tag "accessories". Please add the "accessories" tag to materials in inventory.');
+      console.warn('⚠️ No variants found with tag "accessories". Please add the "accessories" tag to variants in inventory.');
     }
 
     setVariants((v || []).map((x: any) => ({ label: x.label, value: x.id || x.value })));
@@ -265,15 +265,24 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
       </View>
       <View style={{ flex: FLEX.actions }}>
         <View className="flex-row gap-2">
-          <TouchableOpacity
-            onPress={() => markUsed(row.id)}
-            className={`px-2 py-1 rounded bg-green-50 border border-green-600`}
-          >
-            <View className="flex-row items-center">
-              <Check size={18} color="#15803d" />
-              <Text className="text-green-700 text-xs ml-1">Use</Text>
+          {!row.item_used ? (
+            <TouchableOpacity
+              onPress={() => markUsed(row.id)}
+              className={`px-2 py-1 rounded bg-green-50 border border-green-600`}
+            >
+              <View className="flex-row items-center">
+                <Check size={18} color="#15803d" />
+                <Text className="text-green-700 text-xs ml-1">Use</Text>
+              </View>
+            </TouchableOpacity>
+          ) : (
+            <View className="px-2 py-1 rounded bg-gray-100 border border-gray-300">
+              <View className="flex-row items-center">
+                <Check size={18} color="#6b7280" />
+                <Text className="text-gray-600 text-xs ml-1">Used</Text>
+              </View>
             </View>
-          </TouchableOpacity>
+          )}
           <TouchableOpacity
             onPress={() => removeRow(row.id)}
             className="px-2 py-1 rounded bg-red-50 border border-red-600"
@@ -363,7 +372,7 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
                     <View className="px-3 py-4">
                       <Text className="text-gray-500 text-sm text-center">No items found.</Text>
                       <Text className="text-gray-400 text-xs text-center mt-1">
-                        Make sure materials are tagged with "accessories" in inventory.
+                        Make sure variants are tagged with "accessories" in inventory.
                       </Text>
                     </View>
                   ) : (

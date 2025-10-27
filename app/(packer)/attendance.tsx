@@ -240,6 +240,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
     try {
       // Get today's date
       const today = new Date().toISOString().split('T')[0];
+      let anyToolboxCompleted = false;
       
       // Load existing attendance records for each packer
       for (const packer of packersResponse) {
@@ -283,12 +284,18 @@ await loadExistingAttendance(packersResponse, initialAttendance);
             };
           }
           
-          // Check if toolbox briefing was completed for CURRENT shift only
+          // Check if toolbox briefing was completed for CURRENT shift
           const currentShift: TimePeriod = isAfternoon ? 'afternoon' : 'morning';
           if (attendanceRecords.some(r => r.shift_period === currentShift && r.toolbox_briefing_completed)) {
-            setToolboxCompleted(true);
+            anyToolboxCompleted = true;
           }
         }
+      }
+      
+      // Set toolbox completed if any packer has it marked for current shift
+      if (anyToolboxCompleted) {
+        setToolboxCompleted(true);
+        console.log('Toolbox briefing already completed for current shift');
       }
       
       // Update attendance state with loaded data
@@ -904,7 +911,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
 
           {/* Footer with Submit Button */}
           <View className="p-4 bg-gray-50 border-t border-gray-200 rounded-b-lg">
-            {!toolboxCompleted && hasPresentPackers && (
+            {!toolboxCompleted && (
               <TouchableOpacity
                 onPress={async () => {
                   try {

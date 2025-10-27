@@ -625,10 +625,34 @@ export const db = {
 
   // Get all packers with their current assignment status
   getAllPackersWithStatus: async () => {
+    // Query directly instead of using RPC to avoid caching issues
     const { data, error } = await supabase
-      .rpc('get_all_packers_with_status');
+      .from('profiles')
+      .select(`
+        id,
+        full_name,
+        username,
+        packer_status,
+        current_order_id,
+        orders:current_order_id (
+          order_name
+        )
+      `)
+      .eq('status', 'active')
+      .order('full_name');
     
-    return { data, error };
+    if (error) return { data: null, error };
+    
+    // Transform to match expected format
+    const transformed = (data || []).map(packer => ({
+      id: packer.id,
+      full_name: packer.full_name,
+      username: packer.username,
+      packer_status: packer.packer_status || 'available',
+      current_order_name: packer.orders?.order_name || null
+    }));
+    
+    return { data: transformed, error: null };
   },
 
   // Update project lead for an order
@@ -813,6 +837,97 @@ export const db = {
       });
     
     return { data, error };
+  },
+
+  // Remove a packer from an order (for team leads)
+  removePackerFromOrder: async (orderId, packerId) => {
+    try {
+      // 1. Remove from order_team_members
+      const { error: memberError } = await supabase
+        .from('order_team_members')
+        .delete()
+        .eq('order_id', orderId)
+        .eq('packer_id', packerId);
+      
+      if (memberError) throw memberError;
+      
+      // 2. DELETE all sessions for this packer (not just deactivate)
+      const { error: sessionError } = await supabase
+        .from('packer_sessions')
+        .delete()
+        .eq('packer_id', packerId);
+      
+      if (sessionError) console.warn('Session deletion failed:', sessionError);
+      
+      // 3. Update packer profile: set status to available AND clear current_order_id
+      const { error: statusError } = await supabase
+        .from('profiles')
+        .update({ 
+          packer_status: 'available',
+          current_order_id: null
+        })
+        .eq('id', packerId);
+      
+      if (statusError) console.warn('Status update failed:', statusError);
+      
+      console.log(`✅ Packer ${packerId} fully removed from order ${orderId}`);
+      return { data: { success: true }, error: null };
+    } catch (error) {
+      console.error('❌ Error in removePackerFromOrder:', error);
+      return { data: null, error };
+    }
+  },
+
+  // Add a packer to an existing order (for team leads)
+  addPackerToOrder: async (orderId, packerId, orderData) => {
+    try {
+      // 1. Add to order_team_members
+      const { error: memberError } = await supabase
+        .from('order_team_members')
+        .insert({
+          order_id: orderId,
+          packer_id: packerId,
+          is_team_lead: false
+        });
+      
+      if (memberError) throw memberError;
+      
+      // 2. Create session for this packer
+      const sessionData = {
+        packer_id: packerId,
+        order_id: orderId,
+        order_name: orderData.order_name,
+        client_name: orderData.client_name || orderData.clients?.name,
+        project_lead_name: orderData.project_lead_name || orderData.project_lead?.full_name,
+        team_selected: true,
+        attendance_completed: false,
+        packaging_started: false,
+        session_active: true
+      };
+      
+      const { error: sessionError } = await supabase
+        .from('packer_sessions')
+        .insert(sessionData);
+      
+      if (sessionError) console.warn('Session creation failed:', sessionError);
+      
+      // 3. Update packer profile: set status to busy AND set current_order_id
+      const { error: statusError } = await supabase
+        .from('profiles')
+        .update({ 
+          packer_status: 'busy',
+          current_order_id: orderId
+        })
+        .eq('id', packerId);
+      
+      if (statusError) console.warn('Status update failed:', statusError);
+      
+      console.log(`✅ Packer ${packerId} added to order ${orderId}`);
+      return { data: { success: true }, error: null };
+    } catch (error) {
+      console.error('❌ Error in addPackerToOrder:', error);
+      return { data: null, error };
+    }
   },
 
   // Check if attendance can be recorded (prevents spam clicking)
@@ -1537,6 +1652,146 @@ export const db = {
       .select('id')
       .single();
     return { data, error };
+  },
+
+  // Update order_package status (uses RPC for 'packed' to avoid RLS issues)
+  updateOrderPackageStatus: async (orderPackageId: string, status: string) => {
+    if (status === 'packed') {
+      const { error } = await supabase.rpc('mark_order_package_packed', { op_id: orderPackageId });
+      return { data: { id: orderPackageId }, error };
+    }
+    const { error } = await supabase
+      .from('order_packages')
+      .update({ status })
+      .eq('id', orderPackageId);
+    return { data: { id: orderPackageId }, error };
+  },
+
+  // Reset packer data for an order - removes all packer-entered data
+  resetPackerData: async (orderId: string) => {
+    try {
+      // Get all packages for this order
+      const { data: packages, error: pkgError } = await supabase
+        .from('order_packages')
+        .select('id, final_pkg_info')
+        .eq('order_id', orderId);
+
+      if (pkgError) throw pkgError;
+
+      const packageIds = (packages || []).map(p => p.id);
+      const finalInfoIds = (packages || []).map(p => p.final_pkg_info).filter(Boolean);
+
+      // 1. Delete order_package_materials created by packers (those without admin_added flag)
+      if (packageIds.length > 0) {
+        const { error: matError } = await supabase
+          .from('order_package_materials')
+          .delete()
+          .in('order_package_id', packageIds)
+          .is('admin_added', false);
+        if (matError) console.warn('Error deleting materials:', matError);
+      }
+
+      // 2. Delete tasks started by packers
+      if (packageIds.length > 0) {
+        const { error: taskError } = await supabase
+          .from('order_tasks')
+          .delete()
+          .in('order_package_id', packageIds);
+        if (taskError) console.warn('Error deleting tasks:', taskError);
+      }
+
+      // 3. Reset final package_info values to NULL
+      if (finalInfoIds.length > 0) {
+        const { error: infoError } = await supabase
+          .from('package_info')
+          .update({
+            quantity: null,
+            center_of_gravity: null,
+            box_type_id: null,
+            packing_type_id: null,
+            tare: null,
+            net_weight: null,
+            gross_weight: null,
+            internal_length: null,
+            internal_width: null,
+            internal_height: null,
+            external_length: null,
+            external_width: null,
+            external_height: null
+          })
+          .in('id', finalInfoIds);
+        if (infoError) console.warn('Error resetting package_info:', infoError);
+      }
+
+      // 4. Reset package_items final values to NULL
+      if (packageIds.length > 0) {
+        const { error: itemError } = await supabase
+          .from('package_items')
+          .update({ final_quantity: null })
+          .in('order_package_id', packageIds);
+        if (itemError) console.warn('Error resetting package_items:', itemError);
+      }
+
+      // 5. Reset order_packages status to pending
+      if (packageIds.length > 0) {
+        const { error: statusError } = await supabase
+          .from('order_packages')
+          .update({ status: 'pending' })
+          .in('id', packageIds);
+        if (statusError) console.warn('Error resetting package status:', statusError);
+      }
+
+      // 6. Reset final securing templates (delete and recreate empty)
+      if (packageIds.length > 0) {
+        for (const pkgId of packageIds) {
+          try {
+            // Get all final securing rows for this package
+            const { data: securingRows } = await supabase
+              .from('order_package_securing')
+              .select('id, securing_template_id')
+              .eq('order_package_id', pkgId)
+              .eq('is_final', true);
+
+            if (securingRows && securingRows.length > 0) {
+              for (const row of securingRows) {
+                if (row.securing_template_id) {
+                  // Get the template to find beam IDs
+                  const { data: template } = await supabase
+                    .from('securing_template')
+                    .select('horizontal_bar, vertical_bar, skids')
+                    .eq('id', row.securing_template_id)
+                    .single();
+
+                  // Delete beams
+                  if (template) {
+                    const beamIds = [template.horizontal_bar, template.vertical_bar, template.skids].filter(Boolean);
+                    if (beamIds.length > 0) {
+                      await supabase.from('beam').delete().in('id', beamIds);
+                    }
+                  }
+
+                  // Reset template fields to NULL
+                  await supabase
+                    .from('securing_template')
+                    .update({
+                      quantity: null,
+                      type_id: null,
+                      thickness: null
+                    })
+                    .eq('id', row.securing_template_id);
+                }
+              }
+            }
+          } catch (e) {
+            console.warn(`Error resetting securing for package ${pkgId}:`, e);
+          }
+        }
+      }
+
+      return { data: { success: true }, error: null };
+    } catch (e: any) {
+      return { data: null, error: e };
+    }
   },
 
   getAllPackingTypes: async () => {

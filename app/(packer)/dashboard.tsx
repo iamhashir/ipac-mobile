@@ -42,6 +42,7 @@ export default function PackerDashboard() {
   const [selectedPackers, setSelectedPackers] = useState<string[]>([]);
   const [projectLeads, setProjectLeads] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isTeamLead, setIsTeamLead] = useState(false);
   const [successAlert, setSuccessAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
   const [errorAlert, setErrorAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
 
@@ -57,10 +58,10 @@ export default function PackerDashboard() {
     }
   }, [session]);
 
-  // Load team leads when order is selected
+  // Load team leads when order is selected and check if current user is a lead
   useEffect(() => {
     const loadOrderTeamLeads = async () => {
-      if (!selectedOrder) return;
+      if (!selectedOrder || !profile?.id) return;
       
       try {
         // Use the new getOrderTeamLeads function
@@ -74,7 +75,15 @@ export default function PackerDashboard() {
         if (teamLeadsData && teamLeadsData.length > 0) {
           const leadIds = teamLeadsData.map((lead: any) => lead.packer_id);
           setProjectLeads(leadIds);
+          
+          // Check if current user is a team lead for this order
+          const userIsLead = leadIds.includes(profile.id);
+          setIsTeamLead(userIsLead);
+          
           console.log('Loaded existing team leads for order:', leadIds);
+          console.log('Current user is team lead:', userIsLead);
+        } else {
+          setIsTeamLead(false);
         }
       } catch (error) {
         console.error('Error loading team leads:', error);
@@ -82,7 +91,7 @@ export default function PackerDashboard() {
     };
     
     loadOrderTeamLeads();
-  }, [selectedOrder]);
+  }, [selectedOrder, profile?.id]);
 
   const restoreSessionState = async () => {
     if (!session || !session.order_id) return;
@@ -166,32 +175,68 @@ export default function PackerDashboard() {
   };
 
   const togglePackerSelection = (packerId: string) => {
-    // Only allow selection of available packers
     const packer = allPackers.find(p => p.id === packerId);
-    if (!packer?.is_available) return;
+    const isCurrentlySelected = selectedPackers.includes(packerId);
+    const isActiveSession = session && session.order_id === selectedOrder;
     
-    setSelectedPackers(prev => {
-      const isCurrentlySelected = prev.includes(packerId);
-      
-      if (isCurrentlySelected) {
-        // If deselecting this packer and they're a project lead, remove from leads
-        if (projectLeads.includes(packerId)) {
-          setProjectLeads(prevLeads => prevLeads.filter(id => id !== packerId));
+    // For orders with existing team: only allow team leads to modify selection
+    if (isActiveSession && !isTeamLead) {
+      setErrorAlert({visible: true, title: 'Permission Denied', message: 'Only team leads can modify team membership'});
+      return;
+    }
+    
+    if (isCurrentlySelected) {
+      // Deselecting a packer (removing from team)
+      // Check if this is a team lead trying to remove themselves
+      if (packerId === profile?.id && projectLeads.includes(packerId)) {
+        // Check if there are other team leads
+        const otherLeads = projectLeads.filter(id => id !== packerId);
+        if (otherLeads.length === 0) {
+          setErrorAlert({visible: true, title: 'Cannot Remove', message: 'You are the last team lead. Please assign another team lead before removing yourself.'});
+          return;
         }
-        return prev.filter(id => id !== packerId);
-      } else {
-        return [...prev, packerId];
       }
-    });
+      
+      // Update local state only - will save when Update button is clicked
+      if (projectLeads.includes(packerId)) {
+        setProjectLeads(prevLeads => prevLeads.filter(id => id !== packerId));
+      }
+      setSelectedPackers(prev => prev.filter(id => id !== packerId));
+    } else {
+      // Selecting a packer (adding to team)
+      if (!packer?.is_available) {
+        setErrorAlert({visible: true, title: 'Packer Unavailable', message: `${packer?.full_name || 'This packer'} is currently unavailable`});
+        return;
+      }
+      
+      // Update local state only - will save when Update button is clicked
+      setSelectedPackers(prev => [...prev, packerId]);
+    }
   };
 
   const toggleProjectLead = (packerId: string) => {
     // Only allow project lead selection from selected packers
-    if (!selectedPackers.includes(packerId)) return;
+    if (!selectedPackers.includes(packerId)) {
+      setErrorAlert({visible: true, title: 'Cannot Assign', message: 'Please select this packer as a team member first'});
+      return;
+    }
+    
+    const isActiveSession = session && session.order_id === selectedOrder;
+    
+    // For orders with existing team: only allow team leads to modify lead assignments
+    if (isActiveSession && !isTeamLead) {
+      setErrorAlert({visible: true, title: 'Permission Denied', message: 'Only team leads can assign team lead roles'});
+      return;
+    }
     
     // Toggle this packer as a project lead (supports multiple leads)
     setProjectLeads(prev => {
       if (prev.includes(packerId)) {
+        // Removing lead status - check if this is the last lead
+        if (prev.length === 1) {
+          setErrorAlert({visible: true, title: 'Cannot Remove', message: 'At least one team lead is required. Please assign another team lead first.'});
+          return prev;
+        }
         // Remove from leads
         return prev.filter(id => id !== packerId);
       } else {
@@ -217,41 +262,10 @@ export default function PackerDashboard() {
       return;
     }
 
+    const isActiveSession = session && session.order_id === selectedOrder;
+
     try {
-      // Assign packers to order
-      const { error: assignError } = await db.assignPackersToOrder(selectedOrder, selectedPackers);
-      
-      if (assignError) {
-        setErrorAlert({visible: true, title: 'Assignment Failed', message: 'Failed to assign team to project'});
-        return;
-      }
-
-      // Assign team leads using the new multi-lead system
-      if (projectLeads.length > 0) {
-        // Clear existing leads first for clean assignment
-        await teamLead.removeAllTeamLeads(selectedOrder);
-        
-        // Add each selected lead
-        for (const leadId of projectLeads) {
-          const { error: teamLeadError } = await teamLead.addTeamLead(selectedOrder, leadId);
-          if (teamLeadError) {
-            console.error('Error assigning team lead:', leadId, teamLeadError);
-            // Don't block navigation, continue with other leads
-          } else {
-            console.log('Team lead assigned successfully:', leadId);
-          }
-        }
-        
-        // Update order.project_lead_id with the first lead (for backward compatibility)
-        const { error: updateLeadError } = await db.updateProjectLead(selectedOrder, projectLeads[0]);
-        if (updateLeadError) {
-          console.warn('Project lead update (orders table) failed:', updateLeadError);
-        } else {
-          console.log('Order updated with project lead and status set to in_progress (if pending).');
-        }
-      }
-
-      // Get order details for session creation
+      // Get order details first
       const { data: orderData, error: orderError } = await db.getOrderById(selectedOrder);
       if (orderError || !orderData) {
         console.error('Error getting order details:', orderError);
@@ -259,33 +273,115 @@ export default function PackerDashboard() {
         return;
       }
 
-      // Create sessions for all selected packers (team-based sessions)
-      const { data: teamSessions, error: sessionError } = await db.createTeamSessions(selectedOrder, orderData, selectedPackers);
-      if (sessionError || !teamSessions) {
-        console.error('Failed to create team sessions:', sessionError);
-        setErrorAlert({visible: true, title: 'Session Warning', message: 'Failed to create team sessions, but you can continue'});
-        // Don't block navigation if session creation fails
-      } else {
-        console.log(`Created ${teamSessions.length} team sessions for selected packers`);
-        setSuccessAlert({visible: true, title: 'Team Assigned Successfully', message: `Created sessions for ${teamSessions.length} team members`});
+      if (isActiveSession) {
+        // For active sessions, handle additions and removals
+        const { data: currentPackers } = await db.getOrderPackers(selectedOrder);
+        const currentPackerIds = (currentPackers || []).map(p => p.packer_id || p.id);
         
-        // Update the current user's session in context if they're part of the selected team
-        if (profile?.id && selectedPackers.includes(profile.id)) {
-          const userSession = teamSessions.find(s => s.packer_id === profile.id);
-          if (userSession && createSession) {
-            // Update the session context with the user's session
-            await createSession(selectedOrder, orderData);
+        // Find packers to add
+        const packersToAdd = selectedPackers.filter(id => !currentPackerIds.includes(id));
+        
+        // Find packers to remove
+        const packersToRemove = currentPackerIds.filter(id => !selectedPackers.includes(id));
+        
+        // Remove packers
+        for (const packerId of packersToRemove) {
+          const { error } = await db.removePackerFromOrder(selectedOrder, packerId);
+          if (error) {
+            console.error('Error removing packer:', packerId, error);
           }
         }
-      }
-
-      // Navigate to attendance screen
-      router.push({
-        pathname: '/(packer)/attendance',
-        params: { 
-          orderId: selectedOrder
+        
+        // Add packers
+        for (const packerId of packersToAdd) {
+          const { error } = await db.addPackerToOrder(selectedOrder, packerId, orderData);
+          if (error) {
+            console.error('Error adding packer:', packerId, error);
+          }
         }
-      });
+        
+        // Update team leads
+        await teamLead.removeAllTeamLeads(selectedOrder);
+        for (const leadId of projectLeads) {
+          await teamLead.addTeamLead(selectedOrder, leadId);
+        }
+        
+        // Update order.project_lead_id
+        await db.updateProjectLead(selectedOrder, projectLeads[0]);
+        
+        setSuccessAlert({visible: true, title: 'Team Updated', message: 'Team changes saved successfully'});
+        
+        // Force complete reload with a small delay to allow database to update
+        setTimeout(async () => {
+          await loadData();
+          // Reload the order team leads to get fresh state
+          const { data: teamLeadsData } = await teamLead.getOrderTeamLeads(selectedOrder);
+          if (teamLeadsData && teamLeadsData.length > 0) {
+            const leadIds = teamLeadsData.map((lead: any) => lead.packer_id);
+            setProjectLeads(leadIds);
+            setIsTeamLead(leadIds.includes(profile?.id || ''));
+          }
+        }, 500);
+      } else {
+        // New assignment - original flow
+        // Assign packers to order
+        const { error: assignError } = await db.assignPackersToOrder(selectedOrder, selectedPackers);
+        
+        if (assignError) {
+          setErrorAlert({visible: true, title: 'Assignment Failed', message: 'Failed to assign team to project'});
+          return;
+        }
+
+        // Assign team leads using the new multi-lead system
+        if (projectLeads.length > 0) {
+          // Clear existing leads first for clean assignment
+          await teamLead.removeAllTeamLeads(selectedOrder);
+          
+          // Add each selected lead
+          for (const leadId of projectLeads) {
+            const { error: teamLeadError } = await teamLead.addTeamLead(selectedOrder, leadId);
+            if (teamLeadError) {
+              console.error('Error assigning team lead:', leadId, teamLeadError);
+            } else {
+              console.log('Team lead assigned successfully:', leadId);
+            }
+          }
+          
+          // Update order.project_lead_id with the first lead (for backward compatibility)
+          const { error: updateLeadError } = await db.updateProjectLead(selectedOrder, projectLeads[0]);
+          if (updateLeadError) {
+            console.warn('Project lead update (orders table) failed:', updateLeadError);
+          } else {
+            console.log('Order updated with project lead and status set to in_progress (if pending).');
+          }
+        }
+
+        // Create sessions for all selected packers (team-based sessions)
+        const { data: teamSessions, error: sessionError } = await db.createTeamSessions(selectedOrder, orderData, selectedPackers);
+        if (sessionError || !teamSessions) {
+          console.error('Failed to create team sessions:', sessionError);
+          setErrorAlert({visible: true, title: 'Session Warning', message: 'Failed to create team sessions, but you can continue'});
+        } else {
+          console.log(`Created ${teamSessions.length} team sessions for selected packers`);
+          setSuccessAlert({visible: true, title: 'Team Assigned Successfully', message: `Created sessions for ${teamSessions.length} team members`});
+          
+          // Update the current user's session in context if they're part of the selected team
+          if (profile?.id && selectedPackers.includes(profile.id)) {
+            const userSession = teamSessions.find(s => s.packer_id === profile.id);
+            if (userSession && createSession) {
+              await createSession(selectedOrder, orderData);
+            }
+          }
+        }
+
+        // Navigate to attendance screen
+        router.push({
+          pathname: '/(packer)/attendance',
+          params: { 
+            orderId: selectedOrder
+          }
+        });
+      }
     } catch (error) {
       console.error('Error assigning team:', error);
       setErrorAlert({visible: true, title: 'Unexpected Error', message: 'An unexpected error occurred'});
@@ -478,7 +574,10 @@ export default function PackerDashboard() {
                 allPackers.map((packer) => {
                   const isSelected = selectedPackers.includes(packer.id);
                   const isProjectLead = projectLeads.includes(packer.id);
-                  const canBeProjectLead = isSelected && packer.is_available;
+                  const canBeProjectLead = isSelected;
+                  
+                  // Allow deselection if user is team lead or if it's a new assignment
+                  const canInteract = packer.is_available || (isSelected && (isTeamLead || !session));
 
                   const cardCls = `${isCompact ? 'p-2' : 'p-3'} mb-2 rounded-lg border flex-row items-center justify-between ${
                     isSelected
@@ -491,9 +590,9 @@ export default function PackerDashboard() {
                   return (
                     <TouchableOpacity
                       key={packer.id}
-                      onPress={() => packer.is_available && togglePackerSelection(packer.id)}
-                      activeOpacity={packer.is_available ? 0.7 : 1}
-                      disabled={!packer.is_available}
+                      onPress={() => canInteract && togglePackerSelection(packer.id)}
+                      activeOpacity={canInteract ? 0.7 : 1}
+                      disabled={!canInteract}
                       className={cardCls}
                     >
                       <View className="flex-row items-center flex-1">
@@ -510,20 +609,28 @@ export default function PackerDashboard() {
                           }`}>
                             {packer.full_name}
                           </Text>
-                          {!packer.is_available && packer.current_order_name && (
+                          {!isSelected && !packer.is_available && packer.current_order_name && (
                             <Text className="text-[11px] text-gray-400 mt-0.5">
                               Working on: {packer.current_order_name}
                             </Text>
                           )}
-                          {!packer.is_available && !packer.current_order_name && (
+                          {!isSelected && !packer.is_available && !packer.current_order_name && (
                             <Text className="text-[11px] text-gray-400 mt-0.5">
                               Status: {packer.packer_status}
+                            </Text>
+                          )}
+                          {isSelected && selectedOrder && (
+                            <Text className="text-[11px] text-primary-600 mt-0.5">
+                              Selected for this project
                             </Text>
                           )}
                         </View>
                       </View>
                       <TouchableOpacity 
-                        onPress={() => toggleProjectLead(packer.id)}
+                        onPress={(e) => {
+                          e.stopPropagation();
+                          toggleProjectLead(packer.id);
+                        }}
                         activeOpacity={canBeProjectLead ? 0.7 : 1}
                         disabled={!canBeProjectLead}
                       >
@@ -547,8 +654,8 @@ export default function PackerDashboard() {
           </View>
         </View>
 
-        {/* Next Button - Only show if no active session */}
-        {!session && (
+        {/* Next/Update Button - Always show when order is selected */}
+        {selectedOrder && (
           <View className={`${isCompact ? 'mt-3' : 'mt-4'} flex-row justify-end`}>
             <TouchableOpacity
               onPress={handleNext}
@@ -564,21 +671,9 @@ export default function PackerDashboard() {
                   ? 'text-white'
                   : 'text-gray-500'
               }`}>
-                ▷ Next
+                {session && session.order_id === selectedOrder ? '✓ Update Team' : '▷ Next'}
               </Text>
             </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Session Active Message */}
-        {session && (
-          <View className={`${isCompact ? 'mt-3 p-3' : 'mt-4 p-4'} bg-blue-50 border border-blue-200 rounded-lg`}>
-            <Text className="text-blue-800 font-medium text-center">
-              ✓ Team session active for: {session.order_name}
-            </Text>
-            <Text className="text-blue-600 text-xs md:text-sm text-center mt-1">
-              Use navigation buttons above to continue your work
-            </Text>
           </View>
         )}
       </View>

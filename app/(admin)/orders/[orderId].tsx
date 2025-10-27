@@ -33,8 +33,23 @@ export default function OrderDetailsPage() {
   const [packTypeHasGas, setPackTypeHasGas] = useState<Record<string, boolean>>({});
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [deleteModal, setDeleteModal] = useState<{ visible: boolean; packageId: string; packageNumber: number | null }>({ visible: false, packageId: '', packageNumber: null });
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
 
   useEffect(() => { if (orderId) load(); }, [orderId]);
+
+  const handleResetPackerData = async () => {
+    try {
+      const { error } = await db.resetPackerData(orderId);
+      if (error) {
+        console.warn('Failed to reset packer data:', error);
+      }
+      setResetConfirmOpen(false);
+      await load();
+    } catch (e) {
+      console.error('Unexpected error while resetting packer data:', e);
+      setResetConfirmOpen(false);
+    }
+  };
 
   const load = async () => {
     try {
@@ -104,6 +119,9 @@ export default function OrderDetailsPage() {
       <View className="px-6 py-4 bg-white border-b border-gray-200 flex-row items-center justify-between">
         <Text className="text-2xl font-bold text-gray-900">Order Details</Text>
         <View className="flex-row gap-2">
+          <TouchableOpacity onPress={() => setResetConfirmOpen(true)} className="bg-red-600 px-3 py-2 rounded-lg">
+            <Text className="text-white">Reset Packer Data</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => setShowAddBox(true)} className="bg-primary-600 px-3 py-2 rounded-lg">
             <Text className="text-white">Add Box</Text>
           </TouchableOpacity>
@@ -310,6 +328,18 @@ export default function OrderDetailsPage() {
         variant="danger"
         onCancel={() => setConfirmOpen(false)}
         onConfirm={() => { setConfirmOpen(false); setAllowOriginalEdits(true); }}
+      />
+
+      {/* Reset packer data confirmation modal */}
+      <ConfirmModal
+        visible={resetConfirmOpen}
+        title="Reset All Packer Data"
+        description="This will remove all data entered by packers including: materials added, tasks started, final values for package items and info, and securing templates. This action cannot be undone. Are you sure?"
+        confirmText="Reset All Data"
+        cancelText="Cancel"
+        variant="danger"
+        onCancel={() => setResetConfirmOpen(false)}
+        onConfirm={handleResetPackerData}
       />
     </SafeAreaView>
   );

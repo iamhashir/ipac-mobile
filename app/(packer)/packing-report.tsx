@@ -201,6 +201,7 @@ export default function PackingReportPage() {
         tare: info?.tare ?? null,
         netWeight: info?.net_weight ?? null,
         grossWeight: info?.gross_weight ?? null,
+        isPacked: p.status === 'packed',
       };
     });
   }, [orderPackages, pkgInfoMap, equipmentMap, boxTypes, packingTypes]);
@@ -264,6 +265,7 @@ export default function PackingReportPage() {
       return {
         key: p.id,
         title: `Box #${p.package_number ?? ''}`,
+        isPacked: p.status === 'packed',
         content: (
           <View>
             <BoxDetailsTab 
@@ -281,6 +283,8 @@ export default function PackingReportPage() {
               finalBoxTypeId={final?.box_type_id || null}
               originalPackingTypeId={original?.packing_type_id || null}
               finalPackingTypeId={final?.packing_type_id || null}
+              status={p.status}
+              onStatusChange={loadData}
             />
 
             {/* Per-package Task Management (collapsible, white background, rounded, separated by main blue bg) */}
