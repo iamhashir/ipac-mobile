@@ -74,7 +74,7 @@ interface OrderSecuringSectionProps {
       };
       const designation = designationMap[activeTab];
       const sideLabel = activeTab.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
-      const notes = `Securing - ${sideLabel}`;
+      const notes = `Manufacturing - ${sideLabel}`;
       
       const { data, error } = await db.uploadMediaToStorage(orderPackageId, uri, designation, notes);
       if (error) {
@@ -317,7 +317,7 @@ interface OrderSecuringSectionProps {
   return (
     <View style={{ marginTop: 8, marginBottom: 24, borderWidth: 1, borderColor: '#bfdbfe', borderRadius: 12, marginHorizontal: 16, backgroundColor: '#eff6ff' }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 16 }}>
-        <Text style={{ color: '#1e40af', fontWeight: '600', fontSize: titleFontSize }}>Securing</Text>
+        <Text style={{ color: '#1e40af', fontWeight: '600', fontSize: titleFontSize }}>Manufacturing</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           {/* Camera button */}
           <TouchableOpacity

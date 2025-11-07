@@ -65,7 +65,7 @@ export default function AttendanceScreen() {
   const [order, setOrder] = useState<Order | null>(null);
   const [packers, setPackers] = useState<string[]>([]);
   const [packersData, setPackersData] = useState<any[]>([]);
-  const [projectLead, setProjectLead] = useState<string>('');
+  const [projectLeads, setProjectLeads] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [attendance, setAttendance] = useState<AttendanceRecord>({});
   const [toolboxCompleted, setToolboxCompleted] = useState(false);
@@ -175,14 +175,24 @@ export default function AttendanceScreen() {
         return;
       }
       setOrder(orderData);
-      setProjectLead(orderData.project_lead_name);
 
-      // Fallback: if order has no project_lead_name, fetch team lead from team members
-      if (!orderData.project_lead_name) {
-        const { data: leadData, error: leadError } = await teamLead.getOrderTeamLead(orderId);
-        if (!leadError && leadData?.profiles?.full_name) {
-          setProjectLead(leadData.profiles.full_name);
+      // Load all team leads for this order; fallback to project_lead_name or single lead if needed
+      try {
+        const { data: leadsList, error: leadsErr } = await teamLead.getOrderTeamLeads(orderId);
+        if (!leadsErr && Array.isArray(leadsList) && leadsList.length > 0) {
+          setProjectLeads(leadsList.map((l: any) => l.full_name).filter(Boolean));
+        } else if (orderData.project_lead_name) {
+          setProjectLeads([orderData.project_lead_name]);
+        } else {
+          const { data: leadData } = await teamLead.getOrderTeamLead(orderId);
+          if (leadData?.profiles?.full_name) {
+            setProjectLeads([leadData.profiles.full_name]);
+          } else {
+            setProjectLeads([]);
+          }
         }
+      } catch (_) {
+        setProjectLeads(orderData.project_lead_name ? [orderData.project_lead_name] : []);
       }
 
       // Load packer details
@@ -223,10 +233,7 @@ export default function AttendanceScreen() {
       // Load existing attendance data from database
 await loadExistingAttendance(packersResponse, initialAttendance);
 
-      // Fetch project lead
-      if (orderData.project_lead_name) {
-        setProjectLead(orderData.project_lead_name);
-      }
+      // Project leads already loaded above
 
     } catch (error) {
       console.error('Error in loadData:', error);
@@ -371,8 +378,17 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       if (!canRecord) {
         Alert.alert(
           'Already Recorded', 
-          `${name} already has active attendance for ${period}. Please mark their end time first if they need to restart their shift.`,
-          [{ text: 'OK', style: 'default' }]
+          `${name} already has active attendance for ${period}.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { 
+              text: 'Change Attendance', 
+              style: 'destructive', 
+              onPress: async () => {
+                await handleOverrideAttendance(name, period, true);
+              }
+            }
+          ]
         );
         return;
       }
@@ -380,7 +396,27 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       // When marking as present, automatically set start time and record attendance
       await recordAttendanceForPacker(name, period);
     } else {
-      // When marking as absent, record this in the database and update local state
+      // If switching to absent and there is active attendance, confirm override first
+      const { data: active } = await db.getActiveAttendance(orderId, packerData.packer_id || packerData.id, period);
+      if (active) {
+        Alert.alert(
+          'Already Recorded', 
+          `${name} already has active attendance for ${period}.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { 
+              text: 'Change Attendance', 
+              style: 'destructive', 
+              onPress: async () => {
+                await handleOverrideAttendance(name, period, false);
+              }
+            }
+          ]
+        );
+        return;
+      }
+      
+      // When marking as absent without active record, record in DB and update local state
       await recordAbsentForPacker(name, period);
     }
   };
@@ -708,6 +744,30 @@ await loadExistingAttendance(packersResponse, initialAttendance);
     }
   };
 
+  const handleOverrideAttendance = async (name: string, period: TimePeriod, toPresent: boolean) => {
+    const packerData = packersData.find(p => p.full_name === name);
+    if (!packerData) {
+      Alert.alert('Error', 'Packer data not found');
+      return;
+    }
+
+    try {
+      // 1) End any active attendance record (present/absent without end_time)
+      const endIso = new Date().toISOString();
+      await db.updateAttendanceEndTimeByDetails(orderId, packerData.packer_id || packerData.id, period, endIso);
+
+      // 2) Apply the requested change
+      if (toPresent) {
+        await recordAttendanceForPacker(name, period);
+      } else {
+        await recordAbsentForPacker(name, period);
+      }
+    } catch (error) {
+      console.error('Error overriding attendance:', error);
+      Alert.alert('Error', 'Failed to change attendance');
+    }
+  };
+
   const getCurrentTime = () => {
     const now = new Date();
     return now.toLocaleTimeString('en-GB', {
@@ -885,7 +945,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
           {order && (
             <ProjectHeader 
               projectName={order.order_name}
-              projectLead={projectLead}
+              projectLeads={projectLeads}
               packers={packers}
             />
           )}

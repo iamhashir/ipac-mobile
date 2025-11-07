@@ -241,7 +241,11 @@ const FilteredMaterialsSection: React.FC<FilteredMaterialsSectionProps> = ({ ord
       </View>
       <View style={{ flex: FLEX.actions }}>
         <View className="flex-row gap-2">
-          <TouchableOpacity onPress={() => markUsed(row.id)} className="px-2 py-1 rounded bg-green-50 border border-green-600"><View className="flex-row items-center"><Check size={18} color="#15803d" /><Text className="text-green-700 text-xs ml-1">Use</Text></View></TouchableOpacity>
+          {row.item_used ? (
+            <View className="px-2 py-1 rounded bg-gray-200"><Text className="text-gray-600 text-xs">Used</Text></View>
+          ) : (
+            <TouchableOpacity onPress={() => markUsed(row.id)} className="px-2 py-1 rounded bg-green-50 border border-green-600"><View className="flex-row items-center"><Check size={18} color="#15803d" /><Text className="text-green-700 text-xs ml-1">Use</Text></View></TouchableOpacity>
+          )}
           <TouchableOpacity onPress={() => removeRow(row.id)} className="px-2 py-1 rounded bg-red-50 border border-red-600"><View className="flex-row items-center"><X size={18} color="#ff0000" /><Text className="text-red-800 text-xs ml-1">Remove</Text></View></TouchableOpacity>
         </View>
       </View>
@@ -295,20 +299,36 @@ const FilteredMaterialsSection: React.FC<FilteredMaterialsSectionProps> = ({ ord
             <TextInput value={formQuantity} onChangeText={(t) => { setFormQuantity(t); setError((e) => ({ ...e, quantity: undefined })); }} keyboardType="numeric" className="border border-gray-300 rounded p-2 mb-1 bg-white" placeholder="e.g. 1" />
             {error.quantity ? (<Text className="text-red-600 text-xs mb-2">{error.quantity}</Text>) : <View className="mb-1" />}
 
-            {/* Unit */}
+            {/* Unit - Always allow selection */}
             <Text className="text-sm text-gray-700 mb-1">Unit<Text className="text-red-600">*</Text></Text>
-            {formVariant && variants.find(v => v.value === formVariant)?.unit_id ? (
-              <View className="flex-row items-center mb-2"><View className="px-2 py-1 rounded bg-slate-100 border border-slate-200"><Text className="text-slate-700 text-xs">{unitsMap[variants.find(v => v.value === formVariant)?.unit_id as string] || '—'}</Text></View><Text className="text-[10px] text-gray-500 ml-2">Auto-selected from material</Text></View>
-            ) : (
-              <>
-                <TouchableOpacity onPress={() => setUnitOpen(v => !v)} className="border border-gray-300 rounded p-2 mb-1 bg-white"><View className="flex-row items-center justify-between"><Text className="text-gray-800">{formUnit ? (unitsMap[formUnit] || '—') : 'Select unit'}</Text><ChevronDown size={16} color="#374151" /></View></TouchableOpacity>
-                {error.unit ? (<Text className="text-red-600 text-xs mb-2">{error.unit}</Text>) : <View className="mb-1" />}
-                {unitOpen && (
-                  <View className="max-h-40 border border-gray-200 rounded mb-2 bg-white"><ScrollView>{units.map((u) => (
-                    <TouchableOpacity key={u.value} onPress={() => { setFormUnit(u.value); setError((e)=>({ ...e, unit: undefined })); setUnitOpen(false); }} className="px-3 py-2"><Text className="text-gray-800">{u.label}</Text></TouchableOpacity>
-                  ))}</ScrollView></View>
-                )}
-              </>
+            <TouchableOpacity onPress={() => setUnitOpen(v => !v)} className="border border-gray-300 rounded p-2 mb-1 bg-white">
+              <View className="flex-row items-center justify-between">
+                <Text className="text-gray-800">{formUnit ? (unitsMap[formUnit] || '—') : 'Select unit'}</Text>
+                <ChevronDown size={16} color="#374151" />
+              </View>
+            </TouchableOpacity>
+            {formVariant && variants.find(v => v.value === formVariant)?.unit_id && (
+              <Text className="text-[10px] text-gray-500 mb-1">Default: {unitsMap[variants.find(v => v.value === formVariant)?.unit_id as string]}</Text>
+            )}
+            {error.unit ? (<Text className="text-red-600 text-xs mb-2">{error.unit}</Text>) : <View className="mb-1" />}
+            {unitOpen && (
+              <View className="max-h-40 border border-gray-200 rounded mb-2 bg-white">
+                <ScrollView>
+                  {units.map((u) => (
+                    <TouchableOpacity 
+                      key={u.value} 
+                      onPress={() => { 
+                        setFormUnit(u.value); 
+                        setError((e)=>({ ...e, unit: undefined })); 
+                        setUnitOpen(false); 
+                      }} 
+                      className="px-3 py-2"
+                    >
+                      <Text className="text-gray-800">{u.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
             )}
 
             {/* Length / Width */}

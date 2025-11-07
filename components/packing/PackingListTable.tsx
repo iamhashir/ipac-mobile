@@ -7,13 +7,21 @@ export interface PackingRow {
   orderQuantity: number | null;
   equipmentName: string; // aggregated from package_items
   centerOfGravity: boolean | null;
+  centerOfGravityIsFinal?: boolean;
   boxQuantity: number | null;
+  boxQuantityIsFinal?: boolean;
   boxTypeName: string;
+  boxTypeIsFinal?: boolean;
   packingTypeName: string;
+  packingTypeIsFinal?: boolean;
   tare: number | null;
+  tareIsFinal?: boolean;
   netWeight: number | null;
+  netWeightIsFinal?: boolean;
   grossWeight: number | null;
-  isPacked?: boolean;
+  grossWeightIsFinal?: boolean;
+  isPacked?: boolean; // Box completed (blue)
+  isStarted?: boolean; // Box has tasks started (green)
 }
 
 interface PackingListTableProps {
@@ -28,6 +36,24 @@ const PackingListTable: React.FC<PackingListTableProps> = ({ rows, onRowPress })
   const isTiny = width < 600; // phones
   const isSmall = width >= 600 && width < 900; // small tablets/phones landscape
   const isMedium = width >= 900 && width < 1280; // tablets
+
+  // Helper to render value with source indicator (matching TwoTierEditableCard style)
+  const renderValueWithIndicator = (value: string, isFinal?: boolean) => {
+    if (value === '—' || isFinal === undefined) {
+      return <Text className="text-gray-800" numberOfLines={2}>{value}</Text>;
+    }
+    
+    const bannerText = isFinal ? 'Final' : 'Original';
+    const bannerBg = isFinal ? 'bg-green-100' : 'bg-amber-100';
+    const bannerTextColor = isFinal ? 'text-green-900' : 'text-amber-900';
+    
+    return (
+      <View>
+        <Text className={`text-[9px] ${bannerTextColor} ${bannerBg} text-center px-1 mb-0.5`}>{bannerText}</Text>
+        <Text className="text-gray-800" numberOfLines={2}>{value}</Text>
+      </View>
+    );
+  };
 
   type ColKey =
     | 'box' | 'name' | 'cog' | 'boxQty' | 'boxType' | 'packType' | 'tare' | 'net' | 'gross';
@@ -73,6 +99,8 @@ const PackingListTable: React.FC<PackingListTableProps> = ({ rows, onRowPress })
               onPress={() => onRowPress && onRowPress(r.id)}
               className={`m-2 p-3 rounded-lg border ${
                 r.isPacked
+                  ? 'bg-blue-50 border-blue-300'
+                  : r.isStarted
                   ? 'bg-green-50 border-green-300'
                   : idx % 2 === 0 ? 'bg-white border-gray-200' : 'bg-gray-50 border-gray-200'
               }`}
@@ -82,18 +110,20 @@ const PackingListTable: React.FC<PackingListTableProps> = ({ rows, onRowPress })
               </Text>
               <View className="flex-row flex-wrap">
                 {[
-                  { label: 'Name of Equipment', value: r.equipmentName || '—' },
-                  { label: 'Center of Gravity', value: yesNo(r.centerOfGravity) },
-                  { label: 'Box Quantity', value: fmt(r.boxQuantity) },
-                  { label: 'Box Type', value: r.boxTypeName || '—' },
-                  { label: 'Packing Type', value: r.packingTypeName || '—' },
-                  { label: 'Tare', value: fmt(r.tare) },
-                  { label: 'Net Weight', value: fmt(r.netWeight) },
-                  { label: 'Gross Weight', value: fmt(r.grossWeight) },
+                  { label: 'Name of Equipment', value: r.equipmentName || '—', isFinal: undefined },
+                  { label: 'Center of Gravity', value: yesNo(r.centerOfGravity), isFinal: r.centerOfGravityIsFinal },
+                  { label: 'Box Quantity', value: fmt(r.boxQuantity), isFinal: r.boxQuantityIsFinal },
+                  { label: 'Box Type', value: r.boxTypeName || '—', isFinal: r.boxTypeIsFinal },
+                  { label: 'Packing Type', value: r.packingTypeName || '—', isFinal: r.packingTypeIsFinal },
+                  { label: 'Tare', value: fmt(r.tare), isFinal: r.tareIsFinal },
+                  { label: 'Net Weight', value: fmt(r.netWeight), isFinal: r.netWeightIsFinal },
+                  { label: 'Gross Weight', value: fmt(r.grossWeight), isFinal: r.grossWeightIsFinal },
                 ].map((item) => (
                   <View key={item.label} className="w-1/2 p-1">
                     <Text className="text-gray-500 text-[11px]">{item.label}</Text>
-                    <Text className="text-gray-800 text-[13px]" numberOfLines={2}>{item.value}</Text>
+                    <View className="mt-0.5">
+                      {renderValueWithIndicator(item.value, item.isFinal)}
+                    </View>
                   </View>
                 ))}
               </View>
@@ -135,28 +165,52 @@ const PackingListTable: React.FC<PackingListTableProps> = ({ rows, onRowPress })
                 onPress={() => onRowPress && onRowPress(r.id)}
                 className={`flex-row ${
                   r.isPacked
+                    ? 'bg-blue-50'
+                    : r.isStarted
                     ? 'bg-green-50'
                     : idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                 } border-b border-gray-100`}
               >
                 {columns.map((c) => {
                   let value: string = '';
-              switch (c.key) {
+                  let isFinal: boolean | undefined = undefined;
+                  
+                  switch (c.key) {
                     case 'box': value = r.packageNumber ?? ('—' as any); break;
                     case 'name': value = r.equipmentName || '—'; break;
-                    case 'cog': value = yesNo(r.centerOfGravity); break;
-                    case 'boxQty': value = fmt(r.boxQuantity); break;
-                    case 'boxType': value = r.boxTypeName || '—'; break;
-                    case 'packType': value = r.packingTypeName || '—'; break;
-                    case 'tare': value = fmt(r.tare); break;
-                    case 'net': value = fmt(r.netWeight); break;
-                    case 'gross': value = fmt(r.grossWeight); break;
+                    case 'cog': 
+                      value = yesNo(r.centerOfGravity);
+                      isFinal = r.centerOfGravityIsFinal;
+                      break;
+                    case 'boxQty': 
+                      value = fmt(r.boxQuantity);
+                      isFinal = r.boxQuantityIsFinal;
+                      break;
+                    case 'boxType': 
+                      value = r.boxTypeName || '—';
+                      isFinal = r.boxTypeIsFinal;
+                      break;
+                    case 'packType': 
+                      value = r.packingTypeName || '—';
+                      isFinal = r.packingTypeIsFinal;
+                      break;
+                    case 'tare': 
+                      value = fmt(r.tare);
+                      isFinal = r.tareIsFinal;
+                      break;
+                    case 'net': 
+                      value = fmt(r.netWeight);
+                      isFinal = r.netWeightIsFinal;
+                      break;
+                    case 'gross': 
+                      value = fmt(r.grossWeight);
+                      isFinal = r.grossWeightIsFinal;
+                      break;
                   }
+                  
                   return (
                     <View key={c.key} className="px-3 py-2 border-r border-gray-200" style={{ flex: c.flex }}>
-                      <Text className="text-gray-800" numberOfLines={2}>
-                        {String(value)}
-                      </Text>
+                      {renderValueWithIndicator(value, isFinal)}
                     </View>
                   );
                 })}

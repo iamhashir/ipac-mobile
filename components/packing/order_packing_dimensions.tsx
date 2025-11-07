@@ -15,11 +15,13 @@ export interface OrderPackingDimensionsProps {
     original: DimensionsTriple | null | undefined;
     final: DimensionsTriple | null | undefined;
   };
+  editable?: boolean;
+  onChange?: () => void; // Callback when data changes
 }
 
 type PartialTriple = Partial<DimensionsTriple>;
 
-const OrderPackingDimensions: React.FC<OrderPackingDimensionsProps> = ({ orderPackageId, originalInfoId, finalInfoId, internal, external }) => {
+const OrderPackingDimensions: React.FC<OrderPackingDimensionsProps> = ({ orderPackageId, originalInfoId, finalInfoId, internal, external, editable = true, onChange }) => {
   // Local mirror of final dimensions to make inputs controlled and responsive
   const [currentFinal, setCurrentFinal] = useState<{ internal: DimensionsTriple | null; external: DimensionsTriple | null }>({
     internal: internal?.final || null,
@@ -46,9 +48,19 @@ const OrderPackingDimensions: React.FC<OrderPackingDimensionsProps> = ({ orderPa
         width: next.width,
         height: next.height,
       }).then((res: any) => {
-        if (!finalId && res?.data?.final_pkg_info) {
+        if (res?.error) {
+          console.error('Error saving dimensions:', res.error);
+          const { Alert } = require('react-native');
+          const errorMsg = res.error?.message || res.error?.details || 'Failed to save dimensions';
+          Alert.alert('Error', `Failed to save: ${errorMsg}`);
+        } else if (!finalId && res?.data?.final_pkg_info) {
           setFinalId(res.data.final_pkg_info);
         }
+        // Don't call onChange here - it causes reload on every keystroke
+      }).catch((err: any) => {
+        console.error('Unexpected error saving dimensions:', err);
+        const { Alert } = require('react-native');
+        Alert.alert('Error', 'Unexpected error while saving dimensions');
       });
       return { ...prev, [scope]: next } as any;
     });

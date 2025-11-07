@@ -27,6 +27,7 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
 
   const [taskTypes, setTaskTypes] = useState<{ id: string; name: string }[]>([]);
   const [taskLogs, setTaskLogs] = useState<any[]>([]);
+  const [allTaskLogs, setAllTaskLogs] = useState<any[]>([]); // All tasks across all packages for busy indicator
 
   const [activeKey, setActiveKey] = useState('overview');
   const [openTaskIds, setOpenTaskIds] = useState<string[]>([]);
@@ -41,6 +42,8 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
   const [consolidateOpen, setConsolidateOpen] = useState(false);
   const [selectedPackageIds, setSelectedPackageIds] = useState<string[]>(orderPackages.length ? [orderPackages[0].id] : []);
   const [notes, setNotes] = useState<string>('');
+  const [isCreatingTask, setIsCreatingTask] = useState(false);
+  const isCreatingTaskRef = useRef(false); // Ref for immediate blocking
 
   // List of ALL boxes in this order for consolidation UI
   const [allOrderPackages, setAllOrderPackages] = useState<{ id: string; package_number: number | null }[]>([]);
@@ -106,6 +109,45 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
     };
   }, [orderId]);
 
+  // Refresh logs when orderPackages changes (when switching between box tabs)
+  useEffect(() => {
+    if (isMountedRef.current && orderPackages.length > 0) {
+      refreshLogs();
+      
+      // Clean up openTaskIds to only keep tasks that belong to current packages
+      // This prevents showing task tabs from other boxes when switching
+      if (orderPackages.length === 1 && openTaskIds.length > 0) {
+        // We need to check which open tasks belong to the current package
+        // Filter will happen in the tabs useMemo, but we should also close any active detail tabs
+        // that don't belong to current box to avoid showing stale data
+        if (activeKey.startsWith('task:')) {
+          setActiveKey('overview'); // Switch back to overview when changing boxes
+        }
+      }
+    }
+  }, [orderPackages]);
+
+  // Fetch ALL tasks across all packages for busy indicator
+  const refreshAllTaskLogs = async () => {
+    if (allOrderPackages.length === 0) return;
+    
+    const allPackageIds = allOrderPackages.map(p => p.id);
+    const { data: allData } = await db.getTaskLogsByOrderPackageIds(allPackageIds);
+    setAllTaskLogs(allData || []);
+  };
+
+  // Refresh all task logs when allOrderPackages changes or periodically
+  useEffect(() => {
+    if (allOrderPackages.length > 0) {
+      refreshAllTaskLogs();
+    }
+  }, [allOrderPackages]);
+
+  // Also refresh all task logs when main task logs refresh
+  useEffect(() => {
+    refreshAllTaskLogs();
+  }, [taskLogs]);
+
   const refreshLogs = async () => {
     let data;
     if (orderPackages.length === 1) {
@@ -114,7 +156,12 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
       if (packageError) {
         console.error('Error fetching task logs for package:', packageError);
       }
-      data = packageData;
+      // Filter tasks to only include those that have this specific package in task_packages
+      const currentPackageId = orderPackages[0].id;
+      data = (packageData || []).filter((log: any) => {
+        const taskPackageIds = (log.task_packages || []).map((tp: any) => tp.order_package_id);
+        return taskPackageIds.includes(currentPackageId);
+      });
     } else {
       // Multi-package mode (overview) - get tasks for all packages
       const ids = orderPackages.map(op => op.id);
@@ -257,16 +304,24 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
     if (!activeKey.startsWith('task:')) return;
     
     const id = activeKey.replace('task:', '');
-    const log = (taskLogs as any[]).find(l => l.id === id);
-    if (!log) return;
     
-    setCurrentDetailTaskId(id);
-    const assigned = (log.task_assignments || []).map((a: any) => a.packer_id).filter(Boolean);
-    setCurrentDetailAssignedPackers(assigned);
-    setSelectedPackerIds(assigned);
-    setDetailNotesMap(prev => ({ ...prev, [id]: prev[id] ?? (log?.notes || '') }));
-    
+    // Refresh logs to get latest data when switching to a task tab
     (async () => {
+      await refreshLogs();
+      
+      const log = (taskLogs as any[]).find(l => l.id === id);
+      if (!log) return;
+      
+      setCurrentDetailTaskId(id);
+      // Filter only non-completed assignments
+      const assigned = (log.task_assignments || [])
+        .filter((a: any) => a.task_status !== 'completed')
+        .map((a: any) => a.packer_id)
+        .filter(Boolean);
+      setCurrentDetailAssignedPackers(assigned);
+      setSelectedPackerIds(assigned);
+      setDetailNotesMap(prev => ({ ...prev, [id]: prev[id] ?? (log?.notes || '') }));
+      
       const { data: linked } = await db.getTaskPackages(id);
       setCurrentDetailPackages(linked || []);
       setSelectedPackageIds(linked && linked.length ? linked : (orderPackages.length ? [orderPackages[0].id] : []));
@@ -293,7 +348,7 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
               <Text className="text-gray-500 text-sm mt-1">press create task button to start task</Text>
             </View>
           ) : (
-            <View className="px-4 py-3">
+            <ScrollView style={{ maxHeight: 400 }} className="px-4 py-3">
               <TaskLogsTable
                 rows={taskLogs as any}
                 orderPackageId={orderPackages.length === 1 ? orderPackages[0].id : undefined}
@@ -308,19 +363,26 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                   const now = Date.now();
                   const isPaused = pausedTaskIds.has(id);
                   
+                  // Get the current task to find active (non-completed) packers
+                  const task = (taskLogs as any[]).find(t => t.id === id);
+                  const activePackerIds = (task?.task_assignments || [])
+                    .filter((a: any) => a.task_status !== 'completed')
+                    .map((a: any) => a.packer_id)
+                    .filter(Boolean);
+                  
                   if (!isPaused) {
-                    // PAUSE: Set status to paused, increment counter, record start time
-                    await db.updateTaskAssignmentsStatus(id, 'paused');
+                    // PAUSE: Set status to paused for active assignments only
+                    await db.updateTaskAssignmentsStatus(id, 'paused', activePackerIds);
                     await db.incrementTaskLogCounter(id);
                     setPauseStartMap(prev => ({ ...prev, [id]: now }));
                   } else {
-                    // RESUME: Calculate pause duration, add to total, set status back to in_progress, increment counter
+                    // RESUME: Calculate pause duration, set status back to in_progress for active assignments only
                     const pauseStartTime = pauseStartMap[id] || now;
                     const deltaSec = Math.max(0, Math.floor((now - pauseStartTime) / 1000));
                     
                     // Add pause duration and increment counter
                     await db.addPauseDuration(id, deltaSec);
-                    await db.updateTaskAssignmentsStatus(id, 'in_progress');
+                    await db.updateTaskAssignmentsStatus(id, 'in_progress', activePackerIds);
                     
                     // Clear pause start time
                     const copy = { ...pauseStartMap };
@@ -359,7 +421,7 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                   setActiveKey(`task:${id}`);
                 }}
               />
-            </View>
+            </ScrollView>
           )}
         </View>
       ),
@@ -447,9 +509,16 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
               <Text className="text-blue-700 text-center font-medium">Consolidate Packages</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              className={`px-4 py-3 rounded-lg flex-1 ml-2 ${(!selectedTaskTypeId || !selectedPackageIds.length || !selectedPackerIds.length) ? 'bg-gray-300' : 'bg-green-50 border border-green-600'}`}
-              disabled={!selectedTaskTypeId || !selectedPackageIds.length || !selectedPackerIds.length}
+              className={`px-4 py-3 rounded-lg flex-1 ml-2 ${(!selectedTaskTypeId || !selectedPackageIds.length || !selectedPackerIds.length || isCreatingTask) ? 'bg-gray-300' : 'bg-green-50 border border-green-600'}`}
+              disabled={!selectedTaskTypeId || !selectedPackageIds.length || !selectedPackerIds.length || isCreatingTask}
               onPress={async () => {
+                    // IMMEDIATELY block using ref (synchronous check)
+                    if (isCreatingTaskRef.current) {
+                      console.log('Task creation already in progress, ignoring duplicate press');
+                      return;
+                    }
+                    
+                    // Basic validation before locking
                     if (!selectedTaskTypeId) {
                       Alert.alert('Select task', 'Please select a task type.');
                       return;
@@ -463,44 +532,63 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                       return;
                     }
 
-                    // Refresh busy map to be safe
-                    await refreshBusyStatus();
-                    const busyChosen = selectedPackerIds.filter(id => busyPackerIds.has(id));
-                    if (busyChosen.length) {
-                      Alert.alert('Packer busy', 'One or more selected packers are currently in progress on another task.');
-                      return;
-                    }
+                    // LOCK immediately with ref (synchronous)
+                    isCreatingTaskRef.current = true;
+                    setIsCreatingTask(true);
+                    
+                    try {
+                      // Refresh busy map to be safe
+                      await refreshBusyStatus();
+                      const busyChosen = selectedPackerIds.filter(id => busyPackerIds.has(id));
+                      if (busyChosen.length) {
+                        Alert.alert('Packer busy', 'One or more selected packers are currently in progress on another task.');
+                        return;
+                      }
 
-                  const { data, error } = await db.startTaskForPackages({
-                    taskTypeId: selectedTaskTypeId,
-                    orderPackageIds: selectedPackageIds,
-                    packerIds: selectedPackerIds,
-                    notes: notes || null,
-                  });
-                  if (!error && data?.task_log_id) {
-                    await refreshLogs();
-                    await refreshBusyStatus();
-                    // persist detail tab for the new task
-                    setOpenTaskIds(prev => [...prev, data.task_log_id]);
-                    // Switch to overview tab after starting task
-                    setActiveKey('overview');
-                    // reset selections (keep task for convenience)
-                    setSelectedPackerIds([]);
-                    setNotes('');
-                  }
-                    // reset selections (keep task for convenience)
-                    setSelectedPackerIds([]);
-                    setNotes('');
+                      const { data, error } = await db.startTaskForPackages({
+                        taskTypeId: selectedTaskTypeId,
+                        orderPackageIds: selectedPackageIds,
+                        packerIds: selectedPackerIds,
+                        notes: notes || null,
+                      });
+                      
+                      if (!error && data?.task_log_id) {
+                        // Switch to overview FIRST (immediate user feedback)
+                        setActiveKey('overview');
+                        
+                        // Then refresh data in background
+                        await refreshLogs();
+                        await refreshBusyStatus();
+                        
+                        // persist detail tab for the new task
+                        setOpenTaskIds(prev => [...prev, data.task_log_id]);
+                        
+                        // reset selections (keep task for convenience)
+                        setSelectedPackerIds([]);
+                        setNotes('');
+                      } else if (error) {
+                        Alert.alert('Error', 'Failed to create task. Please try again.');
+                      }
+                    } catch (err) {
+                      console.error('Error creating task:', err);
+                      Alert.alert('Error', 'An unexpected error occurred.');
+                    } finally {
+                      // UNLOCK
+                      isCreatingTaskRef.current = false;
+                      setIsCreatingTask(false);
+                    }
                   }}
                 >
-                  <Text className={`text-center font-medium ${(!selectedTaskTypeId || !selectedPackageIds.length || !selectedPackerIds.length) ? 'text-gray-600' : 'text-green-700'}`}>Start Task</Text>
+                  <Text className={`text-center font-medium ${(!selectedTaskTypeId || !selectedPackageIds.length || !selectedPackerIds.length || isCreatingTask) ? 'text-gray-600' : 'text-green-700'}`}>
+                    {isCreatingTask ? 'Creating...' : 'Start Task'}
+                  </Text>
                 </TouchableOpacity>
           </View>
 
           {/* Consolidate modal */}
-          <Modal visible={consolidateOpen} transparent animationType="fade" onRequestClose={() => setConsolidateOpen(false)}>
-            <TouchableOpacity className="flex-1 bg-black/30 justify-center items-center" activeOpacity={1} onPress={() => setConsolidateOpen(false)}>
-              <TouchableOpacity className="bg-white rounded-xl p-4 w-4/5 max-h-[70%]" activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+          <Modal visible={consolidateOpen} transparent animationType="none" onRequestClose={() => setConsolidateOpen(false)}>
+            <View className="flex-1 bg-black/30 justify-center items-center">
+              <View className="bg-white rounded-xl p-4 w-4/5 max-h-[70%]">
                 <Text className="text-gray-800 font-semibold mb-3">Consolidate with boxes</Text>
                 <ScrollView>
                   <View className="flex-row flex-wrap">
@@ -526,18 +614,40 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                     <Text className="text-blue-700">Done</Text>
                   </TouchableOpacity>
                 </View>
-              </TouchableOpacity>
-            </TouchableOpacity>
+              </View>
+            </View>
           </Modal>
         </View>
       ),
     };
 
-    // Create detail tabs for openTaskIds
-    const details: TabDefinition[] = openTaskIds.map((id) => {
+    // Create detail tabs for openTaskIds - but only for tasks that belong to current packages
+    const details: TabDefinition[] = openTaskIds
+      .filter((id) => {
+        // Check if this task belongs to any of the current orderPackages
+        const log = (taskLogs as any[]).find(l => l.id === id);
+        if (!log) return false;
+        
+        // Get the package IDs for this task
+        const taskPackageIds = (log.task_packages || []).map((tp: any) => tp.order_package_id);
+        
+        // If we're in single-package mode, only show tasks for that specific package
+        if (orderPackages.length === 1) {
+          return taskPackageIds.includes(orderPackages[0].id);
+        }
+        
+        // In multi-package mode, show tasks for any of the current packages
+        const currentPackageIds = orderPackages.map(op => op.id);
+        return taskPackageIds.some(tpId => currentPackageIds.includes(tpId));
+      })
+      .map((id) => {
       const log = (taskLogs as any[]).find(l => l.id === id);
       const title = log?.tasks?.name ? `Task: ${log.tasks.name}` : 'Task Detail';
-      const assignedIds = (log?.task_assignments || []).map((a: any) => a.packer_id).filter(Boolean);
+      // Filter only non-completed assignments for accurate count
+      const assignedIds = (log?.task_assignments || [])
+        .filter((a: any) => a.task_status !== 'completed')
+        .map((a: any) => a.packer_id)
+        .filter(Boolean);
       const detailTaskTypeId = log?.task_id || null;
       const detailNotes = detailNotesMap[id] ?? (log?.notes || '');
 
@@ -647,6 +757,9 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
 
                   await refreshLogs();
                   await refreshBusyStatus();
+                  
+                  // Redirect to overview tab
+                  setActiveKey('overview');
                 }}
               >
                 <Text className={`text-center font-medium ${hasChanges ? 'text-green-700' : 'text-gray-600'}`}>Update Task</Text>
@@ -654,9 +767,9 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
             </View>
 
             {/* Consolidate modal (reused) */}
-            <Modal visible={consolidateOpen} transparent animationType="fade" onRequestClose={() => setConsolidateOpen(false)}>
-              <TouchableOpacity className="flex-1 bg-black/30 justify-center items-center" activeOpacity={1} onPress={() => setConsolidateOpen(false)}>
-                <TouchableOpacity className="bg-white rounded-xl p-4 w-4/5 max-h-[70%]" activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+            <Modal visible={consolidateOpen} transparent animationType="none" onRequestClose={() => setConsolidateOpen(false)}>
+              <View className="flex-1 bg-black/30 justify-center items-center">
+                <View className="bg-white rounded-xl p-4 w-4/5 max-h-[70%]">
                   <Text className="text-gray-800 font-semibold mb-3">Consolidate with boxes</Text>
                   <ScrollView>
                     <View className="flex-row flex-wrap">
@@ -682,8 +795,8 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                       <Text className="text-blue-700">Done</Text>
                     </TouchableOpacity>
                   </View>
-                </TouchableOpacity>
-              </TouchableOpacity>
+                </View>
+              </View>
             </Modal>
           </View>
         ),
@@ -709,20 +822,43 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
   }, [teamPackers, busyPackerIds, idToName]);
 
   const busyDetails = useMemo(() => {
-    // Map packer -> set of task names from active logs
-    const map: Record<string, Set<string>> = {};
-    const activeLogs = (taskLogs || []).filter((l: any) => !l.end_time);
+    // Use allTaskLogs (all tasks across all packages) instead of just taskLogs (current view)
+    const activeLogs = (allTaskLogs || []).filter((l: any) => !l.end_time);
+    
+    // Group by task, then show packers and boxes for each task
+    const taskMap: Record<string, { taskName: string; packerIds: Set<string>; boxNumbers: Set<number | null> }> = {};
+    
     activeLogs.forEach((log: any) => {
       const taskName = log?.tasks?.name || 'Task';
-      (log.task_assignments || []).forEach((a: any) => {
-        if (a?.packer_id && ['in_progress', 'paused'].includes(a.task_status)) {
-          if (!map[a.packer_id]) map[a.packer_id] = new Set<string>();
-          map[a.packer_id].add(taskName);
-        }
+      const taskId = log.id;
+      
+      // Get box numbers for this task
+      const packageIds = (log.task_packages || []).map((tp: any) => tp.order_package_id).filter(Boolean);
+      const boxNumbers = packageIds.map((pkgId: string) => {
+        const pkg = allOrderPackages.find(p => p.id === pkgId);
+        return pkg?.package_number ?? null;
       });
+      
+      // Get active packers for this task
+      const activePackers = (log.task_assignments || [])
+        .filter((a: any) => a?.packer_id && ['in_progress', 'paused'].includes(a.task_status))
+        .map((a: any) => a.packer_id);
+      
+      if (activePackers.length > 0) {
+        if (!taskMap[taskId]) {
+          taskMap[taskId] = { taskName, packerIds: new Set(), boxNumbers: new Set(boxNumbers) };
+        }
+        activePackers.forEach((pid: string) => taskMap[taskId].packerIds.add(pid));
+      }
     });
-    return Object.keys(map).map(pid => ({ name: idToName[pid] || pid, task: Array.from(map[pid]).join(', ') }));
-  }, [taskLogs, idToName]);
+    
+    // Convert to display format: group by task, show all packers and boxes
+    return Object.values(taskMap).map(({ taskName, packerIds, boxNumbers }) => {
+      const packerNames = Array.from(packerIds).map(pid => idToName[pid] || pid).join(', ');
+      const boxList = Array.from(boxNumbers).map(num => `Box #${num ?? '—'}`).join(', ');
+      return { task: taskName, packers: packerNames, boxes: boxList };
+    });
+  }, [allTaskLogs, idToName, allOrderPackages]);
 
   return (
     <View>
@@ -758,14 +894,24 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
       {/* Busy modal */}
       <Modal visible={showBusyModal} transparent animationType="fade" onRequestClose={() => setShowBusyModal(false)}>
         <View className="flex-1 bg-black/30 justify-center items-center">
-          <View className="bg-white rounded-xl p-4 w-4/5">
-            <Text className="text-gray-800 font-semibold mb-2">Busy Packers</Text>
+          <View className="bg-white rounded-xl p-4 w-4/5 max-h-[80%]">
+            <Text className="text-gray-800 font-semibold mb-3 text-lg">Active Tasks</Text>
             {busyDetails.length === 0 ? (
-              <Text className="text-gray-600">No one is busy right now.</Text>
+              <Text className="text-gray-600">No active tasks right now.</Text>
             ) : (
-              busyDetails.map((d, i) => (
-                <Text key={i} className="text-gray-800 mb-1">• {d.name} — {d.task}</Text>
-              ))
+              <ScrollView>
+                {busyDetails.map((d, i) => (
+                  <View key={i} className="mb-3 p-2 bg-gray-50 rounded">
+                    <Text className="text-gray-800 font-semibold mb-1">{d.task}</Text>
+                    <Text className="text-gray-700 text-sm">
+                      <Text className="font-medium">Packers:</Text> {d.packers}
+                    </Text>
+                    <Text className="text-gray-700 text-sm">
+                      <Text className="font-medium">Boxes:</Text> {d.boxes}
+                    </Text>
+                  </View>
+                ))}
+              </ScrollView>
             )}
             <TouchableOpacity className="mt-3 self-end" onPress={() => setShowBusyModal(false)}>
               <Text className="text-primary-700 font-semibold">Close</Text>

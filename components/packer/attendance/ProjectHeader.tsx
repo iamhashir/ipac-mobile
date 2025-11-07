@@ -3,13 +3,13 @@ import { View, Text } from "react-native";
 
 interface ProjectHeaderProps {
   projectName: string;
-  projectLead: string;
+  projectLeads: string[];
   packers: string[];
 }
 
 export const ProjectHeader: React.FC<ProjectHeaderProps> = ({ 
   projectName, 
-  projectLead, 
+  projectLeads, 
   packers 
 }) => {
   return (
@@ -20,8 +20,8 @@ export const ProjectHeader: React.FC<ProjectHeaderProps> = ({
           <Text className="text-lg font-semibold text-gray-900">{projectName}</Text>
         </View>
         <View className="w-full md:w-1/2">
-          <Text className="text-gray-500 font-medium text-sm mb-1">Project Lead:</Text>
-          <Text className="text-lg font-semibold text-gray-900">{projectLead}</Text>
+          <Text className="text-gray-500 font-medium text-sm mb-1">Team Leads:</Text>
+          <Text className="text-lg font-semibold text-gray-900">{projectLeads.length > 0 ? projectLeads.join(', ') : '-'}</Text>
         </View>
       </View>
       

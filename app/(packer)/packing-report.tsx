@@ -62,12 +62,24 @@ export default function PackingReportPage() {
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeKey, setActiveKey] = useState<string>('list');
+  const [previousKey, setPreviousKey] = useState<string>('list');
+  
+  // Reload data when switching back to the packing list tab from a box tab
+  const handleTabChange = (newKey: string) => {
+    // If switching to 'list' from a box tab, reload data to get latest changes
+    if (newKey === 'list' && previousKey !== 'list') {
+      loadData();
+    }
+    setPreviousKey(activeKey);
+    setActiveKey(newKey);
+  };
 
   const [orderPackages, setOrderPackages] = useState<OrderPackage[]>([]);
   const [pkgInfoMap, setPkgInfoMap] = useState<Record<string, PackageInfo>>({});
   const [boxTypes, setBoxTypes] = useState<Record<string, string>>({});
   const [packingTypes, setPackingTypes] = useState<Record<string, string>>({});
   const [equipmentMap, setEquipmentMap] = useState<Record<string, string>>({}); // order_package_id -> aggregated names
+  const [boxStartedMap, setBoxStartedMap] = useState<Record<string, boolean>>({}); // order_package_id -> has started tasks
 
   // Check permissions only once when session loading is complete
   useEffect(() => {
@@ -171,6 +183,19 @@ export default function PackingReportPage() {
           else if (label) em[key] = `${em[key]}, ${label}`;
         });
         setEquipmentMap(em);
+        
+        // Check which boxes have started tasks (any task_packages entries)
+        const { supabase } = await import('../../utils/api/supabase');
+        const { data: taskPackages } = await supabase
+          .from('task_packages')
+          .select('order_package_id')
+          .in('order_package_id', opIds);
+        
+        const startedMap: Record<string, boolean> = {};
+        (taskPackages || []).forEach((tp: any) => {
+          startedMap[tp.order_package_id] = true;
+        });
+        setBoxStartedMap(startedMap);
       }
 
     } catch (e) {
@@ -188,23 +213,50 @@ export default function PackingReportPage() {
 
   const rows: PackingRow[] = useMemo(() => {
     return orderPackages.map(p => {
-      const info = p.final_pkg_info ? pkgInfoMap[p.final_pkg_info] : undefined;
+      // Get original and final info
+      const originalInfo = p.original_pkg_info ? pkgInfoMap[p.original_pkg_info] : undefined;
+      const finalInfo = p.final_pkg_info ? pkgInfoMap[p.final_pkg_info] : undefined;
+      
+      // Helper to get value and track source: use final if exists, otherwise fall back to original
+      const getValue = <T,>(finalVal: T | null | undefined, originalVal: T | null | undefined): { value: T | null; isFinal: boolean } => {
+        // If final value exists and is not null/undefined, use it
+        if (finalVal !== null && finalVal !== undefined) return { value: finalVal, isFinal: true };
+        // Otherwise use original value
+        return { value: originalVal ?? null, isFinal: false };
+      };
+      
+      const centerOfGravity = getValue(finalInfo?.center_of_gravity, originalInfo?.center_of_gravity);
+      const boxQuantity = getValue(finalInfo?.quantity, originalInfo?.quantity);
+      const boxTypeId = getValue(finalInfo?.box_type_id, originalInfo?.box_type_id);
+      const packingTypeId = getValue(finalInfo?.packing_type_id, originalInfo?.packing_type_id);
+      const tare = getValue(finalInfo?.tare, originalInfo?.tare);
+      const netWeight = getValue(finalInfo?.net_weight, originalInfo?.net_weight);
+      const grossWeight = getValue(finalInfo?.gross_weight, originalInfo?.gross_weight);
+      
       return {
         id: p.id,
         packageNumber: p.package_number ?? null,
         orderQuantity: p.quantity ?? null,
         equipmentName: equipmentMap[p.id] || '—',
-        centerOfGravity: info?.center_of_gravity ?? null,
-        boxQuantity: info?.quantity ?? null,
-        boxTypeName: info?.box_type_id ? (boxTypes[info.box_type_id] || '—') : '—',
-        packingTypeName: info?.packing_type_id ? (packingTypes[info.packing_type_id] || '—') : '—',
-        tare: info?.tare ?? null,
-        netWeight: info?.net_weight ?? null,
-        grossWeight: info?.gross_weight ?? null,
+        centerOfGravity: centerOfGravity.value,
+        centerOfGravityIsFinal: centerOfGravity.isFinal,
+        boxQuantity: boxQuantity.value,
+        boxQuantityIsFinal: boxQuantity.isFinal,
+        boxTypeName: boxTypeId.value ? (boxTypes[boxTypeId.value] || '—') : '—',
+        boxTypeIsFinal: boxTypeId.isFinal,
+        packingTypeName: packingTypeId.value ? (packingTypes[packingTypeId.value] || '—') : '—',
+        packingTypeIsFinal: packingTypeId.isFinal,
+        tare: tare.value,
+        tareIsFinal: tare.isFinal,
+        netWeight: netWeight.value,
+        netWeightIsFinal: netWeight.isFinal,
+        grossWeight: grossWeight.value,
+        grossWeightIsFinal: grossWeight.isFinal,
         isPacked: p.status === 'packed',
+        isStarted: boxStartedMap[p.id] || false,
       };
     });
-  }, [orderPackages, pkgInfoMap, equipmentMap, boxTypes, packingTypes]);
+  }, [orderPackages, pkgInfoMap, equipmentMap, boxTypes, packingTypes, boxStartedMap]);
 
   const tabs: TabDefinition[] = useMemo(() => {
     const listTab: TabDefinition = {
@@ -213,7 +265,7 @@ export default function PackingReportPage() {
       content: (
         <PackingListTable
           rows={rows}
-          onRowPress={(id) => setActiveKey(id)}
+          onRowPress={(id) => handleTabChange(id)}
         />
       ),
     };
@@ -266,6 +318,7 @@ export default function PackingReportPage() {
         key: p.id,
         title: `Box #${p.package_number ?? ''}`,
         isPacked: p.status === 'packed',
+        isStarted: boxStartedMap[p.id] || false,
         content: (
           <View>
             <BoxDetailsTab 
@@ -288,26 +341,37 @@ export default function PackingReportPage() {
             />
 
             {/* Per-package Task Management (collapsible, white background, rounded, separated by main blue bg) */}
-            <View 
-              className="mx-4 mt-4 mb-4"
-              onLayout={(event) => {
-                const { y } = event.nativeEvent.layout;
-                sectionRefs.current['items'] = y;
-              }}
-            >
-              <CollapsibleCard
-                title="Task Management"
-                containerClassName="bg-white border-gray-500"
-                headerClassName=""
-                contentClassName=""
-                defaultOpen={true}
+            {p.status !== 'packed' ? (
+              <View 
+                className="mx-4 mt-4 mb-4"
+                onLayout={(event) => {
+                  const { y } = event.nativeEvent.layout;
+                  sectionRefs.current['items'] = y;
+                }}
               >
-                <OrderTasksManagement
-                  orderId={orderId}
-                  orderPackages={[{ id: p.id, package_number: p.package_number }]}
-                />
-              </CollapsibleCard>
-            </View>
+                <CollapsibleCard
+                  title="Task Management"
+                  containerClassName="bg-white border-gray-500"
+                  headerClassName=""
+                  contentClassName=""
+                  defaultOpen={true}
+                >
+                  <OrderTasksManagement
+                    orderId={orderId}
+                    orderPackages={[{ id: p.id, package_number: p.package_number }]}
+                  />
+                </CollapsibleCard>
+              </View>
+            ) : (
+              <View className="mx-4 mt-4 mb-4 bg-blue-50 border border-blue-300 rounded-lg p-4">
+                <Text className="text-blue-800 font-semibold text-center">
+                  ✓ Box Completed - Task Management Locked
+                </Text>
+                <Text className="text-blue-600 text-sm text-center mt-1">
+                  Click "Undo Completion" to make changes
+                </Text>
+              </View>
+            )}
 
             {/* Securing section */}
             <View
@@ -316,7 +380,7 @@ export default function PackingReportPage() {
                 sectionRefs.current['securing'] = y;
               }}
             >
-              <OrderSecuringSection orderPackageId={p.id} editTarget="final" editable={true} autoSave={false} />
+              <OrderSecuringSection orderPackageId={p.id} editTarget="final" editable={p.status !== 'packed'} autoSave={false} />
             </View>
 
             {/* Gas packing (Final packing type) */}
@@ -326,7 +390,7 @@ export default function PackingReportPage() {
               const hasGas = (finalId && packTypeHasGas[finalId]) || (originalId && packTypeHasGas[originalId]);
               return hasGas ? (
                 <View>
-                  <GasPackingSection orderPackageId={p.id} />
+                  <GasPackingSection orderPackageId={p.id} editable={p.status !== 'packed'} />
                 </View>
               ) : null;
             })()}
@@ -338,7 +402,7 @@ export default function PackingReportPage() {
               const hasVac = (finalId && packTypeHasVacuum[finalId]) || (originalId && packTypeHasVacuum[originalId]);
               return hasVac ? (
                 <View>
-                  <VacuumPackingSection orderPackageId={p.id} />
+                  <VacuumPackingSection orderPackageId={p.id} editable={p.status !== 'packed'} />
                 </View>
               ) : null;
             })()}
@@ -350,7 +414,7 @@ export default function PackingReportPage() {
                 sectionRefs.current['accessories'] = y;
               }}
             >
-              <AccessoriesSection orderPackageId={p.id} />
+              <AccessoriesSection orderPackageId={p.id} editable={p.status !== 'packed'} />
             </View>
           </View>
         ),
@@ -358,7 +422,7 @@ export default function PackingReportPage() {
     });
 
     return [listTab, ...boxTabs];
-  }, [rows, orderPackages, orderId, pkgInfoMap, boxTypes, packingTypes]);
+  }, [rows, orderPackages, orderId, pkgInfoMap, boxTypes, packingTypes, boxStartedMap, packTypeHasVacuum, packTypeHasGas]);
 
   const handleBack = () => router.back();
   const handleSignOut = async () => {
@@ -444,7 +508,7 @@ export default function PackingReportPage() {
             sectionRefs.current['info'] = y;
           }}
         >
-          <TabLayout tabs={tabs} activeKey={activeKey} onChange={setActiveKey} />
+          <TabLayout tabs={tabs} activeKey={activeKey} onChange={handleTabChange} />
         </View>
 
       </ScrollView>

@@ -25,9 +25,10 @@ export interface OrderPackingInfoProps {
   finalPackingTypeId?: string | null;
   editTarget?: 'original' | 'final';
   editable?: boolean;
+  onChange?: () => void; // Callback when data changes
 }
 
-const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, originalInfoId, finalInfoId, orderPackageId, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, editTarget = 'final', editable = true }) => {
+const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, originalInfoId, finalInfoId, orderPackageId, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, editTarget = 'final', editable = true, onChange }) => {
   const [boxTypes, setBoxTypes] = useState<{ label: string; value: string }[]>([]);
   const [packTypes, setPackTypes] = useState<{ label: string; value: string; labelShort?: string; tooltip?: string }[]>([]);
   const [finalId, setFinalId] = useState<string | null>(finalInfoId || null);
@@ -45,7 +46,12 @@ const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, or
   const ensureFinal = async (): Promise<string | null> => {
     if (finalId) return finalId;
     const { data, error } = await db.ensureFinalPackageInfo({ orderPackageId, finalInfoId, originalInfoId });
-    if (error) { Alert.alert('Error', 'Failed to create final package info'); return null; }
+    if (error) {
+      console.error('Error creating final package info:', error);
+      const errorMsg = error?.message || error?.details || 'Failed to create final package info';
+      Alert.alert('Error', `Failed to save: ${errorMsg}`);
+      return null;
+    }
     setFinalId(data?.id || null);
     return data?.id || null;
   };
@@ -57,8 +63,19 @@ const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, or
     } else {
       targetId = originalInfoId || null;
     }
-    if (!targetId) return;
-    await db.updatePackageInfo(targetId, fields);
+    if (!targetId) {
+      console.error('Cannot save: no target package info ID');
+      return;
+    }
+    
+    const { error } = await db.updatePackageInfo(targetId, fields);
+    if (error) {
+      console.error('Error updating package info:', error);
+      const errorMsg = error?.message || error?.details || 'Failed to save changes';
+      Alert.alert('Error', `Failed to save: ${errorMsg}`);
+    }
+    // Don't call onChange here - it causes reload on every keystroke
+    // Parent will reload when switching tabs or when needed
   };
 
   return (

@@ -108,7 +108,7 @@ const OrderPackagesEditor: React.FC<OrderPackagesEditorProps> = ({ orderId, onDo
                           setActiveSecuringFor({ id: p.id, number: p.package_number });
                         }}
                       >
-                        <Text className="text-blue-700 font-medium">Securing</Text>
+                        <Text className="text-blue-700 font-medium">Manufacturing</Text>
                       </TouchableOpacity>
                     </View>
                   </View>

@@ -36,7 +36,9 @@ const formatTime = (iso: string | null) => {
   if (!iso) return '—';
   try {
     const d = new Date(iso);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const date = d.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return `${date} ${time}`;
   } catch {
     return '—';
   }
@@ -65,8 +67,7 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
   allOrderPackages = []
 }) => {
   const { size } = useTextSize();
-  const [packersModal, setPackersModal] = useState<{ open: boolean; names: string[] }>({ open: false, names: []});
-  const [boxesModal, setBoxesModal] = useState<{ open: boolean; boxNumbers: (number | null)[] }>({ open: false, boxNumbers: []});
+  const [taskDetailsModal, setTaskDetailsModal] = useState<{ open: boolean; packerNames: string[]; boxNumbers: (number | null)[] }>({ open: false, packerNames: [], boxNumbers: []});
   const [taskPackageMap, setTaskPackageMap] = useState<Record<string, string[]>>({});
 
   const handleCameraPress = async (taskRow: LogRow) => {
@@ -160,18 +161,18 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
     });
   }, [rows, currentPackageId, taskPackageMap]);
 
-  const openPackers = (assignments?: Assignment[]) => {
-    const names = (assignments || []).map(a => a?.profiles?.full_name || '—');
-    setPackersModal({ open: true, names });
-  };
-
-  const openBoxes = (taskPackages?: TaskPackage[]) => {
+  const openTaskDetails = (assignments?: Assignment[], taskPackages?: TaskPackage[], isCompleted?: boolean) => {
+    // For completed tasks, show all assignments. For active tasks, filter out completed assignments.
+    const displayAssignments = isCompleted 
+      ? (assignments || [])
+      : (assignments || []).filter(a => a?.task_status !== 'completed');
+    const packerNames = displayAssignments.map(a => a?.profiles?.full_name || '—');
     const packageIds = (taskPackages || []).map(tp => tp.order_package_id).filter(Boolean) as string[];
     const boxNumbers = packageIds.map(id => {
       const pkg = allOrderPackages.find(p => p.id === id);
       return pkg?.package_number ?? null;
     });
-    setBoxesModal({ open: true, boxNumbers });
+    setTaskDetailsModal({ open: true, packerNames, boxNumbers });
   };
 
   const isTaskCompleted = (row: LogRow) => {
@@ -219,29 +220,23 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
               <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
 
               {/* Action buttons */}
-              <View style={{ flex: 2.5 }} className="flex-row flex-wrap">
+              <View style={{ flex: 2.5 }} className="flex-row flex-wrap items-center">
                 <TouchableOpacity
                   style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
                   className="rounded bg-blue-100"
-                  onPress={() => openPackers(r.task_assignments)}
+                  onPress={() => openTaskDetails(r.task_assignments, r.task_packages, true)}
                 >
-                  <Text style={{ fontSize: buttonFontSize }} className="text-blue-800">{(r.task_assignments || []).length} Packers</Text>
+                  <Text style={{ fontSize: buttonFontSize }} className="text-blue-800">
+                    {(r.task_assignments || []).length} Packer{(r.task_assignments || []).length !== 1 ? 's' : ''} • {(r.task_packages || []).length} Box{(r.task_packages || []).length !== 1 ? 'es' : ''}
+                  </Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
-                  className="rounded bg-purple-100"
-                  onPress={() => openBoxes(r.task_packages)}
-                >
-                  <Text style={{ fontSize: buttonFontSize }} className="text-purple-800">{(r.task_packages || []).length} Boxes</Text>
-                </TouchableOpacity>
-                {/* Resume only */}
-                <TouchableOpacity 
+                {/* Finished status instead of Resume */}
+                <View
                   style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginBottom: 2 }}
-                  className="rounded bg-blue-50 border border-blue-600"
-                  onPress={() => onRestart?.(r.id)}
+                  className="rounded bg-green-50"
                 >
-                  <Text style={{ fontSize: buttonFontSize }} className="text-blue-700 font-semibold">Resume</Text>
-                </TouchableOpacity>
+                  <Text style={{ fontSize: buttonFontSize }} className="text-green-600 font-semibold">Finished</Text>
+                </View>
               </View>
               {/* Camera icon */}
               {orderPackageId && (
@@ -271,18 +266,13 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
               <TouchableOpacity
                 style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
                 className="rounded bg-blue-100"
-                onPress={() => openPackers(r.task_assignments)}
+                onPress={() => openTaskDetails(r.task_assignments, r.task_packages, false)}
               >
-                <Text style={{ fontSize: buttonFontSize }} className="text-blue-800">{(r.task_assignments || []).length} Packers</Text>
+                <Text style={{ fontSize: buttonFontSize }} className="text-blue-800">
+                  {(r.task_assignments || []).filter(a => a?.task_status !== 'completed').length} Packer{(r.task_assignments || []).filter(a => a?.task_status !== 'completed').length !== 1 ? 's' : ''} • {(r.task_packages || []).length} Box{(r.task_assignments || []).length !== 1 ? 'es' : ''}
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
-                className="rounded bg-purple-100"
-                onPress={() => openBoxes(r.task_packages)}
-              >
-                <Text style={{ fontSize: buttonFontSize }} className="text-purple-800">{(r.task_packages || []).length} Boxes</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
                 style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
                 className={`rounded ${isTaskPaused(r) ? 'bg-blue-50 border border-blue-600' : 'bg-amber-50 border border-amber-600'}`}
                 onPress={() => onPause?.(r.id)}
@@ -315,38 +305,37 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
         );
       })}
 
-      {/* Packers modal */}
-      <Modal visible={packersModal.open} transparent animationType="fade" onRequestClose={() => setPackersModal({ open: false, names: []})}>
+      {/* Task Details modal - merged packers and boxes */}
+      <Modal visible={taskDetailsModal.open} transparent animationType="fade" onRequestClose={() => setTaskDetailsModal({ open: false, packerNames: [], boxNumbers: []})}>
         <View className="flex-1 bg-black/30 justify-center items-center">
           <View className="bg-white rounded-xl p-4 w-4/5">
-            <Text className="text-gray-800 font-semibold mb-2">Assigned Packers</Text>
-            {packersModal.names.length === 0 ? (
-              <Text className="text-gray-600">No packers assigned.</Text>
-            ) : (
-              packersModal.names.map((n, idx) => (
-                <Text key={idx} className="text-gray-800 mb-1">• {n}</Text>
-              ))
-            )}
-            <TouchableOpacity className="mt-3 self-end" onPress={() => setPackersModal({ open: false, names: []})}>
-              <Text className="text-primary-700 font-semibold">Close</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Boxes modal */}
-      <Modal visible={boxesModal.open} transparent animationType="fade" onRequestClose={() => setBoxesModal({ open: false, boxNumbers: []})}>
-        <View className="flex-1 bg-black/30 justify-center items-center">
-          <View className="bg-white rounded-xl p-4 w-4/5">
-            <Text className="text-gray-800 font-semibold mb-2">Related Boxes</Text>
-            {boxesModal.boxNumbers.length === 0 ? (
-              <Text className="text-gray-600">No boxes assigned.</Text>
-            ) : (
-              boxesModal.boxNumbers.map((num, idx) => (
-                <Text key={idx} className="text-gray-800 mb-1">• Box #{num ?? '—'}</Text>
-              ))
-            )}
-            <TouchableOpacity className="mt-3 self-end" onPress={() => setBoxesModal({ open: false, boxNumbers: []})}>
+            <Text className="text-gray-800 font-semibold mb-3 text-lg">Task Details</Text>
+            
+            {/* Assigned Packers */}
+            <View className="mb-3">
+              <Text className="text-gray-700 font-semibold mb-1">Assigned Packers:</Text>
+              {taskDetailsModal.packerNames.length === 0 ? (
+                <Text className="text-gray-600 ml-2">No packers assigned.</Text>
+              ) : (
+                taskDetailsModal.packerNames.map((n, idx) => (
+                  <Text key={idx} className="text-gray-800 mb-1 ml-2">• {n}</Text>
+                ))
+              )}
+            </View>
+            
+            {/* Related Boxes */}
+            <View>
+              <Text className="text-gray-700 font-semibold mb-1">Related Boxes:</Text>
+              {taskDetailsModal.boxNumbers.length === 0 ? (
+                <Text className="text-gray-600 ml-2">No boxes assigned.</Text>
+              ) : (
+                taskDetailsModal.boxNumbers.map((num, idx) => (
+                  <Text key={idx} className="text-gray-800 mb-1 ml-2">• Box #{num ?? '—'}</Text>
+                ))
+              )}
+            </View>
+            
+            <TouchableOpacity className="mt-4 self-end" onPress={() => setTaskDetailsModal({ open: false, packerNames: [], boxNumbers: []})}>
               <Text className="text-primary-700 font-semibold">Close</Text>
             </TouchableOpacity>
           </View>

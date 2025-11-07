@@ -6,7 +6,8 @@ export interface TabDefinition {
   key: string;
   title: string;
   content: React.ReactNode;
-  isPacked?: boolean;
+  isPacked?: boolean; // Box completed (blue)
+  isStarted?: boolean; // Box has tasks started (green)
 }
 
 interface TabLayoutProps {
@@ -43,6 +44,10 @@ const TabLayout: React.FC<TabLayoutProps> = ({ tabs, activeKey, onChange }) => {
               className={`${
                 tab.isPacked
                   ? activeKey === tab.key
+                    ? 'bg-blue-100 border-blue-500'
+                    : 'bg-blue-50 border-blue-300'
+                  : tab.isStarted
+                  ? activeKey === tab.key
                     ? 'bg-green-100 border-green-500'
                     : 'bg-green-50 border-green-300'
                   : activeKey === tab.key
@@ -54,6 +59,8 @@ const TabLayout: React.FC<TabLayoutProps> = ({ tabs, activeKey, onChange }) => {
                 style={{ fontSize: tabFontSize }}
                 className={`${
                   tab.isPacked
+                    ? activeKey === tab.key ? 'text-blue-800' : 'text-blue-700'
+                    : tab.isStarted
                     ? activeKey === tab.key ? 'text-green-800' : 'text-green-700'
                     : activeKey === tab.key ? 'text-primary-700' : 'text-gray-700'
                 } font-semibold`}

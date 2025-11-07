@@ -31,20 +31,47 @@ interface BoxDetailsTabProps {
   finalPackingTypeId?: string | null;
   status?: string;
   onStatusChange?: () => void;
+  onDataChange?: () => void; // Callback when any data changes
 }
 
-const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, status, onStatusChange }) => {
+const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, status, onStatusChange, onDataChange }) => {
   const handleMarkComplete = async () => {
     try {
       const { supabase } = await import('../../utils/api/supabase');
+      
+      // First validate the box completion
+      const { data: validation, error: validationError } = await supabase.rpc('validate_box_completion', { op_id: orderPackageId });
+      
+      if (validationError) {
+        Alert.alert('Validation Error', 'Could not validate box completion requirements.');
+        console.error('Validation error:', validationError);
+        return;
+      }
+      
+      if (!validation?.valid) {
+        let errorMsg = 'Box cannot be marked as complete:\n\n';
+        if (!validation?.materials_valid) {
+          errorMsg += `\u2022 ${validation.materials_message}\n`;
+        }
+        if (!validation?.tasks_valid) {
+          errorMsg += `\u2022 ${validation.tasks_message}\n`;
+        }
+        Alert.alert('Cannot Complete Box', errorMsg);
+        return;
+      }
+      
+      // If validation passes, mark as packed
       const { error } = await supabase.rpc('mark_order_package_packed', { op_id: orderPackageId });
       if (!error) {
+        Alert.alert('Success', 'Box marked as completed!');
         onStatusChange?.();
       } else {
         console.warn('Mark complete failed:', error);
+        Alert.alert('Error', 'Failed to mark box as complete.');
       }
     } catch (e) {
       console.error('Unexpected error while updating package status:', e);
+      Alert.alert('Error', 'An unexpected error occurred.');
     }
   };
 
@@ -161,6 +188,8 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
           finalBoxTypeId={finalBoxTypeId || null}
           originalPackingTypeId={originalPackingTypeId || null}
           finalPackingTypeId={finalPackingTypeId || null}
+          editable={status !== 'packed'}
+          onChange={onDataChange}
         />
       </View>
 
@@ -172,12 +201,18 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
           finalInfoId={finalPkgInfoId || null}
           internal={dimensions?.internal || { original: null, final: null }}
           external={dimensions?.external || { original: null, final: null }}
+          editable={status !== 'packed'}
+          onChange={onDataChange}
         />
       </View>
 
       {/* Packing Items */}
       <View className="mt-4">
-        <OrderPackingItems orderPackageId={orderPackageId} onAttachPics={onAttachPics} />
+        <OrderPackingItems 
+          orderPackageId={orderPackageId} 
+          onAttachPics={onAttachPics} 
+          editable={status !== 'packed'}
+        />
       </View>
     </View>
   );

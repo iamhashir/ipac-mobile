@@ -978,19 +978,44 @@ export const db = {
 
     // If there is no final package_info, create an EMPTY row and link it to the order package
     if (!effectiveFinalId) {
+      // Use explicit null values to avoid constraint issues
       const { data: created, error: createErr } = await supabase
         .from('package_info')
-        .insert({})
+        .insert({
+          quantity: null,
+          center_of_gravity: null,
+          box_type_id: null,
+          packing_type_id: null,
+          tare: null,
+          net_weight: null,
+          gross_weight: null,
+          internal_length: null,
+          internal_width: null,
+          internal_height: null,
+          external_length: null,
+          external_width: null,
+          external_height: null,
+          boxes_completed: 0
+        })
         .select('id')
         .single();
-      if (createErr || !created) return { data: null, error: createErr || { message: 'Failed to create final package info' } };
+      
+      if (createErr || !created) {
+        console.error('Failed to create final package info for dimensions:', createErr);
+        return { data: null, error: createErr || { message: 'Failed to create final package info' } };
+      }
+      
       effectiveFinalId = created.id;
 
       const { error: updErr } = await supabase
         .from('order_packages')
         .update({ final_pkg_info: effectiveFinalId })
         .eq('id', orderPackageId);
-      if (updErr) return { data: null, error: updErr };
+      
+      if (updErr) {
+        console.error('Failed to link final_pkg_info for dimensions:', updErr);
+        return { data: null, error: updErr };
+      }
     }
 
     // Update the final package_info with provided fields (no cloning)
@@ -998,7 +1023,11 @@ export const db = {
       .from('package_info')
       .update(fields)
       .eq('id', effectiveFinalId);
-    if (updFinalErr) return { data: null, error: updFinalErr };
+    
+    if (updFinalErr) {
+      console.error('Failed to update dimensions:', updFinalErr);
+      return { data: null, error: updFinalErr };
+    }
 
     return { data: { final_pkg_info: effectiveFinalId }, error: null };
   },
@@ -1681,23 +1710,34 @@ export const db = {
       const packageIds = (packages || []).map(p => p.id);
       const finalInfoIds = (packages || []).map(p => p.final_pkg_info).filter(Boolean);
 
-      // 1. Delete order_package_materials created by packers (those without admin_added flag)
+      // 1. Delete order_package_materials created by packers (is_final = true, original is null)
       if (packageIds.length > 0) {
         const { error: matError } = await supabase
           .from('order_package_materials')
           .delete()
           .in('order_package_id', packageIds)
-          .is('admin_added', false);
+          .eq('is_final', true)
+          .is('original', null);
         if (matError) console.warn('Error deleting materials:', matError);
       }
 
-      // 2. Delete tasks started by packers
+      // 2. Delete tasks started by packers using RPC (bypasses RLS)
+      // We use RPC because there are no DELETE policies on task_logs, task_packages, task_assignments
+      // The CASCADE rules will automatically delete task_packages and task_assignments when we delete task_logs
       if (packageIds.length > 0) {
-        const { error: taskError } = await supabase
-          .from('order_tasks')
-          .delete()
-          .in('order_package_id', packageIds);
-        if (taskError) console.warn('Error deleting tasks:', taskError);
+        console.log(`[RPC] Calling delete_tasks_for_order_packages with ${packageIds.length} package IDs`);
+        const { data: rpcData, error: deleteTasksError } = await supabase
+          .rpc('delete_tasks_for_order_packages', {
+            package_ids: packageIds
+          });
+        
+        if (deleteTasksError) {
+          console.error('[RPC] Error deleting tasks for order packages:', deleteTasksError);
+          console.error('[RPC] Error details:', JSON.stringify(deleteTasksError, null, 2));
+        } else {
+          console.log('[RPC] Successfully deleted task_logs (and cascaded task_packages, task_assignments)');
+          console.log('[RPC] Response:', rpcData);
+        }
       }
 
       // 3. Reset final package_info values to NULL
@@ -1723,25 +1763,37 @@ export const db = {
         if (infoError) console.warn('Error resetting package_info:', infoError);
       }
 
-      // 4. Reset package_items final values to NULL
+      // 4. Delete package_items created by packers (no final_quantity column, just delete non-admin items)
+      // Skip this step as package_items don't have a final_quantity column
+      // Items are managed by admin only, so we don't need to reset them
+
+      // 5. Reset order_packages status using unpack RPC (handles status correctly)
       if (packageIds.length > 0) {
-        const { error: itemError } = await supabase
-          .from('package_items')
-          .update({ final_quantity: null })
-          .in('order_package_id', packageIds);
-        if (itemError) console.warn('Error resetting package_items:', itemError);
+        for (const pkgId of packageIds) {
+          try {
+            // Use the unpack RPC which knows how to handle status transitions correctly
+            const { error: unpackError } = await supabase.rpc('unpack_order_package', { op_id: pkgId });
+            if (unpackError) {
+              console.warn(`Error unpacking package ${pkgId}:`, unpackError);
+            }
+          } catch (e) {
+            console.warn(`Exception unpacking package ${pkgId}:`, e);
+          }
+        }
       }
 
-      // 5. Reset order_packages status to pending
-      if (packageIds.length > 0) {
-        const { error: statusError } = await supabase
-          .from('order_packages')
-          .update({ status: 'pending' })
-          .in('id', packageIds);
-        if (statusError) console.warn('Error resetting package status:', statusError);
+      // 6. Delete attendance logs for this order
+      const { error: attendanceError } = await supabase
+        .from('attendance_logs')
+        .delete()
+        .eq('order_id', orderId);
+      if (attendanceError) {
+        console.warn('Error deleting attendance_logs:', attendanceError);
+      } else {
+        console.log('Successfully deleted attendance_logs for order');
       }
 
-      // 6. Reset final securing templates (delete and recreate empty)
+      // 7. Reset final securing templates (delete and recreate empty)
       if (packageIds.length > 0) {
         for (const pkgId of packageIds) {
           try {
@@ -1762,23 +1814,27 @@ export const db = {
                     .eq('id', row.securing_template_id)
                     .single();
 
-                  // Delete beams
-                  if (template) {
-                    const beamIds = [template.horizontal_bar, template.vertical_bar, template.skids].filter(Boolean);
-                    if (beamIds.length > 0) {
-                      await supabase.from('beam').delete().in('id', beamIds);
-                    }
-                  }
-
-                  // Reset template fields to NULL
+                  // First, reset template fields to NULL (removes foreign key references)
                   await supabase
                     .from('securing_template')
                     .update({
                       quantity: null,
                       type_id: null,
-                      thickness: null
+                      thickness: null,
+                      horizontal_bar: null,
+                      vertical_bar: null,
+                      skids: null
                     })
                     .eq('id', row.securing_template_id);
+
+                  // Then delete beams (after references are removed)
+                  if (template) {
+                    const beamIds = [template.horizontal_bar, template.vertical_bar, template.skids].filter(Boolean);
+                    if (beamIds.length > 0) {
+                      const { error: beamError } = await supabase.from('beam').delete().in('id', beamIds);
+                      if (beamError) console.warn('Error deleting beams:', beamError);
+                    }
+                  }
                 }
               }
             }
@@ -1816,19 +1872,43 @@ export const db = {
     if (finalInfoId) return { data: { id: finalInfoId }, error: null };
 
     // Always create an EMPTY package_info row (do not clone original)
+    // Use explicit null values to avoid constraint issues
     const { data: created, error: createErr } = await supabase
       .from('package_info')
-      .insert({})
+      .insert({
+        quantity: null,
+        center_of_gravity: null,
+        box_type_id: null,
+        packing_type_id: null,
+        tare: null,
+        net_weight: null,
+        gross_weight: null,
+        internal_length: null,
+        internal_width: null,
+        internal_height: null,
+        external_length: null,
+        external_width: null,
+        external_height: null,
+        boxes_completed: 0
+      })
       .select('id')
       .single();
-    if (createErr || !created) return { data: null, error: createErr };
+    
+    if (createErr || !created) {
+      console.error('Failed to create package_info:', createErr);
+      return { data: null, error: createErr };
+    }
 
     // Link to order_packages.final_pkg_info
     const { error: updErr } = await supabase
       .from('order_packages')
       .update({ final_pkg_info: created.id })
       .eq('id', orderPackageId);
-    if (updErr) return { data: null, error: updErr };
+    
+    if (updErr) {
+      console.error('Failed to link final_pkg_info to order_package:', updErr);
+      return { data: null, error: updErr };
+    }
 
     return { data: { id: created.id }, error: null };
   },
@@ -1837,18 +1917,42 @@ export const db = {
   ensureOriginalPackageInfo: async ({ orderPackageId, originalInfoId }) => {
     if (originalInfoId) return { data: { id: originalInfoId }, error: null };
 
+    // Use explicit null values to avoid constraint issues
     const { data: created, error: createErr } = await supabase
       .from('package_info')
-      .insert({})
+      .insert({
+        quantity: null,
+        center_of_gravity: null,
+        box_type_id: null,
+        packing_type_id: null,
+        tare: null,
+        net_weight: null,
+        gross_weight: null,
+        internal_length: null,
+        internal_width: null,
+        internal_height: null,
+        external_length: null,
+        external_width: null,
+        external_height: null,
+        boxes_completed: 0
+      })
       .select('id')
       .single();
-    if (createErr || !created) return { data: null, error: createErr };
+    
+    if (createErr || !created) {
+      console.error('Failed to create original package_info:', createErr);
+      return { data: null, error: createErr };
+    }
 
     const { error: updErr } = await supabase
       .from('order_packages')
       .update({ original_pkg_info: created.id })
       .eq('id', orderPackageId);
-    if (updErr) return { data: null, error: updErr };
+    
+    if (updErr) {
+      console.error('Failed to link original_pkg_info to order_package:', updErr);
+      return { data: null, error: updErr };
+    }
 
     return { data: { id: created.id }, error: null };
   },
