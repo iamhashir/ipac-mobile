@@ -24,6 +24,7 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
   // Use refs to avoid stale closures in polling callbacks
   const teamPackersRef = useRef<TeamPacker[]>([]);
   const isMountedRef = useRef(true);
+  const orderPackagesRef = useRef<{ id: string; package_number: number | null }[]>(orderPackages);
 
   const [taskTypes, setTaskTypes] = useState<{ id: string; name: string }[]>([]);
   const [taskLogs, setTaskLogs] = useState<any[]>([]);
@@ -109,21 +110,12 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
     };
   }, [orderId]);
 
-  // Refresh logs when orderPackages changes (when switching between box tabs)
+  // Keep orderPackagesRef in sync and refresh logs when orderPackages changes
   useEffect(() => {
+    orderPackagesRef.current = orderPackages;
+    
     if (isMountedRef.current && orderPackages.length > 0) {
       refreshLogs();
-      
-      // Clean up openTaskIds to only keep tasks that belong to current packages
-      // This prevents showing task tabs from other boxes when switching
-      if (orderPackages.length === 1 && openTaskIds.length > 0) {
-        // We need to check which open tasks belong to the current package
-        // Filter will happen in the tabs useMemo, but we should also close any active detail tabs
-        // that don't belong to current box to avoid showing stale data
-        if (activeKey.startsWith('task:')) {
-          setActiveKey('overview'); // Switch back to overview when changing boxes
-        }
-      }
     }
   }, [orderPackages]);
 
@@ -149,22 +141,25 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
   }, [taskLogs]);
 
   const refreshLogs = async () => {
+    // Use ref to get current orderPackages to avoid stale closure in polling/realtime callbacks
+    const currentOrderPackages = orderPackagesRef.current;
+    
     let data;
-    if (orderPackages.length === 1) {
+    if (currentOrderPackages.length === 1) {
       // Single package mode - use package-specific query to only get tasks for this package
-      const { data: packageData, error: packageError } = await db.getTaskLogsForPackage(orderPackages[0].id);
+      const { data: packageData, error: packageError } = await db.getTaskLogsForPackage(currentOrderPackages[0].id);
       if (packageError) {
         console.error('Error fetching task logs for package:', packageError);
       }
       // Filter tasks to only include those that have this specific package in task_packages
-      const currentPackageId = orderPackages[0].id;
+      const currentPackageId = currentOrderPackages[0].id;
       data = (packageData || []).filter((log: any) => {
         const taskPackageIds = (log.task_packages || []).map((tp: any) => tp.order_package_id);
         return taskPackageIds.includes(currentPackageId);
       });
     } else {
       // Multi-package mode (overview) - get tasks for all packages
-      const ids = orderPackages.map(op => op.id);
+      const ids = currentOrderPackages.map(op => op.id);
       const { data: allData, error: allError } = await db.getTaskLogsByOrderPackageIds(ids);
       if (allError) {
         console.error('Error fetching task logs by package IDs:', allError);
