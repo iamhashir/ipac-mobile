@@ -4,6 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import CollapsibleCard from './common/CollapsibleCard';
 import { db } from '../../utils/api/supabase';
 import { Check, X, ChevronDown, Camera } from 'lucide-react-native';
+import { AddPendingMaterialModal } from './AddPendingMaterialModal';
 
 interface AccessoriesSectionProps {
   orderPackageId: string;
@@ -35,6 +36,7 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
   const [isSaving, setIsSaving] = useState(false);
   const [variantSearchQuery, setVariantSearchQuery] = useState('');
   const [unitSearchQuery, setUnitSearchQuery] = useState('');
+  const [showAddMaterialModal, setShowAddMaterialModal] = useState(false);
 
   // Form state
   const [formVariant, setFormVariant] = useState<string | null>(null);
@@ -406,8 +408,25 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
                           </View>
                         </TouchableOpacity>
                       ))
-                  )}
+                    )}
                 </ScrollView>
+              </View>
+            )}
+
+            {/* Can't find it? Add new material button */}
+            {variantPickerOpen && (
+              <View className="p-2 border-t border-gray-300">
+                <TouchableOpacity
+                  onPress={() => {
+                    setVariantPickerOpen(false);
+                    setShowAddMaterialModal(true);
+                  }}
+                  className="bg-blue-50 border border-blue-500 rounded px-3 py-2"
+                >
+                  <Text className="text-blue-700 text-center font-medium text-sm">
+                    Can't find it? Add new material
+                  </Text>
+                </TouchableOpacity>
               </View>
             )}
 
@@ -424,62 +443,54 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
               <Text className="text-red-600 text-xs mb-2">{errors.quantity}</Text>
             ) : <View className="mb-1" />}
 
-            {/* Unit display (auto from material). If no default, allow manual pick as fallback */}
+            {/* Unit - Always allow selection, but show default hint */}
             <Text className="text-sm text-gray-700 mb-1">Unit<Text className="text-red-600">*</Text></Text>
-            {formVariant && variantUnitIdMap[formVariant] ? (
-              <View className="flex-row items-center mb-2">
-                <View className="px-2 py-1 rounded bg-slate-100 border border-slate-200">
-                  <Text className="text-slate-700 text-xs">{unitsMap[variantUnitIdMap[formVariant] as string] || '—'}</Text>
-                </View>
-                <Text className="text-[10px] text-gray-500 ml-2">Auto-selected from material</Text>
+            <TouchableOpacity onPress={() => setUnitPickerOpen(v => !v)} className="border border-gray-300 rounded p-2 mb-1 bg-white">
+              <View className="flex-row items-center justify-between">
+                <Text className="text-gray-800">{formUnit ? (unitsMap[formUnit] || '—') : 'Select unit'}</Text>
+                <ChevronDown size={16} color="#374151" />
               </View>
-            ) : (
-              <>
-                <TouchableOpacity onPress={() => setUnitPickerOpen(v => !v)} className="border border-gray-300 rounded p-2 mb-1 bg-white">
-                  <View className="flex-row items-center justify-between">
-                    <Text className="text-gray-800">{formUnit ? (unitsMap[formUnit] || '—') : 'Select unit'}</Text>
-                    <ChevronDown size={16} color="#374151" />
-                  </View>
-                </TouchableOpacity>
-                {triedSubmit && errors.unit ? (
-                  <Text className="text-red-600 text-xs mb-2">{errors.unit}</Text>
-                ) : <View className="mb-1" />}
-                {unitPickerOpen && (
-                  <View className="max-h-60 border border-gray-200 rounded mb-2 bg-white">
-                    {/* Search input */}
-                    <View className="p-2 border-b border-gray-200">
-                      <TextInput
-                        value={unitSearchQuery}
-                        onChangeText={setUnitSearchQuery}
-                        placeholder="Type to search units..."
-                        className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
-                        autoFocus
-                      />
-                    </View>
-                    <ScrollView>
-                      {units
-                        .filter((opt) => {
-                          if (!unitSearchQuery.trim()) return true;
-                          return opt.label.toLowerCase().includes(unitSearchQuery.toLowerCase());
-                        })
-                        .map((opt) => (
-                          <TouchableOpacity
-                            key={opt.value}
-                            onPress={() => {
-                              setFormUnit(opt.value);
-                              setErrors((e) => ({ ...e, unit: undefined }));
-                              setUnitPickerOpen(false);
-                              setUnitSearchQuery('');
-                            }}
-                            className="px-3 py-2 border-b border-gray-100"
-                          >
-                            <Text className="text-gray-800">{opt.label}</Text>
-                          </TouchableOpacity>
-                        ))}
-                    </ScrollView>
-                  </View>
-                )}
-              </>
+            </TouchableOpacity>
+            {formVariant && variantUnitIdMap[formVariant] && (
+              <Text className="text-[10px] text-gray-500 mb-1">Default: {unitsMap[variantUnitIdMap[formVariant] as string] || '—'}</Text>
+            )}
+            {triedSubmit && errors.unit ? (
+              <Text className="text-red-600 text-xs mb-2">{errors.unit}</Text>
+            ) : <View className="mb-1" />}
+            {unitPickerOpen && (
+              <View className="max-h-60 border border-gray-200 rounded mb-2 bg-white">
+                {/* Search input */}
+                <View className="p-2 border-b border-gray-200">
+                  <TextInput
+                    value={unitSearchQuery}
+                    onChangeText={setUnitSearchQuery}
+                    placeholder="Type to search units..."
+                    className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+                    autoFocus
+                  />
+                </View>
+                <ScrollView>
+                  {units
+                    .filter((opt) => {
+                      if (!unitSearchQuery.trim()) return true;
+                      return opt.label.toLowerCase().includes(unitSearchQuery.toLowerCase());
+                    })
+                    .map((opt) => (
+                      <TouchableOpacity
+                        key={opt.value}
+                        onPress={() => {
+                          setFormUnit(opt.value);
+                          setErrors((e) => ({ ...e, unit: undefined }));
+                          setUnitPickerOpen(false);
+                          setUnitSearchQuery('');
+                        }}
+                        className="px-3 py-2 border-b border-gray-100"
+                      >
+                        <Text className="text-gray-800">{opt.label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                </ScrollView>
+              </View>
             )}
 
             {/* Length / Width */}
@@ -509,6 +520,23 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({ orderPackageId 
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      {/* Add Pending Material Modal */}
+      <AddPendingMaterialModal
+        visible={showAddMaterialModal}
+        onClose={() => setShowAddMaterialModal(false)}
+        onSuccess={(variantId) => {
+          // Reload variants to include the new one
+          load();
+          // Auto-select the newly created variant
+          setFormVariant(variantId);
+          // Open the add item modal
+          setAddOpen(true);
+        }}
+        orderPackageId={orderPackageId}
+        autoTag="Accessories"
+        materialType="Accessories"
+      />
     </View>
   );
 };

@@ -2743,6 +2743,10 @@ export const db = {
     
     return { data, error };
   },
+
+  // Direct access to supabase client for table operations
+  query: supabase,
+  auth: supabase.auth,
 };
 
 export default supabase;

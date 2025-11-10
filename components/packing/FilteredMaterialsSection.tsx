@@ -4,6 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import CollapsibleCard from './common/CollapsibleCard';
 import { db } from '../../utils/api/supabase';
 import { Check, X, ChevronDown, Camera } from 'lucide-react-native';
+import { AddPendingMaterialModal } from './AddPendingMaterialModal';
 
 interface SourceSpec {
   type: 'tag' | 'material';
@@ -44,7 +45,8 @@ const FilteredMaterialsSection: React.FC<FilteredMaterialsSectionProps> = ({ ord
   const [formUnit, setFormUnit] = useState<string | null>(null);
   const [formLength, setFormLength] = useState<string>('');
   const [formWidth, setFormWidth] = useState<string>('');
-  const [formComment, setFormComment] = useState<string>('');
+  const [formComment, setFormComment] = useState('');
+  const [showAddMaterialModal, setShowAddMaterialModal] = useState(false);
 
   const variantLabelById = (id: string | null | undefined) => variants.find(v => v.value === id)?.label || '—';
 
@@ -289,9 +291,45 @@ const FilteredMaterialsSection: React.FC<FilteredMaterialsSectionProps> = ({ ord
             </TouchableOpacity>
             {error.variant ? (<Text className="text-red-600 text-xs mb-2">{error.variant}</Text>) : <View className="mb-1" />}
             {varOpen && (
-              <View className="max-h-40 border border-gray-200 rounded mb-2 bg-white"><ScrollView>{variants.map((opt) => (
-                <TouchableOpacity key={opt.value} onPress={() => { setFormVariant(opt.value); setError(e => ({ ...e, variant: undefined })); setFormUnit(opt.unit_id || null); setVarOpen(false); }} className="px-3 py-2"><View className="flex-row justify-between items-center"><Text className="text-gray-800">{opt.label}</Text>{opt.unit_name ? (<View className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200"><Text className="text-[10px] text-slate-700">{opt.unit_name}</Text></View>) : null}</View></TouchableOpacity>
-              ))}</ScrollView></View>
+              <View className="max-h-40 border border-gray-200 rounded mb-2 bg-white">
+                <ScrollView>
+                  {variants.map((opt) => (
+                    <TouchableOpacity 
+                      key={opt.value} 
+                      onPress={() => { 
+                        setFormVariant(opt.value); 
+                        setError(e => ({ ...e, variant: undefined })); 
+                        setFormUnit(opt.unit_id || null); 
+                        setVarOpen(false); 
+                      }} 
+                      className="px-3 py-2"
+                    >
+                      <View className="flex-row justify-between items-center">
+                        <Text className="text-gray-800">{opt.label}</Text>
+                        {opt.unit_name ? (
+                          <View className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
+                            <Text className="text-[10px] text-slate-700">{opt.unit_name}</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                {/* Can't find it? Add new material button */}
+                <View className="p-2 border-t border-gray-300">
+                  <TouchableOpacity
+                    onPress={() => {
+                      setVarOpen(false);
+                      setShowAddMaterialModal(true);
+                    }}
+                    className="bg-blue-50 border border-blue-500 rounded px-3 py-2"
+                  >
+                    <Text className="text-blue-700 text-center font-medium text-sm">
+                      Can't find it? Add new material
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             )}
 
             {/* Quantity */}
@@ -342,6 +380,25 @@ const FilteredMaterialsSection: React.FC<FilteredMaterialsSectionProps> = ({ ord
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      {/* Add Pending Material Modal */}
+      <AddPendingMaterialModal
+        visible={showAddMaterialModal}
+        onClose={() => setShowAddMaterialModal(false)}
+        onSuccess={(variantId) => {
+          // Reload variants to include the new one
+          load();
+          // Auto-select the newly created variant
+          setFormVariant(variantId);
+          // Open the add item modal
+          setOpen(true);
+        }}
+        orderPackageId={orderPackageId}
+        autoTag={title === 'Gas Accessories' ? 'Gas Accessories' : 
+                 title === 'Vacuum Accessories' ? 'Vacuum Accessories' : 
+                 materialTypeLabel}
+        materialType={materialTypeLabel}
+      />
     </View>
   );
 };

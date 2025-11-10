@@ -45,6 +45,7 @@ fix_*.sql
 run-*.sql
 check-*.sql
 *_examples.sql
+*.md
 
 # macOS
 .DS_Store
