@@ -84,7 +84,7 @@ export default function AttendanceScreen() {
     }
   }, [orderId]);
 
-  // Auto-mark afternoon attendance when crossing 12pm for packers present in morning
+  // Auto-mark morning shift end times and afternoon attendance when crossing 12pm
   useEffect(() => {
     if (!orderId || packers.length === 0) return;
 
@@ -92,64 +92,48 @@ export default function AttendanceScreen() {
       const now = new Date();
       const hour = now.getHours();
       
-      // Only auto-mark when it's afternoon (>= 12pm) and hasn't been done yet
+      // Only auto-mark when it's afternoon (>= 12pm)
       if (hour >= 12) {
-        // Check each packer who was present in morning but not marked for afternoon yet
+        // First, auto-mark morning end times for all packers with active morning attendance
         for (const name of packers) {
           const packerAttendance = attendance[name];
           
-          // If packer was present in morning and afternoon is not yet marked
+          // If packer was present in morning, has start time, but no end time
           if (packerAttendance?.morning.present === true && 
-              packerAttendance?.afternoon.present !== true &&
-              packerAttendance?.afternoon.present !== false) {
+              packerAttendance?.morning.startTime &&
+              !packerAttendance?.morning.endTime) {
             
             const packerData = packersData.find(p => p.full_name === name);
             if (!packerData) continue;
 
             try {
-              // Check if we can record afternoon attendance
-              const { data: canRecord } = await db.canRecordAttendance(
+              const today = new Date().toISOString().split('T')[0];
+              const endTimeISO = new Date(`${today} 12:00:00`).toISOString();
+              
+              // Update end time to 12:00 in database
+              const { error } = await db.updateAttendanceEndTimeByDetails(
                 orderId,
                 packerData.packer_id || packerData.id,
-                'afternoon'
+                'morning',
+                endTimeISO
               );
 
-              if (canRecord) {
-                // Automatically mark afternoon attendance
-                const currentTime = getCurrentTime();
-                const today = new Date().toISOString().split('T')[0];
-                const startTimeISO = new Date(`${today} ${currentTime}`).toISOString();
-
-                const { error } = await db.logAttendance(
-                  orderId,
-                  packerData.packer_id || packerData.id,
-                  'afternoon',
-                  'present',
-                  startTimeISO,
-                  null,
-                  toolboxCompleted,
-                  false
-                );
-
-                if (!error) {
-                  // Update local state
-                  setAttendance(prevAttendance => ({
-                    ...prevAttendance,
-                    [name]: {
-                      ...prevAttendance[name],
-                      afternoon: {
-                        ...prevAttendance[name].afternoon,
-                        present: true,
-                        startTime: currentTime,
-                        endTime: null
-                      }
+              if (!error) {
+                // Update local state
+                setAttendance(prevAttendance => ({
+                  ...prevAttendance,
+                  [name]: {
+                    ...prevAttendance[name],
+                    morning: {
+                      ...prevAttendance[name].morning,
+                      endTime: '12:00'
                     }
-                  }));
-                  console.log(`Auto-marked afternoon attendance for ${name}`);
-                }
+                  }
+                }));
+                console.log(`Auto-marked morning end time as 12:00 for ${name}`);
               }
             } catch (error) {
-              console.error(`Error auto-marking afternoon for ${name}:`, error);
+              console.error(`Error auto-marking morning end time for ${name}:`, error);
             }
           }
         }
@@ -163,7 +147,7 @@ export default function AttendanceScreen() {
     const interval = setInterval(checkAndAutoMarkAfternoon, 60000);
 
     return () => clearInterval(interval);
-  }, [orderId, packers, packersData, attendance, toolboxCompleted]);
+  }, [orderId, packers, packersData, attendance]);
 
   const loadData = async () => {
     try {
@@ -292,14 +276,24 @@ await loadExistingAttendance(packersResponse, initialAttendance);
           }
           
           // Check if toolbox briefing was completed for CURRENT shift
+          // Only show toolbox button if:
+          // 1. No attendance for current shift, OR
+          // 2. Current shift has attendance with end_time (packer left and is returning - needs new toolbox)
           const currentShift: TimePeriod = isAfternoon ? 'afternoon' : 'morning';
-          if (attendanceRecords.some(r => r.shift_period === currentShift && r.toolbox_briefing_completed)) {
+          const currentShiftRecords = attendanceRecords.filter(r => r.shift_period === currentShift);
+          
+          // If any current shift record has toolbox_briefing_completed = true and no end_time, they're good
+          const hasActiveToolbox = currentShiftRecords.some(
+            r => r.toolbox_briefing_completed === true && !r.end_time
+          );
+          
+          if (hasActiveToolbox) {
             anyToolboxCompleted = true;
           }
         }
       }
       
-      // Set toolbox completed if any packer has it marked for current shift
+      // Set toolbox completed if any packer has it marked for current shift without ending their shift
       if (anyToolboxCompleted) {
         setToolboxCompleted(true);
         console.log('Toolbox briefing already completed for current shift');

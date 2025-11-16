@@ -1,57 +1,70 @@
-import React from 'react';
-import { View, Text, TextInput } from 'react-native';
-import CollapsibleCard from './common/CollapsibleCard';
-import FilteredMaterialsSection from './FilteredMaterialsSection';
+import React from "react";
+import { View, Text, TextInput } from "react-native";
+import OrderPackageMaterialsSection from "./OrderPackageMaterialsSection";
 
 interface VacuumPackingSectionProps {
   orderPackageId: string;
 }
 
-const VacuumPackingSection: React.FC<VacuumPackingSectionProps> = ({ orderPackageId }) => {
+const VacuumPackingSection: React.FC<VacuumPackingSectionProps> = ({
+  orderPackageId,
+}) => {
   return (
-    <View className="mx-4 mt-4 mb-4">
-      <CollapsibleCard title="Vacuum packing" containerClassName="border-gray-500 bg-white" defaultOpen>
-        <View className="px-2 pb-2">
-          {/* Laminates */}
-          <FilteredMaterialsSection
-            orderPackageId={orderPackageId}
-            title="Select laminate"
-            materialTypeLabel="Vacuum Packing"
-            quantityLabel="in Bands"
-            sources={[{ type: 'material', value: 'Laminate' }]}
-            mediaDesignation="vacuum_packing"
-          />
+    <View className="mt-4">
+      <View className="mx-4 mb-2">
+        <Text className="text-xl font-semibold text-gray-900">
+          Vacuum packing
+        </Text>
+      </View>
 
-          {/* Desiccant */}
-          <FilteredMaterialsSection
-            orderPackageId={orderPackageId}
-            title="Desiccant"
-            materialTypeLabel="Vacuum Packing"
-            sources={[{ type: 'material', value: 'Desiccant' }]}
-            mediaDesignation="vacuum_packing"
-          />
+      <OrderPackageMaterialsSection
+        orderPackageId={orderPackageId}
+        title="Select laminate"
+        materialType="Vacuum Packing"
+        quantityLabel="in Bands"
+        variantSources={[{ type: "material", value: "Laminate" }]}
+        mediaDesignation="vacuum_packing"
+        addPendingConfig={{
+          autoTag: "Laminate",
+          materialType: "Vacuum Packing",
+        }}
+      />
 
-          {/* Vacuum Accessories */}
-          <FilteredMaterialsSection
-            orderPackageId={orderPackageId}
-            title="Vacuum Accessories"
-            materialTypeLabel="Vacuum Packing"
-            sources={[{ type: 'tag', value: 'Vacuum Accessories' }]}
-            mediaDesignation="vacuum_packing"
-          />
+      <OrderPackageMaterialsSection
+        orderPackageId={orderPackageId}
+        title="Desiccant"
+        materialType="Vacuum Packing"
+        variantSources={[{ type: "material", value: "Desiccant" }]}
+        mediaDesignation="vacuum_packing"
+        addPendingConfig={{
+          autoTag: "Desiccant",
+          materialType: "Vacuum Packing",
+        }}
+      />
 
-          {/* Service - placeholder input only; wire to DB later if needed */}
-          {/* TODO: Add camera icon for service when service functionality is implemented */}
-          <View className="bg-white rounded-xl border border-gray-400 p-3 m-1 self-start w-full">
-            <View className="px-3 py-1 rounded-full self-start mb-2">
-              <Text className="text-blue-800 text-xs font-semibold">Service</Text>
-            </View>
-            <View className="border border-gray-300 rounded-lg p-2">
-              <TextInput placeholder="Electronic Humidity and temperature monitor" className="text-gray-800" />
-            </View>
-          </View>
+      <OrderPackageMaterialsSection
+        orderPackageId={orderPackageId}
+        title="Vacuum Accessories"
+        materialType="Vacuum Packing"
+        variantSources={[{ type: "tag", value: "Vacuum Accessories" }]}
+        mediaDesignation="vacuum_packing"
+        addPendingConfig={{
+          autoTag: "Vacuum Accessories",
+          materialType: "Vacuum Packing",
+        }}
+      />
+
+      <View className="bg-white rounded-xl border border-gray-400 p-3 mx-4 my-2">
+        <View className="px-3 py-1 rounded-full self-start mb-2">
+          <Text className="text-blue-800 text-xs font-semibold">Service</Text>
         </View>
-      </CollapsibleCard>
+        <View className="border border-gray-300 rounded-lg p-2">
+          <TextInput
+            placeholder="Electronic Humidity and temperature monitor"
+            className="text-gray-800"
+          />
+        </View>
+      </View>
     </View>
   );
 };

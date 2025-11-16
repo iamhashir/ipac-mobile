@@ -14,6 +14,8 @@ import AccessoriesSection from '../../../components/packing/AccessoriesSection';
 import VacuumPackingSection from '../../../components/packing/VacuumPackingSection';
 import GasPackingSection from '../../../components/packing/GasPackingSection';
 import DeletePackageModal from '../../../components/admin/orders/DeletePackageModal';
+import AttendanceMonitor from '../../../components/admin/orders/AttendanceMonitor';
+import ActivityMonitor from '../../../components/admin/orders/ActivityMonitor';
 
 interface OrderPkg { id: string; package_number: number | null; description: string | null; status: string; original_pkg_info?: string | null; final_pkg_info?: string | null; }
 
@@ -59,6 +61,11 @@ export default function OrderDetailsPage() {
       const { data: pkgs } = await db.getOrderPackages(orderId);
       const list = (pkgs || []).sort((a: any, b: any) => (a.package_number || 0) - (b.package_number || 0));
       setPackages(list);
+
+      // Set Box #1 as default active tab if not already set
+      if (list.length > 0 && !activeTab) {
+        setActiveTab(list[0].id);
+      }
 
       // Ensure securing rows exist for original/final for all packages
       for (const p of list) {
@@ -138,6 +145,16 @@ export default function OrderDetailsPage() {
             <Text className="text-sm text-gray-600">Client: {order.clients?.name || '—'}</Text>
             <Text className="text-xs text-gray-500 mt-1">Commercial: {order.commercial_status} • Production: {order.production_status}</Text>
           </View>
+        )}
+
+        {/* Attendance Monitor Section */}
+        {orderId && (
+          <AttendanceMonitor orderId={orderId as string} />
+        )}
+
+        {/* Activity Monitor Section */}
+        {orderId && packages.length > 0 && (
+          <ActivityMonitor orderId={orderId as string} orderPackages={packages} />
         )}
 
         {needsConfirm && !allowOriginalEdits && (

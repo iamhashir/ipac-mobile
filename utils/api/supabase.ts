@@ -757,6 +757,17 @@ export const db = {
     return { data: Object.values(latestRecords), error };
   },
 
+  // Get all attendance records for an order (for date filtering)
+  getAllAttendanceForOrder: async (orderId) => {
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .select('log_date')
+      .eq('order_id', orderId)
+      .order('log_date', { ascending: false });
+    
+    return { data, error };
+  },
+
   // Get session by ID
   getPackerSessionById: async (sessionId) => {
     const { data, error } = await supabase
@@ -940,6 +951,30 @@ export const db = {
       });
     
     return { data, error };
+  },
+
+  // Check if packer needs toolbox briefing for current shift
+  // Returns true if packer needs toolbox briefing, false if they can proceed
+  needsToolboxBriefing: async (orderId, packerId) => {
+    const today = new Date().toISOString().split('T')[0];
+    const hour = new Date().getHours();
+    const currentShift = hour >= 12 ? 'afternoon' : 'morning';
+    
+    // Check if packer has any attendance record for current shift today with toolbox_briefing_completed = true
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .select('id, toolbox_briefing_completed')
+      .eq('order_id', orderId)
+      .eq('packer_id', packerId)
+      .eq('log_date', today)
+      .eq('shift_period', currentShift)
+      .eq('toolbox_briefing_completed', true)
+      .limit(1);
+    
+    if (error) return { data: true, error }; // Default to needing briefing on error
+    
+    // If we found a record with toolbox completed, they don't need it
+    return { data: !data || data.length === 0, error: null };
   },
 
   // Packaging: fetch order packages (lightweight)

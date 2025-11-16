@@ -25,6 +25,7 @@ import OrderSecuringSection from "../../components/packing/OrderSecuringSection"
 import VacuumPackingSection from "../../components/packing/VacuumPackingSection";
 import GasPackingSection from "../../components/packing/GasPackingSection";
 import AccessoriesSection from "../../components/packing/AccessoriesSection";
+import SecuringSection from "../../components/packing/SecuringSection";
 import CommentsSection from "../../components/packing/CommentsSection";
 import CollapsibleCard from "../../components/packing/common/CollapsibleCard";
 
@@ -58,7 +59,7 @@ interface PackageInfo {
 }
 
 export default function PackingReportPage() {
-  const { signOut } = useAuth();
+  const { signOut, profile } = useAuth();
   const router = useRouter();
   const params = useLocalSearchParams();
   const {
@@ -78,6 +79,7 @@ export default function PackingReportPage() {
   const [loading, setLoading] = useState(true);
   const [activeKey, setActiveKey] = useState<string>("list");
   const [previousKey, setPreviousKey] = useState<string>("list");
+  const [checkingToolbox, setCheckingToolbox] = useState(true);
 
   // Reload data when switching back to the packing list tab from a box tab
   const handleTabChange = (newKey: string) => {
@@ -97,6 +99,42 @@ export default function PackingReportPage() {
   const [boxStartedMap, setBoxStartedMap] = useState<Record<string, boolean>>(
     {}
   ); // order_package_id -> has started tasks
+
+  // Check toolbox briefing requirement on page load and periodically
+  useEffect(() => {
+    if (!sessionLoading && orderId && profile?.id) {
+      const checkToolboxRequirement = async () => {
+        try {
+          const { data: needsBriefing } = await db.needsToolboxBriefing(orderId, profile.id);
+          
+          if (needsBriefing) {
+            Alert.alert(
+              "Attendance Required",
+              "Please mark your attendance and confirm the toolbox briefing before accessing the packing list.",
+              [
+                {
+                  text: "Go to Attendance",
+                  onPress: () => router.replace(`/(packer)/attendance?orderId=${orderId}`),
+                },
+              ],
+              { cancelable: false }
+            );
+          } else {
+            setCheckingToolbox(false);
+          }
+        } catch (error) {
+          console.error('Error checking toolbox briefing:', error);
+          setCheckingToolbox(false);
+        }
+      };
+
+      checkToolboxRequirement();
+      
+      // Check every 2 minutes in case shift changes while they're working
+      const interval = setInterval(checkToolboxRequirement, 120000);
+      return () => clearInterval(interval);
+    }
+  }, [sessionLoading, orderId, profile?.id]);
 
   // Check permissions only once when session loading is complete
   useEffect(() => {
@@ -511,6 +549,16 @@ export default function PackingReportPage() {
                 editable={p.status !== "packed"}
                 autoSave={false}
               />
+            </View>
+
+            {/* Securing materials section */}
+            <View
+              onLayout={(event) => {
+                const { y } = event.nativeEvent.layout;
+                sectionRefs.current["securing-materials"] = y;
+              }}
+            >
+              <SecuringSection orderPackageId={p.id} />
             </View>
 
             {/* Gas packing (Final packing type) */}

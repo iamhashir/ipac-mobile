@@ -63,10 +63,16 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
     }
   };
 
+  // Check if final value was modified from original
+  const hasChanged = !isEditingOriginal && final !== null && final !== undefined && original !== final;
+  const borderColor = hasChanged ? 'border-orange-400' : 'border-indigo-200';
+  const headerBgColor = hasChanged ? 'bg-orange-50' : 'bg-blue-50';
+  const headerTextColor = hasChanged ? 'text-orange-900' : 'text-blue-800';
+
   return (
-    <View className={`${compact ? 'bg-blue-50 rounded-lg' : 'bg-blue-50 rounded-xl'} border border-indigo-200 ${compact ? 'p-1 m-0.5' : 'p-1 m-1'}`} style={{ width: width as any, flex: flex }}>
+    <View className={`${compact ? headerBgColor + ' rounded-lg' : headerBgColor + ' rounded-xl'} border ${borderColor} ${compact ? 'p-1 m-0.5' : 'p-1 m-1'}`} style={{ width: width as any, flex: flex }}>
       <View className={`${compact ? 'mb-0.5' : 'mb-1'} px-2 rounded-full self-center`}>
-        <Text className={`text-blue-800 ${compact ? 'text-[10px]' : 'text-xs'} font-semibold text-center`}>{label}</Text>
+        <Text className={`${headerTextColor} ${compact ? 'text-[10px]' : 'text-xs'} font-semibold text-center`}>{label}{hasChanged ? ' *' : ''}</Text>
       </View>
 
       {/* Original row */}
@@ -102,8 +108,8 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
       </View>
 
       {/* Final row */}
-      <View className={`border border-indigo-200 rounded-lg ${compact ? 'px-1 pt-0.5 pb-0.5' : 'px-1 pt-1 pb-1'} items-center justify-center ${!isEditingOriginal ? (type === 'switch' ? (val ? 'bg-green-50' : 'bg-amber-50') : 'bg-gray-50') : 'bg-white'}`}>
-        <Text className="text-[10px] text-green-900 mb-1 bg-green-100 text-center w-full"> Final</Text>
+      <View className={`border ${hasChanged ? 'border-orange-400' : 'border-indigo-200'} rounded-lg ${compact ? 'px-1 pt-0.5 pb-0.5' : 'px-1 pt-1 pb-1'} items-center justify-center ${!isEditingOriginal ? (type === 'switch' ? (val ? 'bg-green-50' : 'bg-amber-50') : hasChanged ? 'bg-orange-50' : 'bg-gray-50') : 'bg-white'}`}>
+        <Text className={`text-[10px] ${hasChanged ? 'text-orange-900 bg-orange-100' : 'text-green-900 bg-green-100'} mb-1 text-center w-full`}> Final{hasChanged ? ' ✓' : ''}</Text>
         {!isEditingOriginal && editable ? (
           type === 'select' ? (
             <View style={{ width: compact ? '90%' : '85%' }}>
