@@ -4,7 +4,7 @@ import { Plus, Package } from 'lucide-react-native';
 import { db, supabase } from '../../../utils/api/supabase';
 import PackageForm from './PackageForm';
 import PackageItemsEditor from './PackageItemsEditor';
-import OrderSecuringSection from '../../packer/packing-list/section_05_manufacturing/OrderSecuringSection';
+import ManufacturingSection from '../../packer/packing-list/section_05_manufacturing/ManufacturingSection';
 import { X } from 'lucide-react-native';
 
 interface OrderPackagesEditorProps {
@@ -162,7 +162,7 @@ const OrderPackagesEditor: React.FC<OrderPackagesEditorProps> = ({ orderId, onDo
                 </TouchableOpacity>
               </View>
               <ScrollView className="p-2">
-                <OrderSecuringSection orderPackageId={activeSecuringFor.id} editTarget="original" editable={true} autoSave={false} />
+                <ManufacturingSection orderPackageId={activeSecuringFor.id} editTarget="original" editable={true} autoSave={false} />
               </ScrollView>
             </View>
           </View>

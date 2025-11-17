@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { View, Alert } from 'react-native';
 import TwoTierEditableCard from '../common/TwoTierEditableCard';
 import { db } from '../../../../utils/api/supabase';
+import { PackageInfoChangeEvent } from './types';
 
 export interface BoxInfoDetails {
   quantity: number | null;
@@ -25,7 +26,7 @@ export interface OrderPackingInfoProps {
   finalPackingTypeId?: string | null;
   editTarget?: 'original' | 'final';
   editable?: boolean;
-  onChange?: () => void; // Callback when data changes
+  onChange?: (change: PackageInfoChangeEvent) => void; // Callback when data changes
 }
 
 const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, originalInfoId, finalInfoId, orderPackageId, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, editTarget = 'final', editable = true, onChange }) => {
@@ -73,9 +74,16 @@ const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, or
       console.error('Error updating package info:', error);
       const errorMsg = error?.message || error?.details || 'Failed to save changes';
       Alert.alert('Error', `Failed to save: ${errorMsg}`);
+      return;
     }
-    // Don't call onChange here - it causes reload on every keystroke
-    // Parent will reload when switching tabs or when needed
+    onChange?.({
+      infoId: targetId,
+      fields,
+      orderPackageId,
+      isFinal: editTarget === 'final',
+      updatedFinalInfoId: editTarget === 'final' ? targetId : undefined,
+      source: 'info'
+    });
   };
 
   return (

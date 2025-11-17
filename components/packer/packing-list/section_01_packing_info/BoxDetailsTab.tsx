@@ -6,6 +6,7 @@ import OrderPackingInfo, { BoxInfoDetails } from './order_packing_info';
 import OrderPackingDimensions from './order_packing_dimensions';
 import { DimensionsTriple } from '../common/DimensionsBox';
 import OrderPackingItems from '../section_02_packing_items/order_packing_items';
+import { PackageInfoChangeEvent } from './types';
 
 interface BoxInfoPair {
   original: BoxInfoDetails | null;
@@ -32,7 +33,7 @@ interface BoxDetailsTabProps {
   finalPackingTypeId?: string | null;
   status?: string;
   onStatusChange?: () => void;
-  onDataChange?: () => void; // Callback when any data changes
+  onDataChange?: (change: PackageInfoChangeEvent) => void; // Callback when any data changes
 }
 
 const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, status, onStatusChange, onDataChange }) => {
@@ -190,7 +191,7 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
           originalPackingTypeId={originalPackingTypeId || null}
           finalPackingTypeId={finalPackingTypeId || null}
           editable={status !== 'packed'}
-          onChange={onDataChange}
+          onChange={(change) => onDataChange?.({ ...change, source: 'info' })}
         />
       </View>
 
@@ -203,7 +204,7 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
           internal={dimensions?.internal || { original: null, final: null }}
           external={dimensions?.external || { original: null, final: null }}
           editable={status !== 'packed'}
-          onChange={onDataChange}
+          onChange={(change) => onDataChange?.({ ...change, source: 'dimensions' })}
         />
       </View>
 

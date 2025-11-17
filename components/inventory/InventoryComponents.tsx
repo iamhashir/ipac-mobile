@@ -1846,13 +1846,16 @@ export function SupplierVariantManager({
     ? (selectedMaterial.material_variants as MaterialVariant[])
     : [];
 
-  const variantDisplayList = materialVariantRecords.map<VariantDisplay>((variant) => ({
-    id: variant.id,
-    variant_name: variant.variant_name || 'Unnamed Variant',
-    description: variant.description
-  }));
+  const variantDisplayList = materialVariantRecords.map(
+    (variant): VariantDisplay => ({
+      id: String(variant.id ?? ''),
+      variant_name: variant.variant_name || 'Unnamed Variant',
+      description: variant.description
+    })
+  );
 
   const hasMaterialVariants = selectedMaterial !== null && variantDisplayList.length > 0;
+  const selectedVariantId = selectedVariant?.id != null ? String(selectedVariant.id) : null;
   
   // Filter materials based on search
   useEffect(() => {
@@ -2290,27 +2293,30 @@ export function SupplierVariantManager({
                   Select Variant *
                 </Text>
                 <View className="flex-wrap">
-                  {variantDisplayList.map((variant: VariantDisplay) => (
-                    <TouchableOpacity
-                      key={variant.id}
-                      className={`border rounded-lg p-3 mr-2 mb-2 ${selectedVariant?.id === variant.id ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}
-                      onPress={() => {
-                        const rawVariant = materialVariantRecords.find(v => String(v.id ?? '') === variant.id);
-                        if (rawVariant) {
-                          handleSelectVariant(rawVariant as MaterialVariant);
-                        }
-                      }}
-                    >
-                      <Text className={`${selectedVariant?.id === variant.id ? 'text-blue-900' : 'text-gray-900'} font-medium`}>
-                        {variant.variant_name}
-                      </Text>
-                      {variant.description && (
-                        <Text className={`text-sm ${selectedVariant?.id === variant.id ? 'text-blue-700' : 'text-gray-600'}`}>
-                          {variant.description}
+                  {variantDisplayList.map((variant) => {
+                    const isSelected = selectedVariantId === variant.id;
+                    return (
+                      <TouchableOpacity
+                        key={variant.id}
+                        className={`border rounded-lg p-3 mr-2 mb-2 ${isSelected ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}
+                        onPress={() => {
+                          const rawVariant = materialVariantRecords.find((v) => String(v.id ?? '') === variant.id);
+                          if (rawVariant) {
+                            handleSelectVariant(rawVariant as MaterialVariant);
+                          }
+                        }}
+                      >
+                        <Text className={`${isSelected ? 'text-blue-900' : 'text-gray-900'} font-medium`}>
+                          {variant.variant_name}
                         </Text>
-                      )}
-                    </TouchableOpacity>
-                  ))}
+                        {variant.description && (
+                          <Text className={`text-sm ${isSelected ? 'text-blue-700' : 'text-gray-600'}`}>
+                            {variant.description}
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
               </View>
             )}

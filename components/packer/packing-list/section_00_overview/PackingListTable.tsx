@@ -129,9 +129,9 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
               onPress={() => onRowPress && onRowPress(r.id)}
               className={`m-2 p-3 rounded-lg border ${
                 r.isPacked
-                  ? "bg-sky-200 border-blue-300"
+                  ? "bg-sky-200 border-sky-300"
                   : r.isStarted
-                  ? "bg-lime-200 border-green-300"
+                  ? "bg-lime-200 border-lime-300"
                   : idx % 2 === 0
                   ? "bg-white border-gray-200"
                   : "bg-gray-50 border-gray-200"

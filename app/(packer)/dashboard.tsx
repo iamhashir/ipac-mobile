@@ -23,7 +23,7 @@ interface Packer {
   full_name: string;
   username: string;
   packer_status: string;
-  current_order_name?: string;
+  current_order_name?: string | null;
   is_available: boolean;
 }
 

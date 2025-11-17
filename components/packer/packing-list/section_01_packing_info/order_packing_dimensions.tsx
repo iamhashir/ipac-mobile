@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { db } from '../../../../utils/api/supabase';
 import DimensionsBox, { DimensionsTriple } from '../common/DimensionsBox';
+import { PackageInfoChangeEvent } from './types';
 
 export interface OrderPackingDimensionsProps {
   orderPackageId: string;
@@ -16,7 +17,7 @@ export interface OrderPackingDimensionsProps {
     final: DimensionsTriple | null | undefined;
   };
   editable?: boolean;
-  onChange?: () => void; // Callback when data changes
+  onChange?: (change: PackageInfoChangeEvent) => void; // Callback when data changes
 }
 
 type PartialTriple = Partial<DimensionsTriple>;
@@ -56,7 +57,28 @@ const OrderPackingDimensions: React.FC<OrderPackingDimensionsProps> = ({ orderPa
         } else if (!finalId && res?.data?.final_pkg_info) {
           setFinalId(res.data.final_pkg_info);
         }
-        // Don't call onChange here - it causes reload on every keystroke
+        const targetInfoId = res?.data?.final_pkg_info || finalId;
+        if (targetInfoId) {
+          onChange?.({
+            infoId: targetInfoId,
+            fields: scope === 'internal'
+              ? {
+                  internal_length: next.length ?? null,
+                  internal_width: next.width ?? null,
+                  internal_height: next.height ?? null,
+                }
+              : {
+                  external_length: next.length ?? null,
+                  external_width: next.width ?? null,
+                  external_height: next.height ?? null,
+                },
+            orderPackageId,
+            isFinal: true,
+            updatedFinalInfoId: targetInfoId,
+            scope,
+            source: 'dimensions'
+          });
+        }
       }).catch((err: any) => {
         console.error('Unexpected error saving dimensions:', err);
         const { Alert } = require('react-native');

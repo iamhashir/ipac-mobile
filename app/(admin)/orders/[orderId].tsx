@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { X, Trash2 } from 'lucide-react-native';
 import { db } from '../../../utils/api/supabase';
-import OrderSecuringSection from '../../../components/packer/packing-list/section_05_manufacturing/OrderSecuringSection';
+import ManufacturingSection from '../../../components/packer/packing-list/section_05_manufacturing/ManufacturingSection';
 import { ConfirmModal } from '../../../components/ui/ConfirmModal';
 import PackageInfoFields, { PackageInfoValue } from '../../../components/admin/orders/PackageInfoFields';
 import OrderPackingInfo, { BoxInfoDetails } from '../../../components/packer/packing-list/section_01_packing_info/order_packing_info';
@@ -277,7 +277,7 @@ export default function OrderDetailsPage() {
 
               {/* Securing section: admin edits ORIGINAL fields inline (manual save) */}
               <View className="mt-3">
-                <OrderSecuringSection orderPackageId={p.id} editTarget="original" editable={allowOriginalEdits} autoSave={false} />
+                <ManufacturingSection orderPackageId={p.id} editTarget="original" editable={allowOriginalEdits} autoSave={false} />
               </View>
 
               {/* Materials (Accessories) for this box */}

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useRef } from "react";
+import React, { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -23,13 +23,14 @@ import PackingListTable, {
 } from "../../components/packer/packing-list/section_00_overview/PackingListTable";
 import BoxDetailsTab from "../../components/packer/packing-list/section_01_packing_info/BoxDetailsTab";
 import OrderTasksManagement from "../../components/packer/packing-list/section_04_tasks/OrderTasksManagement";
-import OrderSecuringSection from "../../components/packer/packing-list/section_05_manufacturing/OrderSecuringSection";
+import ManufacturingSection from "../../components/packer/packing-list/section_05_manufacturing/ManufacturingSection";
 import VacuumPackingSection from "../../components/packer/packing-list/section_08_vacuum/VacuumPackingSection";
 import GasPackingSection from "../../components/packer/packing-list/section_07_gas/GasPackingSection";
 import AccessoriesSection from "../../components/packer/packing-list/section_09_accessories/AccessoriesSection";
 import SecuringSection from "../../components/packer/packing-list/section_06_securing/SecuringSection";
 import CommentsSection from "../../components/packer/packing-list/section_03_comments/CommentsSection";
 import CollapsibleCard from "../../components/packer/packing-list/common/CollapsibleCard";
+import { PackageInfoChangeEvent } from "../../components/packer/packing-list/section_01_packing_info/types";
 
 interface Order {
   id: string;
@@ -65,6 +66,23 @@ interface PackageInfo {
   external_width: number | null;
   external_height: number | null;
 }
+
+const createEmptyPackageInfo = (id: string): PackageInfo => ({
+  id,
+  center_of_gravity: null,
+  quantity: null,
+  box_type_id: null,
+  packing_type_id: null,
+  tare: null,
+  net_weight: null,
+  gross_weight: null,
+  internal_length: null,
+  internal_width: null,
+  internal_height: null,
+  external_length: null,
+  external_width: null,
+  external_height: null,
+});
 
 export default function PackingListPage() {
   const { signOut, profile } = useAuth() as any;
@@ -325,6 +343,84 @@ export default function PackingListPage() {
     {}
   );
 
+  const hydrateBoxType = useCallback(
+    async (boxTypeId: string | null) => {
+      if (!boxTypeId || boxTypes[boxTypeId]) return;
+      const { data } = await db.getBoxTypesByIds([boxTypeId]);
+      if (data && data.length) {
+        const entry = data[0];
+        setBoxTypes((prev) => ({ ...prev, [entry.id]: entry.name }));
+      }
+    },
+    [boxTypes]
+  );
+
+  const hydratePackingType = useCallback(
+    async (packingTypeId: string | null) => {
+      if (!packingTypeId) return;
+      const hasCode = !!packingTypes[packingTypeId];
+      const hasGasInfo = Object.prototype.hasOwnProperty.call(
+        packTypeHasGas,
+        packingTypeId
+      );
+      const hasVacInfo = Object.prototype.hasOwnProperty.call(
+        packTypeHasVacuum,
+        packingTypeId
+      );
+      if (hasCode && hasGasInfo && hasVacInfo) return;
+
+      const { data } = await db.getPackingTypesByIds([packingTypeId]);
+      if (data && data.length) {
+        const entry = data[0];
+        setPackingTypes((prev) => ({ ...prev, [entry.id]: entry.code }));
+        setPackTypeHasGas((prev) => ({
+          ...prev,
+          [entry.id]: !!entry.includes_gas_protection,
+        }));
+        setPackTypeHasVacuum((prev) => ({
+          ...prev,
+          [entry.id]: !!entry.includes_vacuum_protection,
+        }));
+      }
+    },
+    [packTypeHasGas, packTypeHasVacuum, packingTypes]
+  );
+
+  const handlePackageInfoChange = useCallback(
+    (change: PackageInfoChangeEvent) => {
+      if (!change?.infoId) return;
+      const updatedFields = (change.fields || {}) as Partial<PackageInfo>;
+      setPkgInfoMap((prev) => {
+        const base = prev[change.infoId!] || createEmptyPackageInfo(change.infoId!);
+        return {
+          ...prev,
+          [change.infoId!]: { ...base, ...updatedFields },
+        };
+      });
+
+      if (change.updatedFinalInfoId && change.orderPackageId) {
+        setOrderPackages((prev) =>
+          prev.map((pkg) =>
+            pkg.id === change.orderPackageId && pkg.final_pkg_info !== change.updatedFinalInfoId
+              ? { ...pkg, final_pkg_info: change.updatedFinalInfoId ?? null }
+              : pkg
+          )
+        );
+      }
+
+      const nextPackingTypeId = updatedFields.packing_type_id;
+      if (nextPackingTypeId) {
+        void hydratePackingType(nextPackingTypeId);
+      }
+
+      const nextBoxTypeId = updatedFields.box_type_id;
+      if (nextBoxTypeId) {
+        void hydrateBoxType(nextBoxTypeId);
+      }
+    },
+    [hydrateBoxType, hydratePackingType]
+  );
+
   const rows: PackingRow[] = useMemo(() => {
     return orderPackages.map((p) => {
       // Get original and final info
@@ -506,6 +602,7 @@ export default function PackingListPage() {
               finalPackingTypeId={final?.packing_type_id || null}
               status={p.status}
               onStatusChange={loadData}
+              onDataChange={handlePackageInfoChange}
             />
 			
             {/* Comments section */}
@@ -546,18 +643,19 @@ export default function PackingListPage() {
               </View>
             )}
 
-            {/* Securing section */}
+            {/* Manufacturing section */}
             <View
               onLayout={(event) => {
                 const { y } = event.nativeEvent.layout;
                 sectionRefs.current["securing"] = y;
               }}
             >
-              <OrderSecuringSection
+              <ManufacturingSection
                 orderPackageId={p.id}
                 editTarget="final"
                 editable={p.status !== "packed"}
                 autoSave={false}
+                internalDimensions={{ original: internalDimsOriginal, final: internalDimsFinal }}
               />
             </View>
 
@@ -644,6 +742,7 @@ export default function PackingListPage() {
     boxStartedMap,
     packTypeHasVacuum,
     packTypeHasGas,
+    handlePackageInfoChange,
   ]);
 
   const handleBack = () => router.back();

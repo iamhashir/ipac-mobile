@@ -4,20 +4,68 @@ import * as ImagePicker from 'expo-image-picker';
 import { Camera } from 'lucide-react-native';
 import GroupBox from '../common/GroupBox';
 import TwoTierEditableCard from '../common/TwoTierEditableCard';
+import OrderPackageMaterialsSection, { VariantSource } from '../shared/materials/OrderPackageMaterialsSection';
 import { db } from '../../../../utils/api/supabase';
 import { useTextSize } from '../../../../utils/TextSizeContext';
 
-interface OrderSecuringSectionProps {
+interface DimensionTriple {
+  length: number | null;
+  width: number | null;
+  height: number | null;
+}
+
+interface InternalDimensionsProp {
+  original: DimensionTriple | null;
+  final: DimensionTriple | null;
+}
+
+interface ManufacturingSectionProps {
   orderPackageId: string;
+  internalDimensions?: InternalDimensionsProp | null;
 }
 
  type Side = 'big_sides' | 'small_sides' | 'lid' | 'base';
+
+const SIDE_LABELS: Record<Side, string> = {
+  big_sides: 'Big Sides',
+  small_sides: 'Small Sides',
+  lid: 'Lid',
+  base: 'Base',
+};
+
+const ADDITIONAL_WOOD_MATERIAL_TYPES: Record<Side, string> = {
+  big_sides: SIDE_LABELS.big_sides,
+  small_sides: SIDE_LABELS.small_sides,
+  lid: SIDE_LABELS.lid,
+  base: SIDE_LABELS.base,
+};
+
+const MEDIA_DESIGNATION_MAP: Record<Side, string> = {
+  big_sides: 'big_side',
+  small_sides: 'small_side',
+  lid: 'lid',
+  base: 'base',
+};
+
+const ADDITIONAL_WOOD_THRESHOLD = 400;
+const ADDITIONAL_WOOD_VARIANT_SOURCES: VariantSource[] = [{ type: 'variantTag', value: 'Wood' }];
+
+const dimensionExceedsThreshold = (dims: DimensionTriple | null | undefined) => {
+  if (!dims) return false;
+  return [dims.length, dims.width, dims.height].some(
+    (value) => typeof value === 'number' && value >= ADDITIONAL_WOOD_THRESHOLD
+  );
+};
  
  const smallWidth = 160;
  const typeWideWidth = 240;
  
- const OrderSecuringSection: React.FC<OrderSecuringSectionProps & { editTarget?: 'original' | 'final'; editable?: boolean; autoSave?: boolean }> = ({ orderPackageId, editTarget = 'final', editable = true, autoSave = true }) => {
+ const ManufacturingSection: React.FC<ManufacturingSectionProps & { editTarget?: 'original' | 'final'; editable?: boolean; autoSave?: boolean }> = ({ orderPackageId, editTarget = 'final', editable = true, autoSave = true, internalDimensions }) => {
   const { size } = useTextSize();
+  const [fetchedDimensions, setFetchedDimensions] = useState<InternalDimensionsProp | null>(internalDimensions ?? null);
+  const effectiveDimensions = internalDimensions ?? fetchedDimensions;
+  const dimensionBasis = effectiveDimensions?.final ?? effectiveDimensions?.original ?? null;
+  const shouldShowAdditionalWood = useMemo(() => dimensionExceedsThreshold(dimensionBasis), [dimensionBasis]);
   // Separate variant lists for different sections
   const [bodyVariants, setBodyVariants] = useState<{ label: string; value: string }[]>([]);
   const [barVariants, setBarVariants] = useState<{ label: string; value: string }[]>([]);
@@ -27,6 +75,25 @@ interface OrderSecuringSectionProps {
   // Simplified tabs: remove horizontal ScrollView state to avoid jitter
   // Pending changes when autoSave is disabled (keyed by side)
   const [pending, setPending] = useState<Partial<Record<Side, { template?: any; beams?: Partial<Record<'horizontal_bar' | 'vertical_bar' | 'skids', any>> }>>>({});
+
+  useEffect(() => {
+    if (internalDimensions) return;
+    let isMounted = true;
+    const loadDimensions = async () => {
+      const { data, error } = await db.getOrderPackageInternalDimensions(orderPackageId);
+      if (!isMounted) return;
+      if (error) {
+        console.warn('➡️ Manufacturing: unable to load internal dimensions', error);
+        setFetchedDimensions(null);
+        return;
+      }
+      setFetchedDimensions(data || { original: null, final: null });
+    };
+    loadDimensions();
+    return () => {
+      isMounted = false;
+    };
+  }, [orderPackageId, internalDimensions]);
 
   const handleCameraPress = async () => {
     Alert.alert('Attach image', 'Choose source', [
@@ -65,14 +132,7 @@ interface OrderSecuringSectionProps {
 
   const uploadAsset = async (uri: string) => {
     try {
-      // Map activeTab to designation enum value
-      const designationMap: Record<Side, string> = {
-        'big_sides': 'big_side',
-        'small_sides': 'small_side',
-        'lid': 'lid',
-        'base': 'base',
-      };
-      const designation = designationMap[activeTab];
+      const designation = MEDIA_DESIGNATION_MAP[activeTab];
       const sideLabel = activeTab.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
       const notes = `Manufacturing - ${sideLabel}`;
       
@@ -196,10 +256,12 @@ interface OrderSecuringSectionProps {
   }, [activeTab]);
 
   const renderSideContent = (side: Side) => {
-    const orig = bySide[side].original;
-    const fin = bySide[side].final;
+  const orig = bySide[side].original;
+  const fin = bySide[side].final;
     const tmplOrig = orig?.securing_template;
     const tmplFin = fin?.securing_template;
+  const horizontalTitle = side === 'base' ? 'Beams Length' : 'Horizontal bars';
+  const verticalTitle = side === 'base' ? 'Beams Filling' : 'Vertical bars';
 
     const saveTemplate = async (fields: any) => {
       if (!editable) return;
@@ -268,8 +330,8 @@ interface OrderSecuringSectionProps {
           <TwoTierEditableCard key={`${side}-thickness-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.thickness ?? null} final={tmplFin?.thickness ?? null} type="number" onChange={(v) => saveTemplate({ thickness: v })} width={smallWidth} draftValue={(pending as any)[side]?.template?.thickness} />
         </View>
 
-        {/* Horizontal Bars */}
-        <GroupBox title="Horizontal bars">
+  {/* Horizontal/Beams */}
+  <GroupBox title={horizontalTitle}>
           <View className="flex-row flex-wrap">
             <TwoTierEditableCard key={`${side}-hb-qty-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.horizontal_bar?.quantity ?? null} final={tmplFin?.horizontal_bar?.quantity ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { quantity: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.quantity} />
             <TwoTierEditableCard key={`${side}-hb-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.horizontal_bar?.type, barVariants)} final={variantLabelById(tmplFin?.horizontal_bar?.type, barVariants)} type="select" selectItems={barVariants} onChange={(v) => saveBeam('horizontal_bar', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.horizontal_bar?.type || null} defaultSelectValue={tmplOrig?.horizontal_bar?.type || null} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.type} />
@@ -279,8 +341,8 @@ interface OrderSecuringSectionProps {
           </View>
         </GroupBox>
 
-        {/* Vertical Bars */}
-        <GroupBox title="Vertical bars">
+  {/* Vertical/Beams Filling */}
+  <GroupBox title={verticalTitle}>
           <View className="flex-row flex-wrap">
             <TwoTierEditableCard key={`${side}-vb-qty-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.vertical_bar?.quantity ?? null} final={tmplFin?.vertical_bar?.quantity ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { quantity: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.vertical_bar?.quantity} />
             <TwoTierEditableCard key={`${side}-vb-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.vertical_bar?.type, barVariants)} final={variantLabelById(tmplFin?.vertical_bar?.type, barVariants)} type="select" selectItems={barVariants} onChange={(v) => saveBeam('vertical_bar', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.vertical_bar?.type || null} defaultSelectValue={tmplOrig?.vertical_bar?.type || null} draftValue={(pending as any)[side]?.beams?.vertical_bar?.type} />
@@ -300,15 +362,31 @@ interface OrderSecuringSectionProps {
             </View>
           </GroupBox>
         )}
+
+        {shouldShowAdditionalWood && (
+          <View style={{ marginTop: 16 }}>
+            <OrderPackageMaterialsSection
+              orderPackageId={orderPackageId}
+              title={`Additional Wood — ${SIDE_LABELS[side]}`}
+              materialType={ADDITIONAL_WOOD_MATERIAL_TYPES[side]}
+              variantSources={ADDITIONAL_WOOD_VARIANT_SOURCES}
+              addButtonLabel="Add wood"
+              quantityLabel="Qty"
+              mediaDesignation="additional_wood"
+              editable={editable}
+              showDimensions={false}
+            />
+          </View>
+        )}
       </View>
     );
   };
 
   const tabs: { key: Side; label: string }[] = [
-    { key: 'big_sides', label: 'Big Sides' },
-    { key: 'small_sides', label: 'Small Sides' },
-    { key: 'lid', label: 'Lid' },
-    { key: 'base', label: 'Base' },
+    { key: 'big_sides', label: SIDE_LABELS.big_sides },
+    { key: 'small_sides', label: SIDE_LABELS.small_sides },
+    { key: 'lid', label: SIDE_LABELS.lid },
+    { key: 'base', label: SIDE_LABELS.base },
   ];
 
   const titleFontSize = size === 'small' ? 16 : size === 'large' ? 20 : size === 'xl' ? 22 : size === 'xxl' ? 26 : 18;
@@ -483,4 +561,4 @@ interface OrderSecuringSectionProps {
   );
 };
 
-export default OrderSecuringSection;
+export default ManufacturingSection;

@@ -6,8 +6,8 @@ export interface TabDefinition {
   key: string;
   title: string;
   content: React.ReactNode;
-  isPacked?: boolean; // Box completed (blue)
-  isStarted?: boolean; // Box has tasks started (green)
+  isPacked?: boolean; // Box completed (sky)
+  isStarted?: boolean; // Box has tasks started (lime)
 }
 
 interface TabLayoutProps {
@@ -44,25 +44,25 @@ const TabLayout: React.FC<TabLayoutProps> = ({ tabs, activeKey, onChange }) => {
               className={`${
                 tab.isPacked
                   ? activeKey === tab.key
-                    ? 'bg-blue-100 border-blue-500'
-                    : 'bg-blue-50 border-blue-300'
+                    ? 'bg-sky-300 border-sky-700'
+                    : 'bg-sky-200 border-sky-600'
                   : tab.isStarted
                   ? activeKey === tab.key
-                    ? 'bg-green-100 border-green-500'
-                    : 'bg-green-50 border-green-300'
+                    ? 'bg-lime-300 border-lime-700'
+                    : 'bg-lime-200 border-lime-600'
                   : activeKey === tab.key
-                  ? 'bg-white border-primary-500'
-                  : 'bg-gray-100 border-gray-300'
+                  ? 'bg-white border-sky-500'
+                  : 'bg-sky-50 border-sky-300'
               }`}
             >
               <Text
                 style={{ fontSize: tabFontSize }}
                 className={`${
                   tab.isPacked
-                    ? activeKey === tab.key ? 'text-blue-800' : 'text-blue-700'
+                    ? activeKey === tab.key ? 'text-sky-900' : 'text-sky-900'
                     : tab.isStarted
-                    ? activeKey === tab.key ? 'text-green-800' : 'text-green-700'
-                    : activeKey === tab.key ? 'text-primary-700' : 'text-gray-700'
+                    ? activeKey === tab.key ? 'text-green-900' : 'text-green-900'
+                    : activeKey === tab.key ? 'text-sky-900' : 'text-sky-900'
                 } font-semibold`}
               >
                 {tab.title}{tab.isPacked ? ' ✓' : ''}

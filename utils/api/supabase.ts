@@ -3,6 +3,48 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
+type UUID = string;
+type Maybe<T> = T | null;
+type NullableDate = string | Date | null;
+type Json = Record<string, unknown>;
+type SupabaseUpdatePayload = Record<string, unknown>;
+
+interface AttendanceWindow {
+  orderId: UUID;
+  packerId: UUID;
+  shiftPeriod: string;
+}
+
+interface PackageItemInput {
+  order_package_id?: UUID;
+  orderPackageId?: UUID;
+  designation: string;
+  quantity: number;
+}
+
+interface FinalDimensionInput {
+  orderPackageId: UUID;
+  finalInfoId?: UUID | null;
+  originalInfoId?: UUID | null;
+  scope: string;
+  length: number | null;
+  width: number | null;
+  height: number | null;
+}
+
+interface PackageInfoInput {
+  orderPackageId: UUID;
+  finalInfoId?: UUID | null;
+  originalInfoId?: UUID | null;
+}
+
+const unwrapSingleRelation = <T>(relation: T | T[] | null | undefined): T | null => {
+  if (Array.isArray(relation)) {
+    return relation[0] ?? null;
+  }
+  return relation ?? null;
+};
+
 const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl || process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabasePublishableKey = Constants.expoConfig?.extra?.supabasePublishableKey || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -24,7 +66,7 @@ export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
 // Helper functions for authentication
 export const auth = {
   // Sign in with email/password
-  signIn: async (email, password) => {
+  signIn: async (email: string, password: string) => {
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
@@ -33,7 +75,7 @@ export const auth = {
   },
 
   // Sign in with phone/OTP (for packers)
-  signInWithPhone: async (phone) => {
+  signInWithPhone: async (phone: string) => {
     const { data, error } = await supabase.auth.signInWithOtp({
       phone,
     });
@@ -41,7 +83,7 @@ export const auth = {
   },
 
   // Verify OTP
-  verifyOtp: async (phone, token) => {
+  verifyOtp: async (phone: string, token: string) => {
     const { data, error } = await supabase.auth.verifyOtp({
       phone,
       token,
@@ -75,7 +117,7 @@ export const auth = {
   },
 
   // Get user by username (for username-based login)
-  getUserByUsername: async (username) => {
+  getUserByUsername: async (username: string) => {
     try {
       console.log('🔍 Looking up username:', username);
       
@@ -114,7 +156,7 @@ export const auth = {
   },
 
   // Sign in with username/password
-  signInWithUsername: async (username, password) => {
+  signInWithUsername: async (username: string, password: string) => {
     try {
       // First get the email for this username
       const { data: userProfile, error: lookupError } = await auth.getUserByUsername(username);
@@ -185,7 +227,7 @@ export const db = {
   },
 
   // Get user profile with role (with caching)
-  getUserProfile: async (userId) => {
+  getUserProfile: async (userId: UUID) => {
     // In-memory cache first (fastest)
     const cached = profileCache.get(userId);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
@@ -374,14 +416,17 @@ export const db = {
     if (error) return { data: null, error };
     
     // Transform the data to match expected format
-    const transformedData = data?.map(order => ({
-      id: order.id,
-      order_name: order.order_name,
-      description: order.description,
-      production_status: order.production_status,
-      client_name: order.clients?.name || 'Unknown Client',
-      assigned_packers_count: 0 // This could be calculated if needed
-    })) || [];
+    const transformedData = data?.map(order => {
+      const client = unwrapSingleRelation<{ name?: string }>(order.clients);
+      return {
+        id: order.id,
+        order_name: order.order_name,
+        description: order.description,
+        production_status: order.production_status,
+        client_name: client?.name || 'Unknown Client',
+        assigned_packers_count: 0 // This could be calculated if needed
+      };
+    }) || [];
     
     return { data: transformedData, error };
   },
@@ -405,7 +450,7 @@ export const db = {
   },
 
   // Assign packers to order using new JSON structure
-  assignPackersToOrder: async (orderId, packerIds) => {
+  assignPackersToOrder: async (orderId: UUID, packerIds: UUID[]) => {
     const { data, error } = await supabase
       .rpc('assign_packers_to_order', {
         order_uuid: orderId,
@@ -416,7 +461,16 @@ export const db = {
   },
 
   // Log attendance with comprehensive data
-  logAttendance: async (orderId, packerId, shiftPeriod, status, startTime = null, endTime = null, toolboxBriefing = false, isProjectStart = false) => {
+  logAttendance: async (
+    orderId: UUID,
+    packerId: UUID,
+    shiftPeriod: string,
+    status: string,
+    startTime: NullableDate = null,
+    endTime: NullableDate = null,
+    toolboxBriefing = false,
+    isProjectStart = false
+  ) => {
     const { data, error } = await supabase
       .from('attendance_logs')
       .insert({
@@ -435,7 +489,7 @@ export const db = {
   },
 
   // Update attendance end time
-  updateAttendanceEndTime: async (attendanceId, endTime) => {
+  updateAttendanceEndTime: async (attendanceId: UUID, endTime: NullableDate) => {
     const { data, error } = await supabase
       .from('attendance_logs')
       .update({ 
@@ -449,7 +503,12 @@ export const db = {
   },
 
   // Update attendance end time by order, packer, and shift period
-  updateAttendanceEndTimeByDetails: async (orderId, packerId, shiftPeriod, endTime) => {
+  updateAttendanceEndTimeByDetails: async (
+    orderId: UUID,
+    packerId: UUID,
+    shiftPeriod: string,
+    endTime: NullableDate
+  ) => {
     const today = new Date().toISOString().split('T')[0];
     
     const { data, error } = await supabase
@@ -469,7 +528,7 @@ export const db = {
   },
 
   // Mark toolbox briefing as completed for the whole order and current shift (today)
-  setToolboxBriefingForOrderShift: async (orderId, shiftPeriod) => {
+  setToolboxBriefingForOrderShift: async (orderId: UUID, shiftPeriod: string) => {
     const today = new Date().toISOString().split('T')[0];
     const { data, error } = await supabase
       .from('attendance_logs')
@@ -482,7 +541,12 @@ export const db = {
   },
 
   // Update attendance records to allow restarting
-  updateAttendanceForRestart: async (orderId, packerId, shiftPeriod, startTimeIso) => {
+  updateAttendanceForRestart: async (
+    orderId: UUID,
+    packerId: UUID,
+    shiftPeriod: string,
+    startTimeIso: string
+  ) => {
     const today = new Date().toISOString().split('T')[0];
     
     const { data, error } = await supabase
@@ -503,7 +567,7 @@ export const db = {
   },
 
   // Get active attendance for a packer today
-  getActiveAttendance: async (orderId, packerId, shiftPeriod) => {
+  getActiveAttendance: async (orderId: UUID, packerId: UUID, shiftPeriod: string) => {
     const today = new Date().toISOString().split('T')[0];
     
     const { data, error } = await supabase
@@ -526,7 +590,7 @@ export const db = {
   },
 
   // Get today's attendance for an order
-  getTodaysAttendance: async (orderId) => {
+  getTodaysAttendance: async (orderId: UUID) => {
     const today = new Date().toISOString().split('T')[0];
     
     const { data, error } = await supabase
@@ -546,7 +610,7 @@ export const db = {
   },
 
   // Check if packer has logged attendance today
-  hasLoggedAttendanceToday: async (orderId, packerId) => {
+  hasLoggedAttendanceToday: async (orderId: UUID, _packerId: UUID) => {
     const today = new Date().toISOString().split('T')[0];
     
     const { data, error } = await supabase
@@ -579,6 +643,8 @@ export const db = {
     
     // Transform the data to match expected format
     if (data) {
+      const client = unwrapSingleRelation<{ name?: string }>(data.clients);
+      const projectLead = unwrapSingleRelation<{ full_name?: string }>(data.project_lead);
       return {
         data: {
           id: data.id,
@@ -586,8 +652,8 @@ export const db = {
           description: data.description,
           production_status: data.production_status || null,
           commercial_status: data.commercial_status || null,
-          client_name: data.clients?.name || 'Unknown Client',
-          project_lead_name: data.project_lead?.full_name || ''
+          client_name: client?.name || 'Unknown Client',
+          project_lead_name: projectLead?.full_name || ''
         },
         error
       };
@@ -597,7 +663,7 @@ export const db = {
   },
 
   // Get packers by IDs
-  getPackersByIds: async (packerIds) => {
+  getPackersByIds: async (packerIds: UUID[]) => {
     const { data, error } = await supabase
       .from('profiles')
       .select('id, full_name, username')
@@ -607,7 +673,7 @@ export const db = {
   },
 
   // Get packers assigned to an order (using new JSON structure)
-  getOrderPackers: async (orderId) => {
+  getOrderPackers: async (orderId: UUID) => {
     const { data, error } = await supabase
       .rpc('get_order_packers', {
         order_uuid: orderId
@@ -617,7 +683,7 @@ export const db = {
   },
 
   // Remove self from order (packer self-removal)
-  removeSelfFromOrder: async (orderId, packerId) => {
+  removeSelfFromOrder: async (orderId: UUID, packerId: UUID) => {
     const { data, error } = await supabase
       .rpc('remove_self_from_order', {
         order_uuid: orderId,
@@ -648,19 +714,22 @@ export const db = {
     if (error) return { data: null, error };
     
     // Transform to match expected format
-    const transformed = (data || []).map(packer => ({
-      id: packer.id,
-      full_name: packer.full_name,
-      username: packer.username,
-      packer_status: packer.packer_status || 'available',
-      current_order_name: packer.orders?.order_name || null
-    }));
+    const transformed = (data || []).map(packer => {
+      const currentOrder = unwrapSingleRelation<{ order_name?: string }>(packer.orders);
+      return {
+        id: packer.id,
+        full_name: packer.full_name,
+        username: packer.username,
+        packer_status: packer.packer_status || 'available',
+        current_order_name: currentOrder?.order_name || null
+      };
+    });
     
     return { data: transformed, error: null };
   },
 
   // Update project lead for an order
-  updateProjectLead: async (orderId, projectLeadId) => {
+  updateProjectLead: async (orderId: UUID, projectLeadId: UUID) => {
     const { data, error } = await supabase
       .rpc('update_project_lead_with_status', {
         order_uuid: orderId,
@@ -672,7 +741,7 @@ export const db = {
 
   // Session management functions
   // Create a new packer session
-  createPackerSession: async (sessionData) => {
+  createPackerSession: async (sessionData: Json) => {
     const { data, error } = await supabase
       .from('packer_sessions')
       .insert(sessionData)
@@ -683,7 +752,7 @@ export const db = {
   },
 
   // Get active session for a packer
-  getActivePackerSession: async (packerId) => {
+  getActivePackerSession: async (packerId: UUID) => {
     const { data, error } = await supabase
       .from('packer_sessions')
       .select('*')
@@ -700,7 +769,7 @@ export const db = {
   },
 
   // Update packer session
-  updatePackerSession: async (sessionId, updates) => {
+  updatePackerSession: async (sessionId: UUID, updates: SupabaseUpdatePayload) => {
     const { data, error } = await supabase
       .from('packer_sessions')
       .update({ ...updates, updated_at: new Date().toISOString() })
@@ -712,7 +781,7 @@ export const db = {
   },
 
   // Get packer attendance by order and date (returns latest records)
-  getPackerAttendanceByOrderAndDate: async (orderId, packerId, date) => {
+  getPackerAttendanceByOrderAndDate: async (orderId: UUID, packerId: UUID, date: string) => {
     const { data, error } = await supabase
       .from('attendance_logs')
       .select('*')
@@ -725,7 +794,7 @@ export const db = {
   },
 
   // Get latest attendance records for all packers in an order
-  getLatestAttendanceForOrder: async (orderId) => {
+  getLatestAttendanceForOrder: async (orderId: UUID) => {
     const today = new Date().toISOString().split('T')[0];
     
     const { data, error } = await supabase
@@ -998,6 +1067,67 @@ export const db = {
       .select('id, center_of_gravity, quantity, box_type_id, packing_type_id, tare, net_weight, gross_weight, internal_length, internal_width, internal_height, external_length, external_width, external_height')
       .in('id', ids);
     return { data, error };
+  },
+
+  getOrderPackageInternalDimensions: async (orderPackageId: string) => {
+    type PackageInfoRow = {
+      id: string;
+      internal_length: number | null;
+      internal_width: number | null;
+      internal_height: number | null;
+    };
+
+    type DimensionTriple = {
+      length: number | null;
+      width: number | null;
+      height: number | null;
+    };
+
+    const { data: pkg, error: pkgError } = await supabase
+      .from('order_packages')
+      .select('id, original_pkg_info, final_pkg_info')
+      .eq('id', orderPackageId)
+      .single();
+
+    if (pkgError || !pkg) {
+      return { data: null, error: pkgError };
+    }
+
+    const infoIds = [pkg.original_pkg_info, pkg.final_pkg_info].filter(Boolean) as string[];
+    if (infoIds.length === 0) {
+      return { data: { original: null, final: null }, error: null };
+    }
+
+    const { data: infoData, error: infoError } = await supabase
+      .from('package_info')
+      .select('id, internal_length, internal_width, internal_height')
+      .in('id', infoIds);
+
+    if (infoError) {
+      return { data: null, error: infoError };
+    }
+
+    const lookup = new Map<string, PackageInfoRow>();
+    (infoData as PackageInfoRow[] | null)?.forEach((row) => {
+      lookup.set(row.id, row);
+    });
+
+    const normalize = (row: PackageInfoRow | null | undefined): DimensionTriple | null => {
+      if (!row) return null;
+      return {
+        length: typeof row.internal_length === 'number' ? row.internal_length : null,
+        width: typeof row.internal_width === 'number' ? row.internal_width : null,
+        height: typeof row.internal_height === 'number' ? row.internal_height : null,
+      };
+    };
+
+    return {
+      data: {
+        original: normalize(pkg.original_pkg_info ? lookup.get(pkg.original_pkg_info) : null),
+        final: normalize(pkg.final_pkg_info ? lookup.get(pkg.final_pkg_info) : null),
+      },
+      error: null,
+    };
   },
 
   // Upsert final dimensions for an order package. If finalInfoId is missing, create an EMPTY final package_info and link it.

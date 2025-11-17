@@ -36,7 +36,9 @@ const formatTime = (iso: string | null) => {
   if (!iso) return '—';
   try {
     const d = new Date(iso);
-    const date = d.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const date = `${day}/${month}/${d.getFullYear()}`;
     const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     return `${date} ${time}`;
   } catch {
