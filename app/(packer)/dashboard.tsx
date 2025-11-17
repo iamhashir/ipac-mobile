@@ -27,6 +27,24 @@ interface Packer {
   is_available: boolean;
 }
 
+interface OrderPackerAssignment {
+  id?: string | null;
+  packer_id?: string | null;
+  is_team_lead?: boolean | null;
+  is_project_lead?: boolean | null;
+}
+
+const normalizeOrderPackers = (packers: unknown): OrderPackerAssignment[] =>
+  Array.isArray(packers) ? (packers as OrderPackerAssignment[]) : [];
+
+const resolvePackerIdentifier = (packer?: OrderPackerAssignment | null): string | null =>
+  packer?.packer_id || packer?.id || null;
+
+const collectPackerIds = (packers: OrderPackerAssignment[]): string[] =>
+  packers
+    .map(resolvePackerIdentifier)
+    .filter((id): id is string => Boolean(id));
+
 export default function PackerDashboard() {
   const { profile, signOut } = useAuth();
   const { createSession, session } = usePackerSession();
@@ -108,16 +126,21 @@ export default function PackerDashboard() {
       }
       
       // Set selected packers from the order
-      if (orderPackers && orderPackers.length > 0) {
-        const packerIds = orderPackers.map(p => p.packer_id || p.id);
-        setSelectedPackers(packerIds);
-        
+      const normalizedPackers = normalizeOrderPackers(orderPackers);
+      if (normalizedPackers.length > 0) {
+        const packerIds = collectPackerIds(normalizedPackers);
+        if (packerIds.length > 0) {
+          setSelectedPackers(packerIds);
+        }
+
         // Find all project leads
-        const leadPackers = orderPackers.filter(p => p.is_team_lead || p.is_project_lead);
+        const leadPackers = normalizedPackers.filter(p => p.is_team_lead || p.is_project_lead);
         if (leadPackers.length > 0) {
-          const leadIds = leadPackers.map(p => p.packer_id || p.id);
-          setProjectLeads(leadIds);
-          console.log('Restored project leads:', leadIds);
+          const leadIds = collectPackerIds(leadPackers);
+          if (leadIds.length > 0) {
+            setProjectLeads(leadIds);
+            console.log('Restored project leads:', leadIds);
+          }
         }
       }
       
@@ -154,15 +177,11 @@ export default function PackerDashboard() {
         setAllPackers(transformedPackers);
         
         // Auto-select the logged-in user if they're available
-        if (profile?.id) {
-          const currentUser = transformedPackers.find(packer => packer.id === profile.id);
+        const currentUserId = profile?.id;
+        if (currentUserId) {
+          const currentUser = transformedPackers.find(packer => packer.id === currentUserId);
           if (currentUser && currentUser.is_available) {
-            setSelectedPackers(prev => {
-              if (!prev.includes(profile.id)) {
-                return [...prev, profile.id];
-              }
-              return prev;
-            });
+            setSelectedPackers(prev => (prev.includes(currentUserId) ? prev : [...prev, currentUserId]));
             console.log('Auto-selected current user:', currentUser.full_name);
           }
         }
@@ -275,8 +294,9 @@ export default function PackerDashboard() {
 
       if (isActiveSession) {
         // For active sessions, handle additions and removals
-        const { data: currentPackers } = await db.getOrderPackers(selectedOrder);
-        const currentPackerIds = (currentPackers || []).map(p => p.packer_id || p.id);
+  const { data: currentPackers } = await db.getOrderPackers(selectedOrder);
+  const currentPackerList = normalizeOrderPackers(currentPackers);
+  const currentPackerIds = collectPackerIds(currentPackerList);
         
         // Find packers to add
         const packersToAdd = selectedPackers.filter(id => !currentPackerIds.includes(id));

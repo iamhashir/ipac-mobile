@@ -558,13 +558,15 @@ export const db = {
   },
 
   // Get order by ID with project lead
-  getOrderById: async (orderId) => {
+  getOrderById: async (orderId: string) => {
     const { data, error } = await supabase
       .from('orders')
       .select(`
         id,
         order_name,
         description,
+        production_status,
+        commercial_status,
         clients (
           name
         ),
@@ -582,6 +584,8 @@ export const db = {
           id: data.id,
           order_name: data.order_name,
           description: data.description,
+          production_status: data.production_status || null,
+          commercial_status: data.commercial_status || null,
           client_name: data.clients?.name || 'Unknown Client',
           project_lead_name: data.project_lead?.full_name || ''
         },

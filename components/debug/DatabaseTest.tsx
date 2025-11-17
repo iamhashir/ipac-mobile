@@ -55,10 +55,11 @@ export function DatabaseTest() {
             error: userProfileError?.message,
             data: userProfileTest
           };
-        } catch (err) {
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
           testResults.getUserProfile = {
             success: false,
-            error: err.message,
+            error: message,
             data: null
           };
         }
@@ -74,10 +75,11 @@ export function DatabaseTest() {
         user: sessionData.session?.user?.email || null
       };
 
-    } catch (error) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
       testResults.generalError = {
         success: false,
-        error: error.message
+        error: message
       };
     }
 

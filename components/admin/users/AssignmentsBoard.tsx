@@ -107,7 +107,11 @@ export default function AssignmentsBoard() {
   };
 
   const confirmAssign = async () => {
-    if (!confirm.packerId) return setConfirm({ open: false });
+    const packerId = confirm.packerId;
+    if (!packerId) {
+      setConfirm({ open: false });
+      return;
+    }
 
     // Unassign to pool
     if (confirm.orderId === "POOL" && confirm.originOrderId) {
@@ -115,7 +119,7 @@ export default function AssignmentsBoard() {
       if (!origin) return setConfirm({ open: false });
       const originIds = origin.packers
         .map((p) => p.id)
-        .filter((id) => id !== confirm.packerId);
+        .filter((id) => id !== packerId);
       const { error } = await db.assignPackersToOrder(origin.id, originIds);
       if (error) setError(error.message || "Failed to unassign");
       setOrders((prev) =>
@@ -123,14 +127,14 @@ export default function AssignmentsBoard() {
           o.id === origin.id
             ? {
                 ...o,
-                packers: o.packers.filter((p) => p.id !== confirm.packerId),
+                packers: o.packers.filter((p) => p.id !== packerId),
               }
             : o
         )
       );
       setAllPackers((prev) =>
         prev.map((p) =>
-          p.id === confirm.packerId ? { ...p, packer_status: "available" } : p
+          p.id === packerId ? { ...p, packer_status: "available" } : p
         )
       );
       setConfirm({ open: false });
@@ -138,7 +142,7 @@ export default function AssignmentsBoard() {
     }
 
     if (!confirm.orderId) return setConfirm({ open: false });
-    const target = orders.find((o) => o.id === confirm.orderId);
+  const target = orders.find((o) => o.id === confirm.orderId);
     if (!target) return setConfirm({ open: false });
 
     // Move between orders
@@ -147,10 +151,10 @@ export default function AssignmentsBoard() {
       if (origin) {
         const originIds = origin.packers
           .map((p) => p.id)
-          .filter((id) => id !== confirm.packerId);
+          .filter((id) => id !== packerId);
         await db.assignPackersToOrder(origin.id, originIds);
       }
-      const targetIds = [...target.packers.map((p) => p.id), confirm.packerId];
+  const targetIds = [...target.packers.map((p) => p.id), packerId];
       const { error } = await db.assignPackersToOrder(target.id, targetIds);
       if (error) setError(error.message || "Failed to move packer");
       setOrders((prev) =>
@@ -161,10 +165,10 @@ export default function AssignmentsBoard() {
               packers: [
                 ...o.packers,
                 {
-                  id: confirm.packerId!,
+                  id: packerId,
                   full_name:
                     confirm.packerName ||
-                    allPackers.find((p) => p.id === confirm.packerId)
+                    allPackers.find((p) => p.id === packerId)
                       ?.full_name ||
                     "—",
                   packer_status: "busy",
@@ -174,7 +178,7 @@ export default function AssignmentsBoard() {
           if (o.id === confirm.originOrderId)
             return {
               ...o,
-              packers: o.packers.filter((p) => p.id !== confirm.packerId),
+              packers: o.packers.filter((p) => p.id !== packerId),
             };
           return o;
         })
@@ -185,16 +189,16 @@ export default function AssignmentsBoard() {
 
     // Assign from pool -> order
     const existing = target.packers.map((p) => p.id);
-    if (existing.includes(confirm.packerId)) {
+  if (existing.includes(packerId)) {
       setConfirm({ open: false });
       return;
     }
-    const newIds = [...existing, confirm.packerId];
+  const newIds = [...existing, packerId];
     const { error } = await db.assignPackersToOrder(target.id, newIds);
     if (error) {
       setError(error.message || "Failed to assign packer");
     } else {
-      const added = allPackers.find((p) => p.id === confirm.packerId);
+  const added = allPackers.find((p) => p.id === packerId);
       setOrders((prev) =>
         prev.map((o) =>
           o.id === target.id
@@ -203,7 +207,7 @@ export default function AssignmentsBoard() {
                 packers: [
                   ...o.packers,
                   {
-                    id: added?.id || confirm.packerId,
+                    id: added?.id || packerId,
                     full_name: added?.full_name || "—",
                     packer_status: "busy",
                   },
@@ -214,7 +218,7 @@ export default function AssignmentsBoard() {
       );
       setAllPackers((prev) =>
         prev.map((p) =>
-          p.id === confirm.packerId ? { ...p, packer_status: "busy" } : p
+          p.id === packerId ? { ...p, packer_status: "busy" } : p
         )
       );
     }

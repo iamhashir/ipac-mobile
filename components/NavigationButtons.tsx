@@ -24,7 +24,7 @@ export const NavigationButtons: React.FC<NavigationButtonsProps> = ({ currentScr
   const navigateTo = (screen: string) => {
     if (screen !== currentScreen) {
       const sessionOrderId = session?.order_id ? `?orderId=${session.order_id}` : '';
-      router.push(`/(packer)/${screen}${sessionOrderId}`);
+      router.push(`/(packer)/${screen}${sessionOrderId}` as any);
     }
   };
 
@@ -45,7 +45,7 @@ export const NavigationButtons: React.FC<NavigationButtonsProps> = ({ currentScr
 
   const handlePackagingPress = () => {
     if (packagingAllowed) {
-      navigateTo('packing-report');
+      navigateTo('packing-list');
       return;
     }
     let message = 'You must complete the following steps first:\n';

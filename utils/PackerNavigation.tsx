@@ -6,11 +6,11 @@ export const usePackerNavigation = () => {
   const router = useRouter();
   const { session, canAccessAttendance, canAccessPackaging } = usePackerSession();
 
-  const navigateToStep = (step: 'dashboard' | 'attendance' | 'packing-report') => {
+  const navigateToStep = (step: 'dashboard' | 'attendance' | 'packing-list') => {
     switch (step) {
       case 'dashboard':
         // Always allow going back to dashboard
-        router.push('/(packer)/dashboard');
+  router.push('/(packer)/dashboard' as any);
         break;
 
       case 'attendance':
@@ -28,10 +28,10 @@ export const usePackerNavigation = () => {
           );
           return false;
         }
-        router.push('/(packer)/attendance');
+  router.push('/(packer)/attendance' as any);
         break;
 
-      case 'packing-report':
+  case 'packing-list':
         if (!canAccessPackaging()) {
           let message = 'You must complete the following steps first:\n';
           
@@ -50,9 +50,9 @@ export const usePackerNavigation = () => {
                 text: 'Go Back',
                 onPress: () => {
                   if (canAccessAttendance()) {
-                    router.push('/(packer)/attendance');
+                    router.push('/(packer)/attendance' as any);
                   } else {
-                    router.push('/(packer)/dashboard');
+                    router.push('/(packer)/dashboard' as any);
                   }
                 },
               },
@@ -61,7 +61,7 @@ export const usePackerNavigation = () => {
           );
           return false;
         }
-        router.push('/(packer)/packing-report');
+        router.push('/(packer)/packing-list' as any);
         break;
 
       default:
@@ -71,23 +71,23 @@ export const usePackerNavigation = () => {
     return true;
   };
 
-  const getNextStep = (): 'attendance' | 'packing-report' | null => {
+  const getNextStep = (): 'attendance' | 'packing-list' | null => {
     if (!canAccessAttendance()) {
       return null; // Stay on dashboard
     }
     if (!session?.attendance_completed) {
       return 'attendance';
     }
-    return 'packing-report';
+  return 'packing-list';
   };
 
-  const canNavigateToStep = (step: 'dashboard' | 'attendance' | 'packing-report'): boolean => {
+  const canNavigateToStep = (step: 'dashboard' | 'attendance' | 'packing-list'): boolean => {
     switch (step) {
       case 'dashboard':
         return true; // Always can go back to dashboard
       case 'attendance':
         return canAccessAttendance();
-      case 'packing-report':
+  case 'packing-list':
         return canAccessPackaging();
       default:
         return false;
@@ -116,7 +116,7 @@ export const usePackerNavigation = () => {
     }
 
     return {
-      currentStep: 'packing-report',
+  currentStep: 'packing-list',
       stepNumber: 3,
       totalSteps: 3,
       stepName: 'Packing List',

@@ -544,7 +544,7 @@ function SupplierVariantManager({
       newErrors.price = "Enter a valid price";
     if (!selectedUnit) newErrors.unit = "Please select a unit of measure";
     setErrors(newErrors);
-    if (Object.keys(newErrors).length > 0) return;
+    if (Object.keys(newErrors).length > 0 || !selectedMaterial || !selectedUnit) return;
     setIsSubmitting(true);
     try {
       const variantData: any = {
@@ -592,7 +592,7 @@ function SupplierVariantManager({
       newErrors.price = "Enter a valid price";
     if (!selectedUnit) newErrors.unit = "Please select a unit of measure";
     setErrors(newErrors);
-    if (Object.keys(newErrors).length > 0) return;
+    if (Object.keys(newErrors).length > 0 || !selectedUnit) return;
     setIsSubmitting(true);
     try {
       const materialData: any = {

@@ -156,14 +156,14 @@ export default function ActivityMonitor({ orderId, orderPackages }: ActivityMoni
         activeAssignments.forEach((a: any) => assignedPackerIds.add(a.packer_id));
 
         // Get box numbers for this task (use ALL packages for lookup)
-        const taskPackages = taskLog.task_packages || [];
+        const taskPackages = Array.isArray(taskLog.task_packages) ? taskLog.task_packages : [];
         const { data: allPkgs } = await db.getOrderPackages(orderId);
         const boxNumbers = taskPackages
           .map((tp: any) => {
             const pkg = (allPkgs || []).find((p: any) => p.id === tp.order_package_id);
             return pkg ? `#${pkg.package_number}` : null;
           })
-          .filter(Boolean);
+          .filter((box): box is string => Boolean(box));
 
         // Determine overall task status
         const hasInProgress = activeAssignments.some((a: any) => a.task_status === 'in_progress');
@@ -187,9 +187,14 @@ export default function ActivityMonitor({ orderId, orderPackages }: ActivityMoni
           };
         });
 
+        const taskNameSource = taskLog.tasks as Array<{ name?: string | null }> | { name?: string | null } | null | undefined;
+        const taskName = Array.isArray(taskNameSource)
+          ? taskNameSource[0]?.name
+          : taskNameSource?.name;
+
         taskActivitiesList.push({
           task_log_id: taskLog.id,
-          task_name: taskLog.tasks?.name || 'Unknown Task',
+          task_name: taskName || 'Unknown Task',
           task_status: taskStatus,
           working_on_boxes: boxNumbers,
           start_time: taskLog.start_time,

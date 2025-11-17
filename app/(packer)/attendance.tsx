@@ -40,10 +40,62 @@ interface Order {
 
 type TimePeriod = 'morning' | 'afternoon';
 
+interface OrderPackerSummary {
+  id?: string;
+  packer_id?: string;
+  full_name: string;
+  is_team_lead?: boolean;
+  is_project_lead?: boolean;
+}
+
+interface TeamLeadProfile {
+  full_name?: string | null;
+}
+
+type TeamLeadProfilePayload = TeamLeadProfile | TeamLeadProfile[] | null | undefined;
+
+type LogAttendanceFn = (
+  orderId: string,
+  packerId: string,
+  shiftPeriod: TimePeriod,
+  status: 'present' | 'absent',
+  startTime?: string | null,
+  endTime?: string | null,
+  toolboxBriefing?: boolean,
+  isProjectStart?: boolean
+) => Promise<{ error: unknown }>;
+
+interface AttendanceRow {
+  shift_period: TimePeriod;
+  status: 'present' | 'absent';
+  start_time: string | null;
+  end_time: string | null;
+  toolbox_briefing_completed?: boolean | null;
+}
+
+const extractLeadName = (payload: TeamLeadProfilePayload): string | null => {
+  if (!payload) return null;
+  if (Array.isArray(payload)) {
+    const match = payload.find(profile => profile?.full_name);
+    return match?.full_name?.trim() || null;
+  }
+  return payload.full_name?.trim() || null;
+};
+
+const sanitizeLeadNames = (names: Array<string | null | undefined>): string[] =>
+  names
+    .map(name => (typeof name === 'string' ? name.trim() : ''))
+    .filter((name): name is string => Boolean(name));
+
+const getPackerIdentifier = (packer?: OrderPackerSummary | null): string | null => {
+  if (!packer) return null;
+  return packer.packer_id || packer.id || null;
+};
+
 export default function AttendanceScreen() {
-  const { profile, signOut } = useAuth();
+  const { profile, signOut } = useAuth() as any;
   const router = useRouter();
-  const params = useLocalSearchParams();
+  const params = useLocalSearchParams<{ orderId?: string }>();
   const { width, height } = useWindowDimensions();
   const isLandscape = width > height;
   const isCompact = isLandscape && height < 450;
@@ -64,7 +116,7 @@ export default function AttendanceScreen() {
   // State management based on reference
   const [order, setOrder] = useState<Order | null>(null);
   const [packers, setPackers] = useState<string[]>([]);
-  const [packersData, setPackersData] = useState<any[]>([]);
+  const [packersData, setPackersData] = useState<OrderPackerSummary[]>([]);
   const [projectLeads, setProjectLeads] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [attendance, setAttendance] = useState<AttendanceRecord>({});
@@ -75,7 +127,7 @@ export default function AttendanceScreen() {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Parse parameters - get from session if not in params
-  const orderId = (params.orderId as string) || session?.order_id;
+  const orderId: string = (typeof params.orderId === 'string' ? params.orderId.trim() : '') || session?.order_id || '';
 
   useEffect(() => {
     if (orderId) {
@@ -105,6 +157,8 @@ export default function AttendanceScreen() {
             
             const packerData = packersData.find(p => p.full_name === name);
             if (!packerData) continue;
+            const packerIdentifier = getPackerIdentifier(packerData);
+            if (!packerIdentifier) continue;
 
             try {
               const today = new Date().toISOString().split('T')[0];
@@ -113,7 +167,7 @@ export default function AttendanceScreen() {
               // Update end time to 12:00 in database
               const { error } = await db.updateAttendanceEndTimeByDetails(
                 orderId,
-                packerData.packer_id || packerData.id,
+                packerIdentifier,
                 'morning',
                 endTimeISO
               );
@@ -149,6 +203,8 @@ export default function AttendanceScreen() {
     return () => clearInterval(interval);
   }, [orderId, packers, packersData, attendance]);
 
+  const logAttendance = db.logAttendance as LogAttendanceFn;
+
   const loadData = async () => {
     try {
       // Load order details
@@ -163,17 +219,18 @@ export default function AttendanceScreen() {
       // Load all team leads for this order; fallback to project_lead_name or single lead if needed
       try {
         const { data: leadsList, error: leadsErr } = await teamLead.getOrderTeamLeads(orderId);
-        if (!leadsErr && Array.isArray(leadsList) && leadsList.length > 0) {
-          setProjectLeads(leadsList.map((l: any) => l.full_name).filter(Boolean));
+        const normalizedLeadNames = !leadsErr && Array.isArray(leadsList)
+          ? sanitizeLeadNames(leadsList.map((lead: TeamLeadProfile) => lead.full_name))
+          : [];
+
+        if (normalizedLeadNames.length > 0) {
+          setProjectLeads(normalizedLeadNames);
         } else if (orderData.project_lead_name) {
           setProjectLeads([orderData.project_lead_name]);
         } else {
           const { data: leadData } = await teamLead.getOrderTeamLead(orderId);
-          if (leadData?.profiles?.full_name) {
-            setProjectLeads([leadData.profiles.full_name]);
-          } else {
-            setProjectLeads([]);
-          }
+          const fallbackLeadName = extractLeadName(leadData?.profiles as TeamLeadProfilePayload);
+          setProjectLeads(fallbackLeadName ? [fallbackLeadName] : []);
         }
       } catch (_) {
         setProjectLeads(orderData.project_lead_name ? [orderData.project_lead_name] : []);
@@ -188,13 +245,14 @@ export default function AttendanceScreen() {
       }
 
       // Store packers data and names
-      setPackersData(packersResponse);
-      const packerNames = packersResponse.map(packer => packer.full_name);
+      const packerList: OrderPackerSummary[] = Array.isArray(packersResponse) ? packersResponse : [];
+      setPackersData(packerList);
+      const packerNames = packerList.map((packer: OrderPackerSummary) => packer.full_name);
       setPackers(packerNames);
 
       // Initialize attendance records
       const initialAttendance: AttendanceRecord = {};
-      packerNames.forEach(name => {
+      packerNames.forEach((name: string) => {
         initialAttendance[name] = {
           morning: {
             present: null,
@@ -212,10 +270,10 @@ export default function AttendanceScreen() {
           }
         };
       });
-      setAttendance(initialAttendance);
+  setAttendance(initialAttendance);
       
-      // Load existing attendance data from database
-await loadExistingAttendance(packersResponse, initialAttendance);
+  // Load existing attendance data from database
+  await loadExistingAttendance(packerList, initialAttendance);
 
       // Project leads already loaded above
 
@@ -227,7 +285,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
     }
   };
 
-  const loadExistingAttendance = async (packersResponse: any[], initialAttendance: AttendanceRecord) => {
+  const loadExistingAttendance = async (packersResponse: OrderPackerSummary[], initialAttendance: AttendanceRecord) => {
     try {
       // Get today's date
       const today = new Date().toISOString().split('T')[0];
@@ -235,7 +293,11 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       
       // Load existing attendance records for each packer
       for (const packer of packersResponse) {
-        const packerId = packer.packer_id || packer.id;
+        const packerId = getPackerIdentifier(packer);
+        if (!packerId) {
+          console.warn('Skipping attendance load due to missing packer identifier');
+          continue;
+        }
         const packerName = packer.full_name;
         
         // Get attendance records for this packer and order today
@@ -250,10 +312,11 @@ await loadExistingAttendance(packersResponse, initialAttendance);
           continue;
         }
         
-        if (attendanceRecords && attendanceRecords.length > 0) {
+        const attendanceRows: AttendanceRow[] = Array.isArray(attendanceRecords) ? attendanceRecords : [];
+        if (attendanceRows.length > 0) {
           // Process attendance records and update state
-          const morningRecord = attendanceRecords.find(r => r.shift_period === 'morning');
-          const afternoonRecord = attendanceRecords.find(r => r.shift_period === 'afternoon');
+          const morningRecord = attendanceRows.find(r => r.shift_period === 'morning');
+          const afternoonRecord = attendanceRows.find(r => r.shift_period === 'afternoon');
           
           if (morningRecord) {
             initialAttendance[packerName].morning = {
@@ -280,7 +343,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
           // 1. No attendance for current shift, OR
           // 2. Current shift has attendance with end_time (packer left and is returning - needs new toolbox)
           const currentShift: TimePeriod = isAfternoon ? 'afternoon' : 'morning';
-          const currentShiftRecords = attendanceRecords.filter(r => r.shift_period === currentShift);
+          const currentShiftRecords = attendanceRows.filter(r => r.shift_period === currentShift);
           
           // If any current shift record has toolbox_briefing_completed = true and no end_time, they're good
           const hasActiveToolbox = currentShiftRecords.some(
@@ -354,12 +417,17 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       Alert.alert('Error', 'Packer data not found');
       return;
     }
+    const packerIdentifier = getPackerIdentifier(packerData);
+    if (!packerIdentifier) {
+      Alert.alert('Error', 'Unable to resolve packer identifier');
+      return;
+    }
     
     if (isPresent) {
       // Check if attendance can be recorded (prevents spam clicking)
       const { data: canRecord, error: validationError } = await db.canRecordAttendance(
         orderId, 
-        packerData.packer_id || packerData.id, 
+        packerIdentifier, 
         period
       );
       
@@ -391,7 +459,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       await recordAttendanceForPacker(name, period);
     } else {
       // If switching to absent and there is active attendance, confirm override first
-      const { data: active } = await db.getActiveAttendance(orderId, packerData.packer_id || packerData.id, period);
+      const { data: active } = await db.getActiveAttendance(orderId, packerIdentifier, period);
       if (active) {
         Alert.alert(
           'Already Recorded', 
@@ -435,12 +503,17 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       Alert.alert('Error', 'Packer data not found');
       return;
     }
+    const packerIdentifier = getPackerIdentifier(packerData);
+    if (!packerIdentifier) {
+      Alert.alert('Error', 'Packer identifier not found');
+      return;
+    }
 
     try {
       // Log absent attendance record to database
-      const { error } = await db.logAttendance(
+      const { error } = await logAttendance(
         orderId,
-        packerData.packer_id || packerData.id,
+        packerIdentifier,
         period,
         'absent',
         null, // no start time for absent
@@ -482,6 +555,11 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       Alert.alert('Error', 'Packer data not found');
       return;
     }
+    const packerIdentifier = getPackerIdentifier(packerData);
+    if (!packerIdentifier) {
+      Alert.alert('Error', 'Packer identifier not found');
+      return;
+    }
 
     try {
       const currentTime = getCurrentTime();
@@ -489,9 +567,9 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       const startTimeISO = new Date(`${today} ${currentTime}`).toISOString();
       
       // Log attendance record to database
-      const { error } = await db.logAttendance(
+      const { error } = await logAttendance(
         orderId,
-        packerData.packer_id || packerData.id,
+        packerIdentifier,
         period,
         'present',
         startTimeISO,
@@ -548,15 +626,17 @@ await loadExistingAttendance(packersResponse, initialAttendance);
     
     if (isPresent) {
       // When bulk marking as present, validate each packer first
-      const validPackers = [];
+      const validPackers: string[] = [];
       
       for (const name of packers) {
         const packerData = packersData.find(p => p.full_name === name);
         if (!packerData) continue;
+        const packerIdentifier = getPackerIdentifier(packerData);
+        if (!packerIdentifier) continue;
         
         const { data: canRecord } = await db.canRecordAttendance(
           orderId, 
-          packerData.packer_id || packerData.id, 
+          packerIdentifier, 
           period
         );
         
@@ -601,7 +681,11 @@ await loadExistingAttendance(packersResponse, initialAttendance);
         if (!packerData || !attendance[name][period].present || !attendance[name][period].startTime) {
           return Promise.resolve(); // skip if no valid attendance to end
         }
-        return db.updateAttendanceEndTimeByDetails(orderId, packerData.packer_id || packerData.id, period, newTime);
+        const packerIdentifier = getPackerIdentifier(packerData);
+        if (!packerIdentifier) {
+          return Promise.resolve();
+        }
+        return db.updateAttendanceEndTimeByDetails(orderId, packerIdentifier, period, newTime);
       });
       await Promise.all(promises);
 
@@ -645,6 +729,11 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       Alert.alert('Error', 'Packer data not found');
       return;
     }
+    const packerIdentifier = getPackerIdentifier(packerData);
+    if (!packerIdentifier) {
+      Alert.alert('Error', 'Packer identifier not found');
+      return;
+    }
 
     try {
       const currentTime = getCurrentTime();
@@ -652,9 +741,9 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       const startTimeISO = new Date(`${today} ${currentTime}`).toISOString();
       
       // Always create a new attendance log (like Present button does)
-      const { error } = await db.logAttendance(
+      const { error } = await logAttendance(
         orderId,
-        packerData.packer_id || packerData.id,
+        packerIdentifier,
         period,
         'present',
         startTimeISO,
@@ -696,6 +785,11 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       Alert.alert('Error', 'Packer data not found');
       return;
     }
+    const packerIdentifier = getPackerIdentifier(packerData);
+    if (!packerIdentifier) {
+      Alert.alert('Error', 'Unable to resolve packer identifier');
+      return;
+    }
 
     const attendanceEntry = attendance[name]?.[period];
     if (!attendanceEntry?.present || !attendanceEntry?.startTime) {
@@ -708,7 +802,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       
       const { error } = await db.updateAttendanceEndTimeByDetails(
         orderId,
-        packerData.packer_id || packerData.id,
+        packerIdentifier,
         period,
         endTime
       );
@@ -744,11 +838,16 @@ await loadExistingAttendance(packersResponse, initialAttendance);
       Alert.alert('Error', 'Packer data not found');
       return;
     }
+    const packerIdentifier = getPackerIdentifier(packerData);
+    if (!packerIdentifier) {
+      Alert.alert('Error', 'Unable to resolve packer identifier');
+      return;
+    }
 
     try {
       // 1) End any active attendance record (present/absent without end_time)
       const endIso = new Date().toISOString();
-      await db.updateAttendanceEndTimeByDetails(orderId, packerData.packer_id || packerData.id, period, endIso);
+  await db.updateAttendanceEndTimeByDetails(orderId, packerIdentifier, period, endIso);
 
       // 2) Apply the requested change
       if (toPresent) {
@@ -828,7 +927,7 @@ await loadExistingAttendance(packersResponse, initialAttendance);
         return;
       }
       router.push({
-        pathname: '/(packer)/packing-report',
+        pathname: '/(packer)/packing-list',
         params: { orderId }
       });
     }

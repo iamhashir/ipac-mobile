@@ -49,6 +49,7 @@ export interface SupplierPricing {
   price_per_unit: number;
   supplier_quantity: number;
   updated_at?: string;
+  unit_id?: string | null;
   suppliers?: Supplier;  // API returns 'suppliers' not 'supplier'
 }
 
@@ -181,7 +182,11 @@ export const materialOperations = {
           unit_id: m.unit_id,
           unit: m.unit_id ? unitMap.get(m.unit_id) || null : null,
           material_variants: materialVariants,
-          material_tags: (tagsByMat.get(m.id) || []).map((t: any) => ({ tag_id: t?.id, tags: t }))
+          material_tags: (tagsByMat.get(m.id) || []).map((t: any) => ({
+            material_id: m.id,
+            tag_id: t?.id,
+            tags: t
+          }))
         };
       });
 

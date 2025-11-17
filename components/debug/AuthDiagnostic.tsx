@@ -4,7 +4,13 @@ import { useAuth } from '../../utils/AuthContext';
 import { useRouter } from 'expo-router';
 
 export function AuthDiagnostic() {
-  const { user, profile, loading, session, getUserRole } = useAuth();
+  const { user, profile, loading, session, getUserRole } = useAuth() as {
+    user: any;
+    profile: any;
+    loading: boolean;
+    session: any;
+    getUserRole: () => string;
+  };
   const router = useRouter();
 
   const diagnosticInfo = {
