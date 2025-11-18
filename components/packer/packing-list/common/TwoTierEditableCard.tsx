@@ -29,7 +29,7 @@ const formatValue = (v: any) => {
   return String(v);
 };
 
-const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, original, final, type, onChange, selectItems, width, flex, finalSelectValue, defaultSelectValue, compact = false, editTarget = 'final', editable = true, draftValue, commitDebounceMs = 600, highlightChanges = true }) => {
+const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, original, final, type, onChange, selectItems, width, flex, finalSelectValue, defaultSelectValue, compact = false, editTarget = 'final', editable = true, draftValue, commitDebounceMs = 600, highlightChanges = false }) => {
   const isEditingOriginal = editTarget === 'original';
   // Determine initial value based on which tier is editable, overridden by draftValue if provided
   const initialSelect = isEditingOriginal ? (defaultSelectValue ?? null) : (finalSelectValue ?? null);

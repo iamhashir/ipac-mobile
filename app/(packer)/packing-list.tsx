@@ -654,7 +654,6 @@ export default function PackingListPage() {
                 orderPackageId={p.id}
                 editTarget="final"
                 editable={p.status !== "packed"}
-                autoSave={false}
                 internalDimensions={{ original: internalDimsOriginal, final: internalDimsFinal }}
               />
             </View>
