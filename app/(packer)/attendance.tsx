@@ -125,6 +125,7 @@ export default function AttendanceScreen() {
   const [saving, setSaving] = useState(false);
   const [errorAlert, setErrorAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const processedAfternoonAutoCloseDateRef = useRef<string | null>(null);
 
   // Parse parameters - get from session if not in params
   const orderId: string = (typeof params.orderId === 'string' ? params.orderId.trim() : '') || session?.order_id || '';
@@ -140,21 +141,19 @@ export default function AttendanceScreen() {
   useEffect(() => {
     if (!orderId || packers.length === 0) return;
 
-    const checkAndAutoMarkAfternoon = async () => {
+    const checkAndAutoMarkShifts = async () => {
       const now = new Date();
       const hour = now.getHours();
-      
-      // Only auto-mark when it's afternoon (>= 12pm)
+
       if (hour >= 12) {
-        // First, auto-mark morning end times for all packers with active morning attendance
         for (const name of packers) {
           const packerAttendance = attendance[name];
-          
-          // If packer was present in morning, has start time, but no end time
-          if (packerAttendance?.morning.present === true && 
-              packerAttendance?.morning.startTime &&
-              !packerAttendance?.morning.endTime) {
-            
+
+          if (
+            packerAttendance?.morning.present === true &&
+            packerAttendance?.morning.startTime &&
+            !packerAttendance?.morning.endTime
+          ) {
             const packerData = packersData.find(p => p.full_name === name);
             if (!packerData) continue;
             const packerIdentifier = getPackerIdentifier(packerData);
@@ -163,8 +162,7 @@ export default function AttendanceScreen() {
             try {
               const today = new Date().toISOString().split('T')[0];
               const endTimeISO = new Date(`${today} 12:00:00`).toISOString();
-              
-              // Update end time to 12:00 in database
+
               const { error } = await db.updateAttendanceEndTimeByDetails(
                 orderId,
                 packerIdentifier,
@@ -173,7 +171,6 @@ export default function AttendanceScreen() {
               );
 
               if (!error) {
-                // Update local state
                 setAttendance(prevAttendance => ({
                   ...prevAttendance,
                   [name]: {
@@ -192,13 +189,73 @@ export default function AttendanceScreen() {
           }
         }
       }
+
+      const previousDay = new Date(now);
+      previousDay.setHours(0, 0, 0, 0);
+      previousDay.setDate(previousDay.getDate() - 1);
+      const previousDayStr = previousDay.toISOString().split('T')[0];
+
+      if (processedAfternoonAutoCloseDateRef.current === previousDayStr) {
+        return;
+      }
+
+      const midnightIso = new Date(`${previousDayStr} 00:00:00`).toISOString();
+      let hadError = false;
+
+      for (const name of packers) {
+        const packerData = packersData.find(p => p.full_name === name);
+        if (!packerData) continue;
+        const packerIdentifier = getPackerIdentifier(packerData);
+        if (!packerIdentifier) continue;
+
+        try {
+          const { data, error } = await db.updateAttendanceEndTimeByDetails(
+            orderId,
+            packerIdentifier,
+            'afternoon',
+            midnightIso,
+            previousDayStr
+          );
+
+          if (error) {
+            hadError = true;
+            console.error(`Error auto-marking afternoon end time for ${name}:`, error);
+            continue;
+          }
+
+          if (Array.isArray(data) && data.length > 0) {
+            setAttendance(prevAttendance => {
+              const current = prevAttendance[name];
+              if (!current) return prevAttendance;
+              if (current.afternoon?.endTime) return prevAttendance;
+
+              return {
+                ...prevAttendance,
+                [name]: {
+                  ...current,
+                  afternoon: {
+                    ...current.afternoon,
+                    endTime: '00:00'
+                  }
+                }
+              };
+            });
+            console.log(`Auto-marked afternoon end time as 00:00 for ${name} (${previousDayStr})`);
+          }
+        } catch (error) {
+          hadError = true;
+          console.error(`Error auto-marking afternoon end time for ${name}:`, error);
+        }
+      }
+
+      if (!hadError) {
+        processedAfternoonAutoCloseDateRef.current = previousDayStr;
+      }
     };
 
-    // Check immediately
-    checkAndAutoMarkAfternoon();
+    checkAndAutoMarkShifts();
 
-    // Check every minute for time changes
-    const interval = setInterval(checkAndAutoMarkAfternoon, 60000);
+    const interval = setInterval(checkAndAutoMarkShifts, 60000);
 
     return () => clearInterval(interval);
   }, [orderId, packers, packersData, attendance]);

@@ -506,9 +506,11 @@ const baseDb = {
     orderId: UUID,
     packerId: UUID,
     shiftPeriod: string,
-    endTime: NullableDate
+    endTime: NullableDate,
+    logDateOverride?: string
   ) => {
     const today = new Date().toISOString().split('T')[0];
+    const targetDate = logDateOverride || today;
     
     const { data, error } = await supabase
       .from('attendance_logs')
@@ -519,7 +521,7 @@ const baseDb = {
       .eq('order_id', orderId)
       .eq('packer_id', packerId)
       .eq('shift_period', shiftPeriod)
-      .eq('log_date', today)
+      .eq('log_date', targetDate)
       .is('end_time', null) // Only update records without end time
       .select();
     
