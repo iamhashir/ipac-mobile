@@ -48,6 +48,42 @@ const normalizePackageItemInput = (input: PackageItemInput) => ({
 
 const MATERIAL_TYPES = ['Accessories', 'Securing', 'Gas Packing', 'Vacuum Packing'];
 
+const VARIANT_SELECT_WITH_TAGS = `
+    id,
+    variant_name,
+    material_id,
+    materials:material_id (
+      id,
+      unit_id,
+      units_of_measure:unit_id ( id, name )
+    ),
+    material_variant_tags!inner (
+      tag_id,
+      tags!inner (
+        id,
+        name
+      )
+    )
+  `;
+
+const mapVariantRowsToOptions = (variants?: any[] | null) => {
+  if (!variants || !Array.isArray(variants)) return [];
+  const dedup = new Map<string, any>();
+  variants.forEach((variant: any) => {
+    const id = variant?.id;
+    if (!id || dedup.has(id)) return;
+    dedup.set(id, {
+      id,
+      value: id,
+      label: variant?.variant_name || variant?.label || 'Unnamed',
+      material_id: variant?.material_id || null,
+      unit_id: variant?.materials?.unit_id || variant?.unit_id || null,
+      unit_name: variant?.materials?.units_of_measure?.name || variant?.unit_name || null,
+    });
+  });
+  return Array.from(dedup.values());
+};
+
 export const createPackingApi = (supabase: SupabaseClient) => ({
   getOrderPackages: async (orderId: UUID) => {
     const { data, error } = await supabase
@@ -107,8 +143,8 @@ export const createPackingApi = (supabase: SupabaseClient) => ({
   getBoxTypesByIds: async (ids: UUID[]) => {
     if (!ids || ids.length === 0) return { data: [], error: null };
     const { data, error } = await supabase
-      .from('box_types')
-      .select('id, code, name')
+      .from('box_type')
+      .select('id, name')
       .in('id', ids);
     return { data, error };
   },
@@ -124,9 +160,9 @@ export const createPackingApi = (supabase: SupabaseClient) => ({
 
   getAllBoxTypes: async () => {
     const { data, error } = await supabase
-      .from('box_types')
-      .select('id, code, name')
-      .order('code');
+      .from('box_type')
+      .select('id, name')
+      .order('name');
     return { data, error };
   },
 
@@ -148,82 +184,26 @@ export const createPackingApi = (supabase: SupabaseClient) => ({
 
   getMaterialVariantsByTag: async (tagName: string) => {
     const { data, error } = await supabase
-      .from('material_variants_tags_mv')
-      .select('material_variant_id')
-      .eq('tag_name', tagName);
+      .from('material_variants')
+      .select(VARIANT_SELECT_WITH_TAGS)
+      .ilike('material_variant_tags.tags.name', tagName)
+      .order('variant_name');
 
     if (error) return { data: null, error };
 
-    const variantIds = Array.from(new Set((data || []).map((row: any) => row.material_variant_id).filter(Boolean)));
-    if (variantIds.length === 0) return { data: [], error: null };
-
-    const { data: variants, error: variantsErr } = await supabase
-      .from('material_variants')
-      .select(`
-        id,
-        variant_name,
-        material_id,
-        materials:material_id (
-          id,
-          unit_id,
-          units_of_measure:unit_id ( id, name )
-        )
-      `)
-      .in('id', variantIds)
-      .order('variant_name');
-
-    if (variantsErr) return { data: null, error: variantsErr };
-
-    const items = (variants || []).map((variant: any) => ({
-      id: variant.id,
-      value: variant.id,
-      label: variant.variant_name,
-      material_id: variant.material_id,
-      unit_id: variant?.materials?.unit_id || null,
-      unit_name: variant?.materials?.units_of_measure?.name || null,
-    }));
-
-    return { data: items, error: null };
+    return { data: mapVariantRowsToOptions(data), error: null };
   },
 
   getMaterialVariantsByVariantTag: async (tagName: string) => {
     const { data, error } = await supabase
-      .from('material_variants_tags_mv')
-      .select('material_variant_id')
-      .eq('variant_tag', tagName);
+      .from('material_variants')
+      .select(VARIANT_SELECT_WITH_TAGS)
+      .ilike('material_variant_tags.tags.name', tagName)
+      .order('variant_name');
 
     if (error) return { data: null, error };
 
-    const variantIds = Array.from(new Set((data || []).map((row: any) => row.material_variant_id).filter(Boolean)));
-    if (variantIds.length === 0) return { data: [], error: null };
-
-    const { data: variants, error: variantsErr } = await supabase
-      .from('material_variants')
-      .select(`
-        id,
-        variant_name,
-        material_id,
-        materials:material_id (
-          id,
-          unit_id,
-          units_of_measure:unit_id ( id, name )
-        )
-      `)
-      .in('id', variantIds)
-      .order('variant_name');
-
-    if (variantsErr) return { data: null, error: variantsErr };
-
-    const items = (variants || []).map((variant: any) => ({
-      id: variant.id,
-      value: variant.id,
-      label: variant.variant_name,
-      material_id: variant.material_id,
-      unit_id: variant?.materials?.unit_id || null,
-      unit_name: variant?.materials?.units_of_measure?.name || null,
-    }));
-
-    return { data: items, error: null };
+    return { data: mapVariantRowsToOptions(data), error: null };
   },
 
   getMaterialVariantsByMaterialName: async (materialName: string) => {

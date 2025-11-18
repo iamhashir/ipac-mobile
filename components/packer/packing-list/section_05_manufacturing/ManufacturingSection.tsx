@@ -374,7 +374,6 @@ const dimensionExceedsThreshold = (dims: DimensionTriple | null | undefined) => 
               quantityLabel="Qty"
               mediaDesignation="additional_wood"
               editable={editable}
-              showDimensions={false}
             />
           </View>
         )}
