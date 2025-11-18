@@ -387,7 +387,9 @@ export default function PackerDashboard() {
           
           // Update the current user's session in context if they're part of the selected team
           if (profile?.id && selectedPackers.includes(profile.id)) {
-            const userSession = teamSessions.find(s => s.packer_id === profile.id);
+            type TeamSession = { packer_id?: string | null };
+            const normalizedSessions: TeamSession[] = Array.isArray(teamSessions) ? (teamSessions as TeamSession[]) : [];
+            const userSession = normalizedSessions.find((session) => session.packer_id === profile.id);
             if (userSession && createSession) {
               await createSession(selectedOrder, orderData);
             }

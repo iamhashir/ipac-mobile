@@ -46,6 +46,10 @@ const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, or
 
   const ensureFinal = async (): Promise<string | null> => {
     if (finalId) return finalId;
+    if (!orderPackageId) {
+      console.warn('Cannot create final package info without orderPackageId');
+      return null;
+    }
     const { data, error } = await db.ensureFinalPackageInfo({ orderPackageId, finalInfoId, originalInfoId });
     if (error) {
       console.error('Error creating final package info:', error);
@@ -69,7 +73,7 @@ const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, or
       return;
     }
     
-    const { error } = await db.updatePackageInfo(targetId, fields);
+  const { error } = await db.updatePackageInfo(targetId, fields);
     if (error) {
       console.error('Error updating package info:', error);
       const errorMsg = error?.message || error?.details || 'Failed to save changes';

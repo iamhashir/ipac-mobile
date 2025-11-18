@@ -47,8 +47,8 @@ const MEDIA_DESIGNATION_MAP: Record<Side, string> = {
   base: 'base',
 };
 
-const ADDITIONAL_WOOD_THRESHOLD = 400;
-const ADDITIONAL_WOOD_VARIANT_SOURCES: VariantSource[] = [{ type: 'variantTag', value: 'Wood' }];
+const ADDITIONAL_WOOD_THRESHOLD = 401;
+const ADDITIONAL_WOOD_VARIANT_SOURCES: VariantSource[] = [{ type: 'variantTag', value: 'Securing' }];
 
 const dimensionExceedsThreshold = (dims: DimensionTriple | null | undefined) => {
   if (!dims) return false;

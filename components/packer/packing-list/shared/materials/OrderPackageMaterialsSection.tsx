@@ -236,11 +236,18 @@ const OrderPackageMaterialsSection: React.FC<
 
   const load = async () => {
     try {
-      const [{ data: u }, { data: rows }, variantOptions] = await Promise.all([
+      const [unitsResult, materialsResult, variantOptions] = (await Promise.all([
         db.getAllUnits(),
         db.getOrderPackageMaterials(orderPackageId),
         fetchVariants(),
-      ]);
+      ])) as [
+        { data: any[] | null },
+        { data: any[] | null },
+        VariantOption[]
+      ];
+
+      const { data: u } = unitsResult;
+      const { data: rows } = materialsResult;
 
       setVariants(variantOptions);
       setUnits(

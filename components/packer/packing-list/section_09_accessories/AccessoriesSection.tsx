@@ -17,7 +17,7 @@ interface AccessoriesSectionProps {
 const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({
   orderPackageId,
   title = "Accessories",
-  variantTag = "accessories",
+  variantTag = "Accessories",
   materialType = "Accessories",
   addModalAutoTag,
   mediaDesignation = "accessory",
