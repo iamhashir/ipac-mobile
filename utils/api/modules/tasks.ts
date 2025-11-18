@@ -375,6 +375,44 @@ export const createTasksApi = (supabase: SupabaseClient) => ({
 
     return { data, error };
   },
+
+  getActiveTasksForPackers: async (orderId: UUID, packerIds: UUID[]) => {
+    if (!orderId || !packerIds || packerIds.length === 0) {
+      return { data: [], error: null };
+    }
+
+    const { data, error } = await supabase
+      .rpc('get_active_tasks_for_packers', {
+        order_uuid: orderId,
+        packer_ids: packerIds,
+      });
+
+    if (error && (error as any)?.code === 'PGRST202') {
+      console.warn('⚠️ Missing get_active_tasks_for_packers RPC. Returning empty task summary.');
+      return { data: [], error: null };
+    }
+
+    return { data, error };
+  },
+
+  completeAssignmentsForPackers: async (orderId: UUID, packerIds: UUID[]) => {
+    if (!orderId || !packerIds || packerIds.length === 0) {
+      return { data: { updated_assignments: 0 }, error: null };
+    }
+
+    const { data, error } = await supabase
+      .rpc('complete_assignments_for_packers', {
+        order_uuid: orderId,
+        packer_ids: packerIds,
+      });
+
+    if (error && (error as any)?.code === 'PGRST202') {
+      console.warn('⚠️ Missing complete_assignments_for_packers RPC. Skipping assignment cleanup.');
+      return { data: { updated_assignments: 0 }, error: null };
+    }
+
+    return { data, error };
+  },
 });
 
 export type TasksApi = ReturnType<typeof createTasksApi>;

@@ -3,9 +3,11 @@ import { TouchableOpacity, Text, Alert, View } from 'react-native';
 import { db } from '../../../../../utils/api/supabase';
 import { teamLead } from '../../../../../utils/api/teamLead';
 import { useAuth } from '../../../../../utils/AuthContext';
+import { usePackerSession } from '../../../../../utils/PackerSessionContext';
 import { useRouter } from 'expo-router';
 import { ConfirmModal } from '../../../../ui/ConfirmModal';
 import { ErrorAlert, InfoAlert } from '../../../../ui/Alert';
+import { ActiveTaskSummary, buildActiveTaskSummaries, formatBoxList, formatPackerList } from '../../../../../utils/tasks/activeTaskSummaries';
 
 interface RemoveSelfButtonProps {
   orderId: string;
@@ -22,12 +24,35 @@ export default function RemoveSelfButton({
 }: RemoveSelfButtonProps) {
   const { profile } = useAuth() as any;
   const router = useRouter();
+  const { clearSession } = usePackerSession();
   const [showConfirm, setShowConfirm] = useState(false);
   const [errorAlert, setErrorAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
   const [infoAlert, setInfoAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
   const [loading, setLoading] = useState(false);
   const [needsLeadAssignment, setNeedsLeadAssignment] = useState(false);
   const [availablePackers, setAvailablePackers] = useState<Array<{id: string, full_name: string}>>([]);
+  const [activeTasks, setActiveTasks] = useState<ActiveTaskSummary[]>([]);
+
+  const prepareTaskSummary = async () => {
+    if (!profile?.id) return;
+
+    const selfName = profile?.full_name || profile?.username || 'You';
+    const nameLookup: Record<string, string> = { [profile.id]: selfName };
+
+    try {
+      const { data: tasksData, error } = await db.getActiveTasksForPackers(orderId, [profile.id]);
+      if (error) {
+        console.warn('Error loading tasks before removal:', error);
+        setActiveTasks([]);
+        return;
+      }
+
+      setActiveTasks(buildActiveTaskSummaries(tasksData || [], nameLookup));
+    } catch (taskError) {
+      console.error('Unexpected task summary error:', taskError);
+      setActiveTasks([]);
+    }
+  };
 
   const checkRemovalEligibility = async () => {
     if (!profile?.id) return;
@@ -40,35 +65,20 @@ export default function RemoveSelfButton({
         return;
       }
 
-      // Check if user is the last packer
-      if (orderPackers && orderPackers.length === 1) {
-        setErrorAlert({
-          visible: true, 
-          title: 'Cannot Leave', 
-          message: 'You are the last packer on this order. Please contact an admin to be removed.'
-        });
-        return;
-      }
+      const otherPackersRaw = orderPackers?.filter((p: any) => (p.packer_id || p.id) !== profile.id) || [];
 
       // Check if user is a lead
-  const currentPacker = orderPackers?.find((p: any) => (p.packer_id || p.id) === profile.id);
+	const currentPacker = orderPackers?.find((p: any) => (p.packer_id || p.id) === profile.id);
       const isLead = currentPacker?.is_team_lead || currentPacker?.is_project_lead;
 
       if (isLead) {
-        // Count other leads
-  const otherLeads = orderPackers?.filter((p: any) => 
-          (p.is_team_lead || p.is_project_lead) && 
-          (p.packer_id || p.id) !== profile.id
-        );
-
-        if (!otherLeads || otherLeads.length === 0) {
-          // User is the last lead, show lead assignment dialog
-          const otherPackers = orderPackers?.filter((p: any) => (p.packer_id || p.id) !== profile.id)
-            .map((p: any) => ({
-              id: p.packer_id || p.id,
-              full_name: p.full_name || p.profiles?.full_name || 'Unknown'
-            })) || [];
-          
+        const otherLeads = otherPackersRaw.filter((p: any) => p.is_team_lead || p.is_project_lead);
+        if (otherPackersRaw.length > 0 && otherLeads.length === 0) {
+          // User is the last lead but other packers remain; require reassignment
+          const otherPackers = otherPackersRaw.map((p: any) => ({
+            id: p.packer_id || p.id,
+            full_name: p.full_name || p.profiles?.full_name || 'Unknown'
+          }));
           setAvailablePackers(otherPackers);
           setNeedsLeadAssignment(true);
           return;
@@ -76,6 +86,7 @@ export default function RemoveSelfButton({
       }
 
       // User can leave, show confirmation
+      await prepareTaskSummary();
       setShowConfirm(true);
     } catch (error) {
       console.error('Error checking removal eligibility:', error);
@@ -85,25 +96,21 @@ export default function RemoveSelfButton({
 
   const handleAssignLeadAndLeave = async (newLeadId: string) => {
     if (!profile?.id) return;
-
-    setLoading(true);
     try {
       // Assign new lead
       const { error: leadError } = await teamLead.addTeamLead(orderId, newLeadId);
       if (leadError) {
         setErrorAlert({visible: true, title: 'Failed', message: 'Failed to assign new team lead'});
-        setLoading(false);
         return;
       }
-
-      // Remove self
-      await handleRemoveSelf();
+      setNeedsLeadAssignment(false);
+      await prepareTaskSummary();
+      setShowConfirm(true);
     } catch (error) {
       console.error('Error assigning lead and leaving:', error);
       setErrorAlert({visible: true, title: 'Error', message: 'An unexpected error occurred'});
     } finally {
-      setLoading(false);
-      setNeedsLeadAssignment(false);
+      // no-op
     }
   };
 
@@ -132,7 +139,8 @@ export default function RemoveSelfButton({
       }
 
       // Success
-      setInfoAlert({visible: true, title: 'Success', message: 'You have been removed from the order'});
+  setInfoAlert({visible: true, title: 'Success', message: 'You have been removed from the order'});
+  clearSession();
       
       // Call success callback or navigate
       if (onSuccess) {
@@ -146,6 +154,7 @@ export default function RemoveSelfButton({
     } finally {
       setLoading(false);
       setShowConfirm(false);
+      setActiveTasks([]);
     }
   };
 
@@ -165,12 +174,34 @@ export default function RemoveSelfButton({
       <ConfirmModal
         visible={showConfirm}
         title="Leave Order"
-        description={`Are you sure you want to remove yourself from ${orderName}?`}
-        confirmText="Leave"
+        description={`Are you sure you want to remove yourself from ${orderName}? Any in-progress tasks listed below will be marked completed.`}
+        confirmText={loading ? 'Removing...' : 'Leave'}
         cancelText="Cancel"
-        onCancel={() => setShowConfirm(false)}
+        variant="danger"
+        loading={loading}
+        onCancel={() => {
+          if (loading) return;
+          setShowConfirm(false);
+          setActiveTasks([]);
+        }}
         onConfirm={handleRemoveSelf}
-      />
+      >
+        {activeTasks.length === 0 ? (
+          <Text className="text-gray-700">No active tasks will be updated.</Text>
+        ) : (
+          activeTasks.map((task, index) => (
+            <View key={`${task.task}-${index}`} className="mb-3 p-2 bg-gray-50 rounded">
+              <Text className="text-gray-900 font-semibold">{task.task}</Text>
+              <Text className="text-gray-700 text-sm mt-1">
+                <Text className="font-medium">Packers:</Text> {formatPackerList(task.packerNames)}
+              </Text>
+              <Text className="text-gray-700 text-sm">
+                <Text className="font-medium">Boxes:</Text> {formatBoxList(task.boxes)}
+              </Text>
+            </View>
+          ))
+        )}
+      </ConfirmModal>
 
       {/* Lead Assignment Modal */}
       <ConfirmModal

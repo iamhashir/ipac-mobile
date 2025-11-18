@@ -67,7 +67,10 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
         >
           {bannerText}
         </Text>
-        <Text className="text-black font-semibold text-base text-center" numberOfLines={2}>
+        <Text
+          className="text-black font-semibold text-base text-center"
+          numberOfLines={2}
+        >
           {value}
         </Text>
       </View>
@@ -127,11 +130,11 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
               key={r.id}
               activeOpacity={onRowPress ? 0.7 : 1}
               onPress={() => onRowPress && onRowPress(r.id)}
-              className={`m-2 p-3 rounded-lg border ${
+              className={`m-2 p-2 rounded-lg border ${
                 r.isPacked
-                  ? "bg-sky-200 border-sky-300"
+                  ? "bg-sky-200 border-sky-500"
                   : r.isStarted
-                  ? "bg-lime-200 border-lime-300"
+                  ? "bg-lime-200 border-lime-500"
                   : idx % 2 === 0
                   ? "bg-white border-gray-200"
                   : "bg-gray-50 border-gray-200"
@@ -141,7 +144,18 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
                 Box #{r.packageNumber ?? "—"}
                 {r.isPacked ? " ✓" : ""}
               </Text>
-              <View className="flex-row flex-wrap">
+              <View
+                className={`flex-row flex-wrap
+              ${
+                r.isPacked
+                  ? "bg-sky-200"
+                  : r.isStarted
+                  ? "bg-lime-200"
+                  : idx % 2 === 0
+                  ? "bg-white"
+                  : "bg-gray-50"
+              }`}
+              >
                 {[
                   {
                     label: "Name of Equipment",
@@ -180,7 +194,19 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
                     isFinal: r.grossWeightIsFinal,
                   },
                 ].map((item) => (
-                  <View key={item.label} className="w-1/2 p-1 border rounded">
+                  <View
+                    key={item.label}
+                    className={`w-1/2 p-1 border rounded
+				  ${
+            r.isPacked
+              ? "border-sky-500 bg-gray-50"
+              : r.isStarted
+              ? "border-lime-500 bg-gray-50"
+              : idx % 2 === 0
+              ? "border-gray-200 bg-gray-50"
+              : "border-gray-200 bg-gray-50"
+          }`}
+                  >
                     <Text className="text-black text-sm font-medium text-center">
                       {item.label}
                     </Text>
@@ -214,7 +240,10 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
                 className="px-3 py-2 border-r border-black"
                 style={{ flex: c.flex }}
               >
-                <Text className="text-black font-bold text-base text-center" numberOfLines={2}>
+                <Text
+                  className="text-black font-bold text-base text-center"
+                  numberOfLines={2}
+                >
                   {c.label}
                 </Text>
               </View>

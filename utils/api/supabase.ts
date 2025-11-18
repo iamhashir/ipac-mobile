@@ -409,7 +409,7 @@ const baseDb = {
           name
         )
       `)
-      .in('production_status', ['pending', 'in_progress'])
+      .in('production_status', ['pending', 'in_progress', 'on_hold'])
       .order('order_name');
     
     if (error) return { data: null, error };
@@ -435,6 +435,27 @@ const baseDb = {
     const { data, error } = await supabase
       .rpc('get_available_packers');
     
+    return { data, error };
+  },
+
+  endAttendanceForPackers: async (orderId: UUID, packerIds: UUID[]) => {
+    if (!orderId || !packerIds || packerIds.length === 0) {
+      return { data: [], error: null };
+    }
+
+    const nowIso = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .update({
+        end_time: nowIso,
+        updated_at: nowIso,
+      })
+      .eq('order_id', orderId)
+      .in('packer_id', packerIds)
+      .is('end_time', null)
+      .select('id');
+
     return { data, error };
   },
 
@@ -737,6 +758,17 @@ const baseDb = {
         lead_id: projectLeadId
       });
     
+    return { data, error };
+  },
+
+  setOrderProductionStatus: async (orderId: UUID, status: string) => {
+    const { data, error } = await supabase
+      .from('orders')
+      .update({ production_status: status })
+      .eq('id', orderId)
+      .select('id, production_status')
+      .single();
+
     return { data, error };
   },
 

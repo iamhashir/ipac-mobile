@@ -8,6 +8,8 @@ import { db } from '../../utils/api/supabase';
 import { teamLead } from '../../utils/api/teamLead';
 import { NavigationButtons } from '../../components/NavigationButtons';
 import { SuccessAlert, ErrorAlert } from '../../components/ui/Alert';
+import { ConfirmModal } from '../../components/ui/ConfirmModal';
+import { ActiveTaskSummary, buildActiveTaskSummaries, formatBoxList, formatPackerList } from '../../utils/tasks/activeTaskSummaries';
 
 interface Order {
   id: string;
@@ -47,7 +49,7 @@ const collectPackerIds = (packers: OrderPackerAssignment[]): string[] =>
 
 export default function PackerDashboard() {
   const { profile, signOut } = useAuth();
-  const { createSession, session } = usePackerSession();
+  const { createSession, session, clearSession } = usePackerSession();
   const router = useRouter();
   const { width, height } = useWindowDimensions();
   const isLandscape = width > height;
@@ -63,6 +65,10 @@ export default function PackerDashboard() {
   const [isTeamLead, setIsTeamLead] = useState(false);
   const [successAlert, setSuccessAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
   const [errorAlert, setErrorAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
+  const [releaseModalVisible, setReleaseModalVisible] = useState(false);
+  const [releaseModalLoading, setReleaseModalLoading] = useState(false);
+  const [releaseSummary, setReleaseSummary] = useState<ActiveTaskSummary[]>([]);
+  const [releaseTargets, setReleaseTargets] = useState<string[]>([]);
 
   useEffect(() => {
     loadData();
@@ -193,6 +199,117 @@ export default function PackerDashboard() {
     }
   };
 
+  const resetReleaseModalState = () => {
+    setReleaseTargets([]);
+    setReleaseSummary([]);
+    setReleaseModalVisible(false);
+  };
+
+  const prepareReleaseModal = async () => {
+    if (!selectedOrder) {
+      return;
+    }
+
+    try {
+      setReleaseModalLoading(true);
+      const { data: orderPackers, error } = await db.getOrderPackers(selectedOrder);
+      if (error) {
+        console.error('Error loading team before release:', error);
+        setErrorAlert({ visible: true, title: 'Release Failed', message: 'Unable to load current team for this project' });
+        setReleaseTargets([]);
+        return;
+      }
+
+      const normalizedPackers = normalizeOrderPackers(orderPackers);
+      const targetIds = collectPackerIds(normalizedPackers);
+
+      if (targetIds.length === 0) {
+        setErrorAlert({ visible: true, title: 'Nothing to Release', message: 'There are no packers assigned to this project.' });
+        setReleaseTargets([]);
+        return;
+      }
+
+      const nameLookup: Record<string, string> = {};
+      normalizedPackers.forEach((packer) => {
+        const id = resolvePackerIdentifier(packer);
+        if (!id) return;
+        const fallbackName = allPackers.find((p) => p.id === id)?.full_name;
+        nameLookup[id] = (packer as any)?.full_name || (packer as any)?.profiles?.full_name || fallbackName || 'Unknown';
+      });
+
+      setReleaseTargets(targetIds);
+
+      const { data: tasksData, error: tasksError } = await db.getActiveTasksForPackers(selectedOrder, targetIds);
+      if (tasksError) {
+        console.warn('Error loading active tasks before release:', tasksError);
+        setReleaseSummary([]);
+      } else {
+        setReleaseSummary(buildActiveTaskSummaries(tasksData || [], nameLookup));
+      }
+
+      setReleaseModalVisible(true);
+    } catch (error) {
+      console.error('Error preparing release confirmation:', error);
+      setErrorAlert({ visible: true, title: 'Release Failed', message: 'Unexpected error preparing release confirmation' });
+      setReleaseTargets([]);
+    } finally {
+      setReleaseModalLoading(false);
+    }
+  };
+
+  const handleReleaseOrder = async () => {
+    if (!selectedOrder || releaseTargets.length === 0) {
+      resetReleaseModalState();
+      return;
+    }
+
+    try {
+      setReleaseModalLoading(true);
+      await db.completeAssignmentsForPackers(selectedOrder, releaseTargets);
+
+      const { error: attendanceCleanupError } = await db.endAttendanceForPackers(selectedOrder, releaseTargets);
+      if (attendanceCleanupError) {
+        console.warn('⚠️ Failed to close attendance logs during release:', attendanceCleanupError);
+      }
+
+      for (const packerId of releaseTargets) {
+        const { error } = await db.removePackerFromOrder(selectedOrder, packerId);
+        if (error) {
+          throw error;
+        }
+      }
+
+      await teamLead.removeAllTeamLeads(selectedOrder);
+      setProjectLeads([]);
+      setIsTeamLead(false);
+
+      const { error: statusError } = await db.setOrderProductionStatus(selectedOrder, 'on_hold');
+      if (statusError) {
+        console.warn('⚠️ Failed to update order status to on_hold:', statusError);
+      }
+
+      if (profile?.id && releaseTargets.includes(profile.id)) {
+        clearSession();
+      }
+
+      setSuccessAlert({ visible: true, title: 'Project Released', message: 'Team removed and project unlocked for others.' });
+      setSelectedOrder(null);
+      setSelectedPackers([]);
+      resetReleaseModalState();
+      await loadData();
+    } catch (error) {
+      console.error('Error releasing project:', error);
+      setErrorAlert({ visible: true, title: 'Release Failed', message: 'Could not release this project.' });
+    } finally {
+      setReleaseModalLoading(false);
+    }
+  };
+
+  const handleCloseReleaseModal = () => {
+    if (releaseModalLoading) return;
+    resetReleaseModalState();
+  };
+
   const togglePackerSelection = (packerId: string) => {
     const packer = allPackers.find(p => p.id === packerId);
     const isCurrentlySelected = selectedPackers.includes(packerId);
@@ -304,12 +421,32 @@ export default function PackerDashboard() {
         // Find packers to remove
         const packersToRemove = currentPackerIds.filter(id => !selectedPackers.includes(id));
         
+        if (packersToRemove.length > 0) {
+          const { error: removalTaskError } = await db.completeAssignmentsForPackers(selectedOrder, packersToRemove);
+          if (removalTaskError) {
+            console.warn('⚠️ Failed to complete tasks before removing packers:', removalTaskError);
+          }
+
+          const { error: removalAttendanceError } = await db.endAttendanceForPackers(selectedOrder, packersToRemove);
+          if (removalAttendanceError) {
+            console.warn('⚠️ Failed to close attendance logs before removing packers:', removalAttendanceError);
+          }
+        }
+
         // Remove packers
+        let removedSelf = false;
         for (const packerId of packersToRemove) {
           const { error } = await db.removePackerFromOrder(selectedOrder, packerId);
           if (error) {
             console.error('Error removing packer:', packerId, error);
+          } else if (packerId === profile?.id) {
+            removedSelf = true;
           }
+        }
+
+        if (removedSelf) {
+          clearSession();
+          setSelectedOrder(null);
         }
         
         // Add packers
@@ -439,6 +576,15 @@ export default function PackerDashboard() {
     });
   };
 
+  const isOnlySelfOnTeam = profile?.id ? (selectedPackers.length === 1 && selectedPackers[0] === profile.id) : false;
+  const canReleaseOrder = Boolean(
+    selectedOrder &&
+    session?.order_id === selectedOrder &&
+    profile?.id &&
+    selectedPackers.includes(profile.id) &&
+    (isTeamLead || isOnlySelfOnTeam)
+  );
+
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-gray-50" edges={['top','bottom','left','right']}>
@@ -513,6 +659,34 @@ export default function PackerDashboard() {
         autoDismiss={true}
       />
 
+      <ConfirmModal
+        visible={releaseModalVisible}
+        title="Release Project"
+        description="Removing the team will mark these in-progress tasks as completed and unlock the project for others."
+        confirmText={releaseModalLoading ? 'Releasing...' : 'Release'}
+        cancelText="Cancel"
+        variant="danger"
+        loading={releaseModalLoading}
+        onConfirm={handleReleaseOrder}
+        onCancel={handleCloseReleaseModal}
+      >
+        {releaseSummary.length === 0 ? (
+          <Text className="text-gray-700">No active tasks will be updated.</Text>
+        ) : (
+          releaseSummary.map((item, index) => (
+            <View key={`${item.task}-${index}`} className="mb-3 p-2 bg-gray-50 rounded">
+              <Text className="text-gray-900 font-semibold">{item.task}</Text>
+              <Text className="text-gray-700 text-sm mt-1">
+                <Text className="font-medium">Packers:</Text> {formatPackerList(item.packerNames)}
+              </Text>
+              <Text className="text-gray-700 text-sm">
+                <Text className="font-medium">Boxes:</Text> {formatBoxList(item.boxes)}
+              </Text>
+            </View>
+          ))
+        )}
+      </ConfirmModal>
+
       {/* Main Content */}
       <View className={`flex-1 ${isCompact ? 'p-3' : 'p-4'}`}>
         <View className={`${isPortraitStack ? 'flex-col gap-y-3' : (isCompact ? 'flex-row gap-x-3' : 'flex-row gap-x-4')} flex-1`}>
@@ -536,33 +710,41 @@ export default function PackerDashboard() {
                   const isLockedBySession = hasActiveSession && !isUsersActiveOrder; // user already working on another order
                   const isGloballyLocked = order.production_status === 'in_progress' && !isUsersActiveOrder;
                   const isDisabled = isLockedBySession || isGloballyLocked;
+                  const isOnHold = order.production_status === 'on_hold';
+                  const isSelected = selectedOrder === order.id;
+                  const cardStateClass = isSelected
+                    ? 'bg-primary-50 border-primary-500'
+                    : isDisabled
+                    ? 'bg-gray-100 border-gray-300 opacity-50'
+                    : isOnHold
+                    ? 'bg-indigo-50 border-indigo-200'
+                    : 'bg-gray-50 border-gray-200';
 
                   return (
                     <TouchableOpacity
                       key={order.id}
                       onPress={() => !isDisabled ? setSelectedOrder(order.id) : null}
-                      className={`mb-2 ${isCompact ? 'p-2' : 'p-3'} rounded-lg border ${
-                        selectedOrder === order.id
-                          ? 'bg-primary-50 border-primary-500'
-                          : isDisabled
-                          ? 'bg-gray-100 border-gray-300 opacity-50'
-                          : 'bg-gray-50 border-gray-200'
-                      }`}
+                      className={`mb-2 ${isCompact ? 'p-2' : 'p-3'} rounded-lg border ${cardStateClass}`}
                       disabled={isDisabled}
                     >
                       <View className="flex-row items-center">
                         <View className={`w-4 h-4 rounded mr-3 ${
-                          selectedOrder === order.id ? 'bg-primary-500' : 'bg-gray-300'
+                          isSelected ? 'bg-primary-500' : 'bg-gray-300'
                         }`} />
                         <View className="flex-1">
                           <Text className={`font-medium ${
-                            selectedOrder === order.id ? 'text-primary-700' : 'text-gray-900'
+                            isSelected ? 'text-primary-700' : 'text-gray-900'
                           }`}>
                             📄 {order.order_name}
                           </Text>
                           <Text className="text-gray-600 text-xs mt-1">
                             {order.client_name}
                           </Text>
+                          {isOnHold && !isSelected && !isDisabled && (
+                            <Text className="text-indigo-700 text-[11px] font-semibold mt-1">
+                              On Hold
+                            </Text>
+                          )}
                         </View>
                       </View>
                     </TouchableOpacity>
@@ -678,7 +860,20 @@ export default function PackerDashboard() {
 
         {/* Next/Update Button - Always show when order is selected */}
         {selectedOrder && (
-          <View className={`${isCompact ? 'mt-3' : 'mt-4'} flex-row justify-end`}>
+          <View className={`${isCompact ? 'mt-3' : 'mt-4'} flex-row justify-end items-center`}>
+            {canReleaseOrder && (
+              <TouchableOpacity
+                onPress={prepareReleaseModal}
+                disabled={releaseModalLoading}
+                className={`${isCompact ? 'px-4 py-2' : 'px-5 py-3'} mr-3 rounded-lg border ${
+                  releaseModalLoading ? 'bg-red-100 border-red-200' : 'bg-red-50 border-red-500'
+                }`}
+              >
+                <Text className={`font-semibold ${releaseModalLoading ? 'text-red-400' : 'text-red-700'}`}>
+                  {releaseModalLoading ? 'Preparing...' : 'Release Project'}
+                </Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               onPress={handleNext}
               disabled={!selectedOrder || selectedPackers.length === 0}
