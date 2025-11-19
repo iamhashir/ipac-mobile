@@ -157,6 +157,7 @@ export default function PackerDashboard() {
   };
 
   const loadData = async () => {
+    setLoading(true);
     try {
       // Load available orders
       const { data: orders, error: ordersError } = await db.getAvailableOrders();
@@ -641,7 +642,7 @@ export default function PackerDashboard() {
       </View>
 
       {/* Navigation Buttons */}
-      <NavigationButtons currentScreen="dashboard" />
+  <NavigationButtons currentScreen="dashboard" onDashboardRefresh={loadData} />
 
       {/* Alert Messages */}
       <SuccessAlert

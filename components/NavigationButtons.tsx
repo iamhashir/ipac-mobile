@@ -8,9 +8,10 @@ import { useTextSize } from '../utils/TextSizeContext';
 interface NavigationButtonsProps {
   currentScreen: string;
   iconsOnly?: boolean;
+  onDashboardRefresh?: () => void | Promise<void>;
 }
 
-export const NavigationButtons: React.FC<NavigationButtonsProps> = ({ currentScreen, iconsOnly }) => {
+export const NavigationButtons: React.FC<NavigationButtonsProps> = ({ currentScreen, iconsOnly, onDashboardRefresh }) => {
   const router = useRouter();
   const { session, canAccessAttendance, canAccessPackaging } = usePackerSession();
   const { width, height } = useWindowDimensions();
@@ -26,6 +27,14 @@ export const NavigationButtons: React.FC<NavigationButtonsProps> = ({ currentScr
       const sessionOrderId = session?.order_id ? `?orderId=${session.order_id}` : '';
       router.push(`/(packer)/${screen}${sessionOrderId}` as any);
     }
+  };
+
+  const handleDashboardPress = () => {
+    if (currentScreen === 'dashboard') {
+      onDashboardRefresh?.();
+      return;
+    }
+    navigateTo('dashboard');
   };
 
   const handleAttendancePress = () => {
@@ -96,7 +105,7 @@ export const NavigationButtons: React.FC<NavigationButtonsProps> = ({ currentScr
 
   return (
     <View className={`${isCompact ? 'py-1' : 'py-2'} flex-row justify-end me-4 ${isCompact ? 'gap-x-2' : 'gap-x-4'}`}>
-      <TouchableOpacity onPress={() => navigateTo('dashboard')} className={baseBtnCls(true)}>
+      <TouchableOpacity onPress={handleDashboardPress} className={baseBtnCls(true)}>
         <LayoutDashboard size={iconSize} color="#ffffff" />
         {!iconOnlyFlag && <Text className={baseTextCls(true)}> Dashboard</Text>}
       </TouchableOpacity>
