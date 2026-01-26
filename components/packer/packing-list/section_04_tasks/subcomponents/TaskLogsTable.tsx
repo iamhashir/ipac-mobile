@@ -30,6 +30,7 @@ interface TaskLogsTableProps {
   orderPackageId?: string; // For media uploads
   pausedTaskIds?: Set<string>; // Track which tasks are paused
   allOrderPackages?: { id: string; package_number: number | null }[]; // All boxes for displaying box numbers
+  readOnly?: boolean; // When true, disable action buttons (box is completed)
 }
 
 const formatTime = (iso: string | null) => {
@@ -66,7 +67,8 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
   getTaskPackages,
   orderPackageId,
   pausedTaskIds = new Set(),
-  allOrderPackages = []
+  allOrderPackages = [],
+  readOnly = false
 }) => {
   const { size } = useTextSize();
   const [taskDetailsModal, setTaskDetailsModal] = useState<{ open: boolean; packerNames: string[]; boxNumbers: (number | null)[] }>({ open: false, packerNames: [], boxNumbers: []});
@@ -274,20 +276,31 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
                   {(r.task_assignments || []).filter(a => a?.task_status !== 'completed').length} Packer{(r.task_assignments || []).filter(a => a?.task_status !== 'completed').length !== 1 ? 's' : ''} • {(r.task_packages || []).length} Box{(r.task_assignments || []).length !== 1 ? 'es' : ''}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
-                className={`rounded ${isTaskPaused(r) ? 'bg-blue-50 border border-blue-600' : 'bg-amber-50 border border-amber-600'}`}
-                onPress={() => onPause?.(r.id)}
-              >
-                <Text style={{ fontSize: buttonFontSize }} className={isTaskPaused(r) ? 'text-blue-700' : 'text-amber-700'}>{isTaskPaused(r) ? 'Resume' : 'Pause'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginBottom: 2 }}
-                className="rounded bg-green-50 border border-green-600" 
-                onPress={() => onFinish?.(r.id)}
-              >
-                <Text style={{ fontSize: buttonFontSize }} className="text-green-700">Finish</Text>
-              </TouchableOpacity>
+              {readOnly ? (
+                <View
+                  style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginBottom: 2 }}
+                  className="rounded bg-gray-100"
+                >
+                  <Text style={{ fontSize: buttonFontSize }} className="text-gray-500">Locked</Text>
+                </View>
+              ) : (
+                <>
+                  <TouchableOpacity
+                    style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
+                    className={`rounded ${isTaskPaused(r) ? 'bg-blue-50 border border-blue-600' : 'bg-amber-50 border border-amber-600'}`}
+                    onPress={() => onPause?.(r.id)}
+                  >
+                    <Text style={{ fontSize: buttonFontSize }} className={isTaskPaused(r) ? 'text-blue-700' : 'text-amber-700'}>{isTaskPaused(r) ? 'Resume' : 'Pause'}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginBottom: 2 }}
+                    className="rounded bg-green-50 border border-green-600" 
+                    onPress={() => onFinish?.(r.id)}
+                  >
+                    <Text style={{ fontSize: buttonFontSize }} className="text-green-700">Finish</Text>
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
             {/* Camera icon */}
             {orderPackageId && (

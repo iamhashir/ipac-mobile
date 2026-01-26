@@ -9,11 +9,12 @@ import { db, supabase } from '../../../../utils/api/supabase';
 interface OrderTasksManagementProps {
   orderId: string;
   orderPackages: { id: string; package_number: number | null }[];
+  readOnly?: boolean; // When true, disable all editing (box is completed)
 }
 
 interface TeamPacker { id: string; full_name?: string; username?: string; packer_status?: string; }
 
-const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, orderPackages }) => {
+const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, orderPackages, readOnly = false }) => {
   const [teamPackers, setTeamPackers] = useState<TeamPacker[]>([]);
   const [availableCount, setAvailableCount] = useState(0);
   const [busyCount, setBusyCount] = useState(0);
@@ -332,15 +333,20 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
         <View className="mx-4 mb-4 bg-white rounded-lg border border-gray-300 mt-4">
           <View className="flex-row items-center justify-between px-4 py-2 border-b border-gray-200 rounded-t-lg">
             <Text className="text-gray-800 font-semibold">Task logs</Text>
-            <TouchableOpacity className="bg-blue-50 border border-blue-600 px-3 py-1 rounded" onPress={() => setActiveKey('new')}>
-              <Text className="text-blue-700">Create Task</Text>
+            <TouchableOpacity 
+              className={`px-3 py-1 rounded ${readOnly ? 'bg-gray-200 border border-gray-400' : 'bg-blue-50 border border-blue-600'}`} 
+              onPress={() => !readOnly && setActiveKey('new')}
+              disabled={readOnly}
+              activeOpacity={readOnly ? 1 : 0.7}
+            >
+              <Text className={readOnly ? 'text-gray-500' : 'text-blue-700'}>{readOnly ? 'View Only' : 'Create Task'}</Text>
             </TouchableOpacity>
           </View>
 
           {taskLogs.length === 0 ? (
             <View className="px-4 py-6 items-center">
               <Text className="text-gray-700">No Tasks Assigned!</Text>
-              <Text className="text-gray-500 text-sm mt-1">press create task button to start task</Text>
+              <Text className="text-gray-500 text-sm mt-1">{readOnly ? 'This box is completed' : 'press create task button to start task'}</Text>
             </View>
           ) : (
             <ScrollView style={{ maxHeight: 400 }} className="px-4 py-3">
@@ -349,6 +355,7 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                 orderPackageId={orderPackages.length === 1 ? orderPackages[0].id : undefined}
                 pausedTaskIds={pausedTaskIds}
                 allOrderPackages={allOrderPackages}
+                readOnly={readOnly}
                 onRowPress={(id) => {
                   if (!openTaskIds.includes(id)) setOpenTaskIds(prev => [...prev, id]);
                   setActiveKey(`task:${id}`);
@@ -798,10 +805,11 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
       } as TabDefinition;
     });
 
-    const baseTabs = activeKey === 'new' ? [overview, newTask] : [overview];
+    // When readOnly, don't show the new task tab even if active
+    const baseTabs = (activeKey === 'new' && !readOnly) ? [overview, newTask] : [overview];
     return [...baseTabs, ...details];
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskLogs, taskTypes, teamPackers, activeKey, selectedTaskTypeId, selectedPackerIds, selectedPackageIds]);
+  }, [taskLogs, taskTypes, teamPackers, activeKey, selectedTaskTypeId, selectedPackerIds, selectedPackageIds, readOnly]);
 
   // Build modal data
   const idToName = useMemo(() => {
@@ -857,6 +865,14 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
 
   return (
     <View>
+      {/* Read-only banner when box is completed */}
+      {readOnly && (
+        <View className="mx-4 mt-2 mb-2 bg-blue-50 border border-blue-300 rounded-lg px-3 py-2">
+          <Text className="text-blue-800 text-sm text-center">
+            ✓ Box Completed - Viewing tasks in read-only mode
+          </Text>
+        </View>
+      )}
       <TaskAssignmentHeader 
         availableCount={availableCount} 
         busyCount={busyCount}
@@ -864,6 +880,7 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
         onBusyPress={() => setShowBusyModal(true)}
         onBreakPress={handleBreak}
         isOnBreak={isOnBreak}
+        readOnly={readOnly}
       />
       <TabLayout tabs={tabs} activeKey={activeKey} onChange={setActiveKey} />
 

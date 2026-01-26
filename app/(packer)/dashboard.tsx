@@ -7,7 +7,7 @@ import { usePackerSession } from '../../utils/PackerSessionContext';
 import { db } from '../../utils/api/supabase';
 import { teamLead } from '../../utils/api/teamLead';
 import { NavigationButtons } from '../../components/NavigationButtons';
-import { SuccessAlert, ErrorAlert } from '../../components/ui/Alert';
+import { useToast } from '../../components/ui/Toast';
 import { ConfirmModal } from '../../components/ui/ConfirmModal';
 import { ActiveTaskSummary, buildActiveTaskSummaries, formatBoxList, formatPackerList } from '../../utils/tasks/activeTaskSummaries';
 
@@ -51,6 +51,7 @@ export default function PackerDashboard() {
   const { profile, signOut } = useAuth();
   const { createSession, session, clearSession } = usePackerSession();
   const router = useRouter();
+  const toast = useToast();
   const { width, height } = useWindowDimensions();
   const isLandscape = width > height;
   const isCompact = isLandscape && height < 450;
@@ -63,12 +64,13 @@ export default function PackerDashboard() {
   const [projectLeads, setProjectLeads] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [isTeamLead, setIsTeamLead] = useState(false);
-  const [successAlert, setSuccessAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
-  const [errorAlert, setErrorAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
   const [releaseModalVisible, setReleaseModalVisible] = useState(false);
   const [releaseModalLoading, setReleaseModalLoading] = useState(false);
   const [releaseSummary, setReleaseSummary] = useState<ActiveTaskSummary[]>([]);
   const [releaseTargets, setReleaseTargets] = useState<string[]>([]);
+  // Add/Remove packer mode
+  const [isAddRemoveMode, setIsAddRemoveMode] = useState(false);
+  const [packerActionModal, setPackerActionModal] = useState<{visible: boolean; packerId: string | null; packerName: string; action: 'add' | 'remove'}>({visible: false, packerId: null, packerName: '', action: 'add'});
 
   useEffect(() => {
     loadData();
@@ -183,13 +185,15 @@ export default function PackerDashboard() {
         }));
         setAllPackers(transformedPackers);
         
-        // Auto-select the logged-in user if they're available
+        // Auto-select the logged-in user if they're available and make them team lead
         const currentUserId = profile?.id;
         if (currentUserId) {
           const currentUser = transformedPackers.find(packer => packer.id === currentUserId);
           if (currentUser && currentUser.is_available) {
             setSelectedPackers(prev => (prev.includes(currentUserId) ? prev : [...prev, currentUserId]));
-            console.log('Auto-selected current user:', currentUser.full_name);
+            // Auto-set as team lead since they're the first one joining
+            setProjectLeads(prev => (prev.includes(currentUserId) ? prev : [...prev, currentUserId]));
+            console.log('Auto-selected current user as packer and team lead:', currentUser.full_name);
           }
         }
       }
@@ -216,7 +220,7 @@ export default function PackerDashboard() {
       const { data: orderPackers, error } = await db.getOrderPackers(selectedOrder);
       if (error) {
         console.error('Error loading team before release:', error);
-        setErrorAlert({ visible: true, title: 'Release Failed', message: 'Unable to load current team for this project' });
+        toast.error('Unable to load current team for this project');
         setReleaseTargets([]);
         return;
       }
@@ -225,7 +229,7 @@ export default function PackerDashboard() {
       const targetIds = collectPackerIds(normalizedPackers);
 
       if (targetIds.length === 0) {
-        setErrorAlert({ visible: true, title: 'Nothing to Release', message: 'There are no packers assigned to this project.' });
+        toast.error('There are no packers assigned to this project.');
         setReleaseTargets([]);
         return;
       }
@@ -251,7 +255,7 @@ export default function PackerDashboard() {
       setReleaseModalVisible(true);
     } catch (error) {
       console.error('Error preparing release confirmation:', error);
-      setErrorAlert({ visible: true, title: 'Release Failed', message: 'Unexpected error preparing release confirmation' });
+      toast.error('Unexpected error preparing release confirmation');
       setReleaseTargets([]);
     } finally {
       setReleaseModalLoading(false);
@@ -293,14 +297,14 @@ export default function PackerDashboard() {
         clearSession();
       }
 
-      setSuccessAlert({ visible: true, title: 'Project Released', message: 'Team removed and project unlocked for others.' });
+      toast.success('Team removed and project unlocked for others.');
       setSelectedOrder(null);
       setSelectedPackers([]);
       resetReleaseModalState();
       await loadData();
     } catch (error) {
       console.error('Error releasing project:', error);
-      setErrorAlert({ visible: true, title: 'Release Failed', message: 'Could not release this project.' });
+      toast.error('Could not release this project.');
     } finally {
       setReleaseModalLoading(false);
     }
@@ -311,6 +315,109 @@ export default function PackerDashboard() {
     resetReleaseModalState();
   };
 
+  // Handle add/remove packer action
+  const handlePackerAction = async () => {
+    if (!packerActionModal.packerId || !selectedOrder) return;
+    
+    const { packerId, action } = packerActionModal;
+    const packer = allPackers.find(p => p.id === packerId);
+    
+    try {
+      if (action === 'remove') {
+        // Complete tasks for this packer
+        const { error: taskError } = await db.completeAssignmentsForPackers(selectedOrder, [packerId]);
+        if (taskError) {
+          console.warn('Failed to complete tasks for packer:', taskError);
+        }
+        
+        // End attendance for this packer
+        const { error: attendanceError } = await db.endAttendanceForPackers(selectedOrder, [packerId]);
+        if (attendanceError) {
+          console.warn('Failed to end attendance for packer:', attendanceError);
+        }
+        
+        // Remove from order
+        const { error: removeError } = await db.removePackerFromOrder(selectedOrder, packerId);
+        if (removeError) {
+          toast.error('Failed to remove packer from project');
+          return;
+        }
+        
+        // If removing a project lead, remove lead status
+        if (projectLeads.includes(packerId)) {
+          await teamLead.removeTeamLead(selectedOrder, packerId);
+          setProjectLeads(prev => prev.filter(id => id !== packerId));
+        }
+        
+        // Update local state
+        setSelectedPackers(prev => prev.filter(id => id !== packerId));
+        
+        // Update packer status locally (mark as available)
+        setAllPackers(prev => prev.map(p => 
+          p.id === packerId 
+            ? { ...p, packer_status: 'available', is_available: true, current_order_name: null }
+            : p
+        ));
+        
+        // If removing self, clear session
+        if (packerId === profile?.id) {
+          clearSession();
+        }
+        
+        toast.success(`${packer?.full_name || 'Packer'} has been removed from the team`);
+      } else {
+        // Add packer to order
+        const { data: orderData } = await db.getOrderById(selectedOrder);
+        if (!orderData) {
+          toast.error('Could not load order details');
+          return;
+        }
+        
+        const { error: addError } = await db.addPackerToOrder(selectedOrder, packerId, orderData);
+        if (addError) {
+          toast.error('Failed to add packer to project');
+          return;
+        }
+        
+        // Create session for the new packer
+        await db.createTeamSessions(selectedOrder, orderData, [packerId]);
+        
+        // Update local state
+        setSelectedPackers(prev => [...prev, packerId]);
+        
+        // Update packer status locally (mark as busy with current order)
+        const orderName = availableOrders.find(o => o.id === selectedOrder)?.order_name || '';
+        setAllPackers(prev => prev.map(p => 
+          p.id === packerId 
+            ? { ...p, packer_status: 'busy', is_available: false, current_order_name: orderName }
+            : p
+        ));
+        
+        toast.success(`${packer?.full_name || 'Packer'} has been added to the team`);
+      }
+      
+      // No need to reload all data - we've updated local state
+    } catch (error) {
+      console.error('Error in packer action:', error);
+      toast.error('An unexpected error occurred');
+    } finally {
+      setPackerActionModal({visible: false, packerId: null, packerName: '', action: 'add'});
+    }
+  };
+
+  const openAddPackerModal = (packerId: string, packerName: string) => {
+    setPackerActionModal({visible: true, packerId, packerName, action: 'add'});
+  };
+
+  const openRemovePackerModal = (packerId: string, packerName: string) => {
+    // Check if this is the last team lead
+    if (projectLeads.includes(packerId) && projectLeads.length === 1) {
+      toast.error('This is the last team lead. Please assign another team lead before removing.');
+      return;
+    }
+    setPackerActionModal({visible: true, packerId, packerName, action: 'remove'});
+  };
+
   const togglePackerSelection = (packerId: string) => {
     const packer = allPackers.find(p => p.id === packerId);
     const isCurrentlySelected = selectedPackers.includes(packerId);
@@ -318,7 +425,7 @@ export default function PackerDashboard() {
     
     // For orders with existing team: only allow team leads to modify selection
     if (isActiveSession && !isTeamLead) {
-      setErrorAlert({visible: true, title: 'Permission Denied', message: 'Only team leads can modify team membership'});
+      toast.error('Only team leads can modify team membership');
       return;
     }
     
@@ -329,7 +436,7 @@ export default function PackerDashboard() {
         // Check if there are other team leads
         const otherLeads = projectLeads.filter(id => id !== packerId);
         if (otherLeads.length === 0) {
-          setErrorAlert({visible: true, title: 'Cannot Remove', message: 'You are the last team lead. Please assign another team lead before removing yourself.'});
+          toast.error('You are the last team lead. Please assign another team lead before removing yourself.');
           return;
         }
       }
@@ -342,7 +449,7 @@ export default function PackerDashboard() {
     } else {
       // Selecting a packer (adding to team)
       if (!packer?.is_available) {
-        setErrorAlert({visible: true, title: 'Packer Unavailable', message: `${packer?.full_name || 'This packer'} is currently unavailable`});
+        toast.error(`${packer?.full_name || 'This packer'} is currently unavailable`);
         return;
       }
       
@@ -354,7 +461,7 @@ export default function PackerDashboard() {
   const toggleProjectLead = (packerId: string) => {
     // Only allow project lead selection from selected packers
     if (!selectedPackers.includes(packerId)) {
-      setErrorAlert({visible: true, title: 'Cannot Assign', message: 'Please select this packer as a team member first'});
+      toast.error('Please select this packer as a team member first');
       return;
     }
     
@@ -362,7 +469,7 @@ export default function PackerDashboard() {
     
     // For orders with existing team: only allow team leads to modify lead assignments
     if (isActiveSession && !isTeamLead) {
-      setErrorAlert({visible: true, title: 'Permission Denied', message: 'Only team leads can assign team lead roles'});
+      toast.error('Only team leads can assign team lead roles');
       return;
     }
     
@@ -371,7 +478,7 @@ export default function PackerDashboard() {
       if (prev.includes(packerId)) {
         // Removing lead status - check if this is the last lead
         if (prev.length === 1) {
-          setErrorAlert({visible: true, title: 'Cannot Remove', message: 'At least one team lead is required. Please assign another team lead first.'});
+          toast.error('At least one team lead is required. Please assign another team lead first.');
           return prev;
         }
         // Remove from leads
@@ -385,17 +492,17 @@ export default function PackerDashboard() {
 
   const handleNext = async () => {
     if (!selectedOrder) {
-      setErrorAlert({visible: true, title: 'Project Required', message: 'Please select a project'});
+      toast.error('Please select a project');
       return;
     }
 
     if (selectedPackers.length === 0) {
-      setErrorAlert({visible: true, title: 'Team Required', message: 'Please select at least one packer'});
+      toast.error('Please select at least one packer');
       return;
     }
 
     if (projectLeads.length === 0) {
-      setErrorAlert({visible: true, title: 'Project Lead Required', message: 'Please select at least one project lead from the team members'});
+      toast.error('Please select at least one project lead from the team members');
       return;
     }
 
@@ -406,7 +513,7 @@ export default function PackerDashboard() {
       const { data: orderData, error: orderError } = await db.getOrderById(selectedOrder);
       if (orderError || !orderData) {
         console.error('Error getting order details:', orderError);
-        setErrorAlert({visible: true, title: 'Project Error', message: 'Failed to get project details'});
+        toast.error('Failed to get project details');
         return;
       }
 
@@ -467,7 +574,7 @@ export default function PackerDashboard() {
         // Update order.project_lead_id
         await db.updateProjectLead(selectedOrder, projectLeads[0]);
         
-        setSuccessAlert({visible: true, title: 'Team Updated', message: 'Team changes saved successfully'});
+        toast.success('Team changes saved successfully');
         
         // Force complete reload with a small delay to allow database to update
         setTimeout(async () => {
@@ -486,7 +593,7 @@ export default function PackerDashboard() {
         const { error: assignError } = await db.assignPackersToOrder(selectedOrder, selectedPackers);
         
         if (assignError) {
-          setErrorAlert({visible: true, title: 'Assignment Failed', message: 'Failed to assign team to project'});
+          toast.error('Failed to assign team to project');
           return;
         }
 
@@ -518,10 +625,10 @@ export default function PackerDashboard() {
         const { data: teamSessions, error: sessionError } = await db.createTeamSessions(selectedOrder, orderData, selectedPackers);
         if (sessionError || !teamSessions) {
           console.error('Failed to create team sessions:', sessionError);
-          setErrorAlert({visible: true, title: 'Session Warning', message: 'Failed to create team sessions, but you can continue'});
+          toast.warning('Failed to create team sessions, but you can continue');
         } else {
           console.log(`Created ${teamSessions.length} team sessions for selected packers`);
-          setSuccessAlert({visible: true, title: 'Team Assigned Successfully', message: `Created sessions for ${teamSessions.length} team members`});
+          toast.success(`Created sessions for ${teamSessions.length} team members`);
           
           // Update the current user's session in context if they're part of the selected team
           if (profile?.id && selectedPackers.includes(profile.id)) {
@@ -544,7 +651,7 @@ export default function PackerDashboard() {
       }
     } catch (error) {
       console.error('Error assigning team:', error);
-      setErrorAlert({visible: true, title: 'Unexpected Error', message: 'An unexpected error occurred'});
+      toast.error('An unexpected error occurred');
     }
   };
 
@@ -553,14 +660,14 @@ export default function PackerDashboard() {
       const { error } = await signOut();
       if (error) {
         console.error('Sign out error:', error);
-        setErrorAlert({visible: true, title: 'Sign Out Failed', message: 'Failed to sign out'});
+        toast.error('Failed to sign out');
       } else {
         // Force navigation to login after successful sign out
         router.replace('/auth/login');
       }
     } catch (error) {
       console.error('Unexpected sign out error:', error);
-      setErrorAlert({visible: true, title: 'Sign Out Error', message: 'An unexpected error occurred during sign out'});
+      toast.error('An unexpected error occurred during sign out');
     }
   };
 
@@ -644,20 +751,18 @@ export default function PackerDashboard() {
       {/* Navigation Buttons */}
   <NavigationButtons currentScreen="dashboard" onDashboardRefresh={loadData} />
 
-      {/* Alert Messages */}
-      <SuccessAlert
-        visible={successAlert.visible}
-        title={successAlert.title}
-        message={successAlert.message}
-        onClose={() => setSuccessAlert({visible: false, title: ''})}
-        autoDismiss={true}
-      />
-      <ErrorAlert
-        visible={errorAlert.visible}
-        title={errorAlert.title}
-        message={errorAlert.message}
-        onClose={() => setErrorAlert({visible: false, title: ''})}
-        autoDismiss={true}
+      {/* Add/Remove Packer Confirmation Modal */}
+      <ConfirmModal
+        visible={packerActionModal.visible}
+        title={packerActionModal.action === 'add' ? 'Add Packer' : 'Remove Packer'}
+        description={packerActionModal.action === 'add' 
+          ? `Are you sure you want to add ${packerActionModal.packerName} to the team?`
+          : `Are you sure you want to remove ${packerActionModal.packerName} from the team? This will end their attendance and complete their active tasks.`}
+        confirmText={packerActionModal.action === 'add' ? 'Add' : 'Remove'}
+        cancelText="Cancel"
+        variant={packerActionModal.action === 'add' ? 'default' : 'danger'}
+        onConfirm={handlePackerAction}
+        onCancel={() => setPackerActionModal({visible: false, packerId: null, packerName: '', action: 'add'})}
       />
 
       <ConfirmModal
@@ -780,42 +885,57 @@ export default function PackerDashboard() {
                   const isSelected = selectedPackers.includes(packer.id);
                   const isProjectLead = projectLeads.includes(packer.id);
                   const canBeProjectLead = isSelected;
+                  const isActiveSession = session && session.order_id === selectedOrder;
                   
-                  // Allow deselection if user is team lead or if it's a new assignment
-                  const canInteract = packer.is_available || (isSelected && (isTeamLead || !session));
+                  // Check if packer is busy on another project
+                  const isBusyOnOtherProject = !packer.is_available && !isSelected && packer.current_order_name;
+                  
+                  // In add/remove mode for active sessions
+                  const showAddButton = isAddRemoveMode && isActiveSession && !isSelected && packer.is_available;
+                  const showRemoveButton = isAddRemoveMode && isActiveSession && isSelected;
+                  
+                  // Allow packer selection when: 1) No active session (first time selecting), OR 2) In add/remove mode for active sessions
+                  const isNewProjectSelection = selectedOrder && !isActiveSession;
+                  const canClickToSelect = isNewProjectSelection && packer.is_available;
 
                   const cardCls = `${isCompact ? 'p-2' : 'p-3'} mb-2 rounded-lg border flex-row items-center justify-between ${
                     isSelected
                       ? 'bg-primary-50 border-primary-500'
+                      : isBusyOnOtherProject
+                      ? 'bg-yellow-50 border-yellow-400'
                       : !packer.is_available
                       ? 'bg-gray-100 border-gray-300 opacity-50'
                       : 'bg-gray-50 border-gray-200'
                   }`;
                   
+                  // Wrapper component - use TouchableOpacity for new project selection, otherwise View
+                  const CardWrapper = canClickToSelect ? TouchableOpacity : View;
+                  const cardWrapperProps = canClickToSelect ? { onPress: () => togglePackerSelection(packer.id) } : {};
+                  
                   return (
-                    <TouchableOpacity
+                    <CardWrapper
                       key={packer.id}
-                      onPress={() => canInteract && togglePackerSelection(packer.id)}
-                      activeOpacity={canInteract ? 0.7 : 1}
-                      disabled={!canInteract}
                       className={cardCls}
+                      {...cardWrapperProps}
                     >
                       <View className="flex-row items-center flex-1">
                         <View className={`w-4 h-4 rounded mr-3 ${
                           isSelected
                             ? 'bg-primary-500'
+                            : isBusyOnOtherProject
+                            ? 'bg-yellow-400'
                             : packer.is_available
                             ? 'bg-gray-300'
                             : 'bg-gray-200'
                         }`} />
                         <View className="flex-1">
                           <Text className={`font-medium ${
-                            isSelected ? 'text-primary-700' : (packer.is_available ? 'text-gray-900' : 'text-gray-400')
+                            isSelected ? 'text-primary-700' : isBusyOnOtherProject ? 'text-yellow-700' : (packer.is_available ? 'text-gray-900' : 'text-gray-400')
                           }`}>
                             {packer.full_name}
                           </Text>
                           {!isSelected && !packer.is_available && packer.current_order_name && (
-                            <Text className="text-[11px] text-gray-400 mt-0.5">
+                            <Text className="text-[11px] text-yellow-600 mt-0.5 font-medium">
                               Working on: {packer.current_order_name}
                             </Text>
                           )}
@@ -824,34 +944,77 @@ export default function PackerDashboard() {
                               Status: {packer.packer_status}
                             </Text>
                           )}
-                          {isSelected && selectedOrder && (
+                          {isSelected && selectedOrder && !isAddRemoveMode && (
                             <Text className="text-[11px] text-primary-600 mt-0.5">
-                              Selected for this project
+                              On this project
                             </Text>
                           )}
                         </View>
                       </View>
-                      <TouchableOpacity 
-                        onPress={(e) => {
-                          e.stopPropagation();
-                          toggleProjectLead(packer.id);
-                        }}
-                        activeOpacity={canBeProjectLead ? 0.7 : 1}
-                        disabled={!canBeProjectLead}
-                      >
-                        <View className={`w-6 h-6 rounded-full border-2 items-center justify-center ${
-                          isProjectLead
-                            ? 'bg-primary-500 border-primary-500'
-                            : canBeProjectLead
-                            ? 'border-gray-300'
-                            : 'border-gray-200 bg-gray-100'
-                        }`}>
+                      
+                      {/* Add/Remove buttons when in add/remove mode */}
+                      {showAddButton && (
+                        <View className="flex-row items-center gap-2">
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              openAddPackerModal(packer.id, packer.full_name);
+                            }}
+                            className="px-3 py-1.5 bg-green-500 rounded-lg"
+                          >
+                            <Text className="text-white text-xs font-semibold">Add</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                      
+                      {showRemoveButton && (
+                        <View className="flex-row items-center gap-2">
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              openRemovePackerModal(packer.id, packer.full_name);
+                            }}
+                            className="px-3 py-1.5 bg-red-500 rounded-lg"
+                          >
+                            <Text className="text-white text-xs font-semibold">Remove</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity 
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              toggleProjectLead(packer.id);
+                            }}
+                            className={`px-2 py-1.5 rounded-lg border ${
+                              isProjectLead
+                                ? 'bg-primary-500 border-primary-500'
+                                : 'bg-white border-gray-300'
+                            }`}
+                          >
+                            <Text className={`text-xs font-semibold ${isProjectLead ? 'text-white' : 'text-gray-600'}`}>
+                              {isProjectLead ? '★ Lead' : 'Make Lead'}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                      
+                      {/* Project lead indicator when NOT in add/remove mode */}
+                      {!isAddRemoveMode && isSelected && (
+                        <TouchableOpacity 
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            toggleProjectLead(packer.id);
+                          }}
+                          className={`w-6 h-6 rounded-full border-2 items-center justify-center ${
+                            isProjectLead
+                              ? 'bg-primary-500 border-primary-500'
+                              : 'border-gray-200 bg-gray-100'
+                          }`}
+                        >
                           {isProjectLead && (
                             <Text className="text-white text-xs">✓</Text>
                           )}
-                        </View>
-                      </TouchableOpacity>
-                    </TouchableOpacity>
+                        </TouchableOpacity>
+                      )}
+                    </CardWrapper>
                   );
                 })
               )}
@@ -859,10 +1022,11 @@ export default function PackerDashboard() {
           </View>
         </View>
 
-        {/* Next/Update Button - Always show when order is selected */}
+        {/* Action Buttons - Always show when order is selected */}
         {selectedOrder && (
           <View className={`${isCompact ? 'mt-3' : 'mt-4'} flex-row justify-end items-center`}>
-            {canReleaseOrder && (
+            {/* Release Project button - hidden but kept in code */}
+            {false && canReleaseOrder && (
               <TouchableOpacity
                 onPress={prepareReleaseModal}
                 disabled={releaseModalLoading}
@@ -875,23 +1039,42 @@ export default function PackerDashboard() {
                 </Text>
               </TouchableOpacity>
             )}
-            <TouchableOpacity
-              onPress={handleNext}
-              disabled={!selectedOrder || selectedPackers.length === 0}
-              className={`${isCompact ? 'px-4 py-2' : 'px-6 py-3'} rounded-lg ${
-                selectedOrder && selectedPackers.length > 0
-                  ? 'bg-primary-500'
-                  : 'bg-gray-300'
-              }`}
-            >
-              <Text className={`font-semibold ${
-                selectedOrder && selectedPackers.length > 0
-                  ? 'text-white'
-                  : 'text-gray-500'
-              }`}>
-                {session && session.order_id === selectedOrder ? '✓ Update Team' : '▷ Next'}
-              </Text>
-            </TouchableOpacity>
+            {/* Add/Remove Packer toggle button - only show for active sessions */}
+            {session && session.order_id === selectedOrder && isTeamLead && (
+              <TouchableOpacity
+                onPress={() => setIsAddRemoveMode(!isAddRemoveMode)}
+                className={`${isCompact ? 'px-4 py-2' : 'px-5 py-3'} rounded-lg border ${
+                  isAddRemoveMode
+                    ? 'bg-green-600 border-green-600'
+                    : 'bg-green-50 border-green-500'
+                }`}
+              >
+                <Text className={`font-semibold ${isAddRemoveMode ? 'text-white' : 'text-green-700'}`}>
+                  {isAddRemoveMode ? '✕ Done' : '± Add/Remove Packer'}
+                </Text>
+              </TouchableOpacity>
+            )}
+            
+            {/* Next button - only show for new assignments (not active sessions) */}
+            {!(session && session.order_id === selectedOrder) && (
+              <TouchableOpacity
+                onPress={handleNext}
+                disabled={!selectedOrder || selectedPackers.length === 0}
+                className={`${isCompact ? 'px-4 py-2' : 'px-6 py-3'} rounded-lg ${
+                  selectedOrder && selectedPackers.length > 0
+                    ? 'bg-primary-500'
+                    : 'bg-gray-300'
+                }`}
+              >
+                <Text className={`font-semibold ${
+                  selectedOrder && selectedPackers.length > 0
+                    ? 'text-white'
+                    : 'text-gray-500'
+                }`}>
+                  ▷ Next
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
       </View>

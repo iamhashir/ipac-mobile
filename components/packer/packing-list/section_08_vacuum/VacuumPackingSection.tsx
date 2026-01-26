@@ -1,6 +1,7 @@
 import React from "react";
 import { View, Text, TextInput } from "react-native";
 import OrderPackageMaterialsSection from "../shared/materials/OrderPackageMaterialsSection";
+import OrderPackageServicesSection from "../shared/services/OrderPackageServicesSection";
 import CollapsibleCard from "../common/CollapsibleCard";
 
 interface VacuumPackingSectionProps {
@@ -61,18 +62,11 @@ const VacuumPackingSection: React.FC<VacuumPackingSectionProps> = ({
           }}
         />
 
-        <View className="bg-white rounded-xl border border-gray-400 p-3 mx-4 my-2">
-          <View className="px-3 py-1 rounded-full self-start mb-2">
-            <Text className="text-blue-800 text-xs font-semibold">Service</Text>
-          </View>
-          <View className="border border-gray-300 rounded-lg p-2">
-            <TextInput
-              placeholder="Electronic Humidity and temperature monitor"
-              className={`text-gray-800 ${!canEdit ? "text-gray-400" : ""}`}
-              editable={canEdit}
-            />
-          </View>
-        </View>
+        <OrderPackageServicesSection
+          orderPackageId={orderPackageId}
+          tag="Vacuum Packing"
+          editable={canEdit}
+        />
       </CollapsibleCard>
     </View>
   );

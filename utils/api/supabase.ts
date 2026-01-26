@@ -7,6 +7,7 @@ import type { Json, Maybe, NullableDate, SupabaseUpdatePayload, UUID } from './t
 import { createAttendanceApi } from './modules/attendance';
 import { createPackingApi } from './modules/packing';
 import { createTasksApi } from './modules/tasks';
+import { createServicesApi } from './modules/services';
 
 interface AttendanceWindow {
   orderId: UUID;
@@ -1218,12 +1219,14 @@ const baseDb = {
 const attendanceApi = createAttendanceApi(supabase);
 const packingApi = createPackingApi(supabase);
 const tasksApi = createTasksApi(supabase);
+const servicesApi = createServicesApi(supabase);
 
 export const db = {
   ...baseDb,
   ...attendanceApi,
   ...packingApi,
   ...tasksApi,
+  ...servicesApi,
   query: supabase,
   auth: supabase.auth,
 };

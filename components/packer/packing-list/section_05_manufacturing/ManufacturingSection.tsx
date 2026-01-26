@@ -330,16 +330,33 @@ const dimensionExceedsThreshold = (dims: DimensionTriple | null | undefined) => 
           <TwoTierEditableCard key={`${side}-thickness-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.thickness ?? null} final={tmplFin?.thickness ?? null} type="number" onChange={(v) => saveTemplate({ thickness: v })} width={smallWidth} draftValue={(pending as any)[side]?.template?.thickness} />
         </View>
 
-  {/* Horizontal/Beams */}
-  <GroupBox title={horizontalTitle}>
-          <View className="flex-row flex-wrap">
-            <TwoTierEditableCard key={`${side}-hb-qty-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.horizontal_bar?.quantity ?? null} final={tmplFin?.horizontal_bar?.quantity ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { quantity: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.quantity} />
-            <TwoTierEditableCard key={`${side}-hb-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.horizontal_bar?.type, barVariants)} final={variantLabelById(tmplFin?.horizontal_bar?.type, barVariants)} type="select" selectItems={barVariants} onChange={(v) => saveBeam('horizontal_bar', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.horizontal_bar?.type || null} defaultSelectValue={tmplOrig?.horizontal_bar?.type || null} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.type} />
-            <TwoTierEditableCard key={`${side}-hb-space-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Space" original={tmplOrig?.horizontal_bar?.space ?? null} final={tmplFin?.horizontal_bar?.space ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { space: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.space} />
-            <TwoTierEditableCard key={`${side}-hb-width-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Width" original={tmplOrig?.horizontal_bar?.width ?? null} final={tmplFin?.horizontal_bar?.width ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { width: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.width} />
-            <TwoTierEditableCard key={`${side}-hb-thick-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.horizontal_bar?.thickness ?? null} final={tmplFin?.horizontal_bar?.thickness ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { thickness: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.thickness} />
-          </View>
-        </GroupBox>
+  {/* Horizontal/Beams — for base side with large dimensions, use materials section */}
+  {side === 'base' && shouldShowAdditionalWood ? (
+    <View style={{ marginTop: 16 }}>
+      <OrderPackageMaterialsSection
+        orderPackageId={orderPackageId}
+        title={horizontalTitle}
+        materialType="Base"
+        variantSources={[{ type: 'variantTag', value: 'Bar' }]}
+        addButtonLabel="Add beam"
+        quantityLabel="Qty"
+        mediaDesignation="base_beam"
+        editable={editable}
+        showDimensions={true}
+        showComment={true}
+      />
+    </View>
+  ) : (
+    <GroupBox title={horizontalTitle}>
+      <View className="flex-row flex-wrap">
+        <TwoTierEditableCard key={`${side}-hb-qty-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.horizontal_bar?.quantity ?? null} final={tmplFin?.horizontal_bar?.quantity ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { quantity: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.quantity} />
+        <TwoTierEditableCard key={`${side}-hb-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.horizontal_bar?.type, barVariants)} final={variantLabelById(tmplFin?.horizontal_bar?.type, barVariants)} type="select" selectItems={barVariants} onChange={(v) => saveBeam('horizontal_bar', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.horizontal_bar?.type || null} defaultSelectValue={tmplOrig?.horizontal_bar?.type || null} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.type} />
+        <TwoTierEditableCard key={`${side}-hb-space-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Space" original={tmplOrig?.horizontal_bar?.space ?? null} final={tmplFin?.horizontal_bar?.space ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { space: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.space} />
+        <TwoTierEditableCard key={`${side}-hb-width-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Width" original={tmplOrig?.horizontal_bar?.width ?? null} final={tmplFin?.horizontal_bar?.width ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { width: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.width} />
+        <TwoTierEditableCard key={`${side}-hb-thick-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.horizontal_bar?.thickness ?? null} final={tmplFin?.horizontal_bar?.thickness ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { thickness: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.thickness} />
+      </View>
+    </GroupBox>
+  )}
 
   {/* Vertical/Beams Filling */}
   <GroupBox title={verticalTitle}>
@@ -368,7 +385,7 @@ const dimensionExceedsThreshold = (dims: DimensionTriple | null | undefined) => 
             <OrderPackageMaterialsSection
               orderPackageId={orderPackageId}
               title={`Additional Wood — ${SIDE_LABELS[side]}`}
-              materialType={ADDITIONAL_WOOD_MATERIAL_TYPES[side]}
+              materialType="Additional Wood"
               variantSources={ADDITIONAL_WOOD_VARIANT_SOURCES}
               addButtonLabel="Add wood"
               quantityLabel="Qty"

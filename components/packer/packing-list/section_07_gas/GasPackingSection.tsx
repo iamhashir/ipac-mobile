@@ -3,6 +3,7 @@ import { View, Text } from "react-native";
 import OrderPackageMaterialsSection, {
   AdditionalFieldConfig,
 } from "../shared/materials/OrderPackageMaterialsSection";
+import OrderPackageServicesSection from "../shared/services/OrderPackageServicesSection";
 import CollapsibleCard from "../common/CollapsibleCard";
 
 interface GasPackingSectionProps {
@@ -95,6 +96,12 @@ const GasPackingSection: React.FC<GasPackingSectionProps> = ({
             autoTag: "Gas Accessories",
             materialType: "Gas Packing",
           }}
+        />
+
+        <OrderPackageServicesSection
+          orderPackageId={orderPackageId}
+          tag="Gas Packing"
+          editable={editable}
         />
       </CollapsibleCard>
     </View>

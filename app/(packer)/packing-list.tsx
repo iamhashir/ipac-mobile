@@ -609,39 +609,29 @@ export default function PackingListPage() {
             <CommentsSection orderPackageId={p.id} />
 
             {/* Per-package Task Management (collapsible, white background, rounded, separated by main blue bg) */}
-            {p.status !== "packed" ? (
-              <View
-                className="mx-4 mt-4 mb-4"
-                onLayout={(event) => {
-                  const { y } = event.nativeEvent.layout;
-                  sectionRefs.current["items"] = y;
-                }}
+            <View
+              className="mx-4 mt-4 mb-4"
+              onLayout={(event) => {
+                const { y } = event.nativeEvent.layout;
+                sectionRefs.current["items"] = y;
+              }}
+            >
+              <CollapsibleCard
+                title={p.status === "packed" ? "Task Management (Completed)" : "Task Management"}
+                containerClassName="bg-white border-gray-500"
+                headerClassName=""
+                contentClassName=""
+                defaultOpen={true}
               >
-                <CollapsibleCard
-                  title="Task Management"
-                  containerClassName="bg-white border-gray-500"
-                  headerClassName=""
-                  contentClassName=""
-                  defaultOpen={true}
-                >
-                  <OrderTasksManagement
-                    orderId={orderId}
-                    orderPackages={[
-                      { id: p.id, package_number: p.package_number },
-                    ]}
-                  />
-                </CollapsibleCard>
-              </View>
-            ) : (
-              <View className="mx-4 mt-4 mb-4 bg-blue-50 border border-blue-300 rounded-lg p-4">
-                <Text className="text-blue-800 font-semibold text-center">
-                  ✓ Box Completed - Task Management Locked
-                </Text>
-                <Text className="text-blue-600 text-sm text-center mt-1">
-                  Click "Undo Completion" to make changes
-                </Text>
-              </View>
-            )}
+                <OrderTasksManagement
+                  orderId={orderId}
+                  orderPackages={[
+                    { id: p.id, package_number: p.package_number },
+                  ]}
+                  readOnly={p.status === "packed"}
+                />
+              </CollapsibleCard>
+            </View>
 
             {/* Manufacturing section */}
             <View

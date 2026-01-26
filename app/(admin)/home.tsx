@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../utils/AuthContext';
 import { supabase } from '../../utils/api/supabase';
@@ -12,9 +12,10 @@ interface StatCardProps {
   icon: React.ComponentType<any>;
   color: string;
   subtitle?: string;
+  loading?: boolean;
 }
 
-function StatCard({ title, value, icon: Icon, color, subtitle }: StatCardProps) {
+function StatCard({ title, value, icon: Icon, color, subtitle, loading }: StatCardProps) {
   return (
     <View className="bg-white rounded-lg shadow-sm p-4 flex-1 mx-1">
       <View className="flex-row items-center justify-between mb-2">
@@ -22,7 +23,11 @@ function StatCard({ title, value, icon: Icon, color, subtitle }: StatCardProps) 
           <Icon size={20} color="white" />
         </View>
       </View>
-      <Text className="text-2xl font-bold text-gray-900">{value}</Text>
+      {loading ? (
+        <ActivityIndicator size="small" color="#6b7280" />
+      ) : (
+        <Text className="text-2xl font-bold text-gray-900">{value}</Text>
+      )}
       <Text className="text-sm text-gray-600">{title}</Text>
       {subtitle && (
         <Text className="text-xs text-gray-500 mt-1">{subtitle}</Text>
@@ -67,24 +72,25 @@ interface ChartData {
 
 const generateChartData = async (period: TimePeriod): Promise<ChartData> => {
   try {
-    let dateFilter = '';
+    let startDate: Date;
     let labels: string[] = [];
+    const now = new Date();
     
     switch (period) {
       case '7days':
-        dateFilter = "created_at >= NOW() - INTERVAL '7 days'";
+        startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
         labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
         break;
       case '1month':
-        dateFilter = "created_at >= NOW() - INTERVAL '1 month'";
+        startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
         labels = ['Wk 1', 'Wk 2', 'Wk 3', 'Wk 4'];
         break;
       case '1year':
-        dateFilter = "created_at >= NOW() - INTERVAL '1 year'";
+        startDate = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
         labels = ['Q1', 'Q2', 'Q3', 'Q4'];
         break;
       case 'all':
-        dateFilter = "1=1"; // No filter for all time
+        startDate = new Date(2020, 0, 1); // Far back date
         labels = ['2021', '2022', '2023', '2024', '2025'];
         break;
     }
@@ -92,24 +98,46 @@ const generateChartData = async (period: TimePeriod): Promise<ChartData> => {
     const { data: orders, error } = await supabase
       .from('orders')
       .select('id, created_at')
+      .gte('created_at', startDate.toISOString())
       .order('created_at', { ascending: true });
 
     if (error) {
       console.error('Error fetching orders:', error);
-      // Return mock data as fallback
-      return { labels, datasets: [{ data: labels.map(() => Math.floor(Math.random() * 30) + 10) }] };
+      return { labels, datasets: [{ data: labels.map(() => 0) }] };
     }
 
-    // For now, return aggregated data based on period
-    // This is simplified - you could make this more sophisticated
-    const data = labels.map(() => Math.floor(Math.random() * 30) + 10); // Temporary random data
+    // Group orders by period
+    const orderCounts = labels.map(() => 0);
     
-    return { labels, datasets: [{ data }] };
+    if (orders && orders.length > 0) {
+      orders.forEach((order: any) => {
+        const orderDate = new Date(order.created_at);
+        
+        if (period === '7days') {
+          const dayOfWeek = orderDate.getDay();
+          const index = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // Convert Sunday=0 to index 6
+          if (index >= 0 && index < 7) orderCounts[index]++;
+        } else if (period === '1month') {
+          const dayOfMonth = orderDate.getDate();
+          const weekIndex = Math.min(Math.floor((dayOfMonth - 1) / 7), 3);
+          orderCounts[weekIndex]++;
+        } else if (period === '1year') {
+          const month = orderDate.getMonth();
+          const quarterIndex = Math.floor(month / 3);
+          if (quarterIndex >= 0 && quarterIndex < 4) orderCounts[quarterIndex]++;
+        } else if (period === 'all') {
+          const year = orderDate.getFullYear();
+          const yearIndex = year - 2021;
+          if (yearIndex >= 0 && yearIndex < 5) orderCounts[yearIndex]++;
+        }
+      });
+    }
+    
+    return { labels, datasets: [{ data: orderCounts }] };
   } catch (error) {
     console.error('Error generating chart data:', error);
-    // Return fallback mock data
     const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    return { labels, datasets: [{ data: [12, 19, 8, 25, 22, 18, 24] }] };
+    return { labels, datasets: [{ data: labels.map(() => 0) }] };
   }
 };
 
@@ -118,8 +146,59 @@ export default function AdminHome() {
   const [selectedPeriod, setSelectedPeriod] = useState<TimePeriod>('7days');
   const [chartData, setChartData] = useState<ChartData>({
     labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-    datasets: [{ data: [12, 19, 8, 25, 22, 18, 24] }]
+    datasets: [{ data: [0, 0, 0, 0, 0, 0, 0] }]
   });
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [stats, setStats] = useState({
+    totalOrders: 0,
+    activeUsers: 0,
+    inProductionOrders: 0,
+    completedOrders: 0
+  });
+
+  // Fetch real stats from the database
+  useEffect(() => {
+    const fetchStats = async () => {
+      setStatsLoading(true);
+      try {
+        // Fetch total orders count
+        const { count: ordersCount } = await supabase
+          .from('orders')
+          .select('*', { count: 'exact', head: true });
+
+        // Fetch active users (packers with status != 'banned')
+        const { count: usersCount } = await supabase
+          .from('profiles')
+          .select('*', { count: 'exact', head: true })
+          .neq('status', 'banned');
+
+        // Fetch in-production orders
+        const { count: inProductionCount } = await supabase
+          .from('orders')
+          .select('*', { count: 'exact', head: true })
+          .eq('production_status', 'in_production');
+
+        // Fetch completed orders
+        const { count: completedCount } = await supabase
+          .from('orders')
+          .select('*', { count: 'exact', head: true })
+          .eq('production_status', 'completed');
+
+        setStats({
+          totalOrders: ordersCount || 0,
+          activeUsers: usersCount || 0,
+          inProductionOrders: inProductionCount || 0,
+          completedOrders: completedCount || 0
+        });
+      } catch (error) {
+        console.error('Error fetching stats:', error);
+      } finally {
+        setStatsLoading(false);
+      }
+    };
+
+    fetchStats();
+  }, []);
 
   useEffect(() => {
     const fetchChartData = async () => {
@@ -169,40 +248,40 @@ export default function AdminHome() {
         {/* Stats Cards */}
         <View className="px-6 py-6">
           <Text className="text-lg font-semibold text-gray-900 mb-4">
-            Today's Overview
+            Overview
           </Text>
           
           <View className="flex-row mb-4">
             <StatCard
               title="Total Orders"
-              value="24"
+              value={stats.totalOrders.toString()}
               icon={ShoppingCart}
               color="bg-blue-500"
-              subtitle="+12% from yesterday"
+              loading={statsLoading}
             />
             <StatCard
               title="Active Users"
-              value="156"
+              value={stats.activeUsers.toString()}
               icon={Users}
               color="bg-green-500"
-              subtitle="+5 new today"
+              loading={statsLoading}
             />
           </View>
 
           <View className="flex-row">
             <StatCard
-              title="Revenue"
-              value="AED 45,280"
+              title="In Production"
+              value={stats.inProductionOrders.toString()}
               icon={TrendingUp}
               color="bg-purple-500"
-              subtitle="+8% from yesterday"
+              loading={statsLoading}
             />
             <StatCard
-              title="Pending Orders"
-              value="7"
+              title="Completed"
+              value={stats.completedOrders.toString()}
               icon={Clock}
               color="bg-orange-500"
-              subtitle="Need attention"
+              loading={statsLoading}
             />
           </View>
         </View>
@@ -271,43 +350,17 @@ export default function AdminHome() {
           </View>
         </View>
 
-        {/* Recent Activity */}
+        {/* Recent Activity - Placeholder */}
         <View className="px-6 py-4">
           <Text className="text-lg font-semibold text-gray-900 mb-4">
             Recent Activity
           </Text>
           
           <View className="bg-white rounded-lg shadow-sm p-4">
-            <View className="space-y-4">
-              <View className="flex-row items-center">
-                <View className="w-2 h-2 bg-green-500 rounded-full mr-3" />
-                <View className="flex-1">
-                  <Text className="text-sm font-medium text-gray-900">
-                    New order #1023 received
-                  </Text>
-                  <Text className="text-xs text-gray-500">2 minutes ago</Text>
-                </View>
-              </View>
-              
-              <View className="flex-row items-center">
-                <View className="w-2 h-2 bg-blue-500 rounded-full mr-3" />
-                <View className="flex-1">
-                  <Text className="text-sm font-medium text-gray-900">
-                    Order #1019 marked as completed
-                  </Text>
-                  <Text className="text-xs text-gray-500">15 minutes ago</Text>
-                </View>
-              </View>
-              
-              <View className="flex-row items-center">
-                <View className="w-2 h-2 bg-purple-500 rounded-full mr-3" />
-                <View className="flex-1">
-                  <Text className="text-sm font-medium text-gray-900">
-                    New user registered: John Smith
-                  </Text>
-                  <Text className="text-xs text-gray-500">1 hour ago</Text>
-                </View>
-              </View>
+            <View className="items-center py-4">
+              <Text className="text-gray-500 text-sm text-center">
+                Activity feed coming soon
+              </Text>
             </View>
           </View>
         </View>

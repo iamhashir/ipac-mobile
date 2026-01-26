@@ -199,7 +199,7 @@ export default function AttendanceScreen() {
         return;
       }
 
-      const midnightIso = new Date(`${previousDayStr} 00:00:00`).toISOString();
+      const endOfDayIso = new Date(`${previousDayStr} 23:59:59`).toISOString();
       let hadError = false;
 
       for (const name of packers) {
@@ -213,7 +213,7 @@ export default function AttendanceScreen() {
             orderId,
             packerIdentifier,
             'afternoon',
-            midnightIso,
+            endOfDayIso,
             previousDayStr
           );
 
@@ -235,12 +235,12 @@ export default function AttendanceScreen() {
                   ...current,
                   afternoon: {
                     ...current.afternoon,
-                    endTime: '00:00'
+                    endTime: '23:59'
                   }
                 }
               };
             });
-            console.log(`Auto-marked afternoon end time as 00:00 for ${name} (${previousDayStr})`);
+            console.log(`Auto-marked afternoon end time as 23:59 for ${name} (${previousDayStr})`);
           }
         } catch (error) {
           hadError = true;
