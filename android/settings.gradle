@@ -37,6 +37,3 @@ expoAutolinking.useExpoVersionCatalog()
 
 include ':app'
 includeBuild(expoAutolinking.reactNativeGradlePlugin)
-
-include ':react-native-worklets'
-project(':react-native-worklets').projectDir = new File(rootDir, '../node_modules/react-native-worklets/android')
