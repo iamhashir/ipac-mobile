@@ -8,11 +8,15 @@ import CollapsibleCard from "../common/CollapsibleCard";
 
 interface GasPackingSectionProps {
   orderPackageId: string;
+  hideUseButton?: boolean;
+  hideRemoveButton?: boolean;
   editable?: boolean;
 }
 
 const GasPackingSection: React.FC<GasPackingSectionProps> = ({
   orderPackageId,
+  hideUseButton = false,
+  hideRemoveButton = false,
   editable = true,
 }) => {
   const gasUsageField: AdditionalFieldConfig = {
@@ -27,7 +31,10 @@ const GasPackingSection: React.FC<GasPackingSectionProps> = ({
       if (!Number.isFinite(num) || num <= 0) return "Enter gas used (> 0)";
       return undefined;
     },
-    transform: (value) => Number(value),
+    transform: (value) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? Math.round(num * 100) / 100 : null;
+    },
     column: {
       label: "Quantity of Gas Used",
       flex: 14,
@@ -49,6 +56,8 @@ const GasPackingSection: React.FC<GasPackingSectionProps> = ({
           quantityLabel="in Bands"
           variantSources={[{ type: "material", value: "Laminate" }]}
           mediaDesignation="gas_packing"
+          hideUseButton={hideUseButton}
+          hideRemoveButton={hideRemoveButton}
           editable={editable}
           addPendingConfig={{
             autoTag: "Laminate",
@@ -62,6 +71,8 @@ const GasPackingSection: React.FC<GasPackingSectionProps> = ({
           materialType="Gas Packing"
           variantSources={[{ type: "material", value: "Desiccant" }]}
           mediaDesignation="gas_packing"
+          hideUseButton={hideUseButton}
+          hideRemoveButton={hideRemoveButton}
           editable={editable}
           addPendingConfig={{
             autoTag: "Desiccant",
@@ -81,6 +92,8 @@ const GasPackingSection: React.FC<GasPackingSectionProps> = ({
           mediaDesignation="gas_packing"
           showDimensions={false}
           additionalFields={[gasUsageField]}
+          hideUseButton={hideUseButton}
+          hideRemoveButton={hideRemoveButton}
           editable={editable}
           addPendingConfig={{ autoTag: "Gas", materialType: "Gas Packing" }}
         />
@@ -91,6 +104,8 @@ const GasPackingSection: React.FC<GasPackingSectionProps> = ({
           materialType="Gas Packing"
           variantSources={[{ type: "tag", value: "gas accessories" }]}
           mediaDesignation="gas_packing"
+          hideUseButton={hideUseButton}
+          hideRemoveButton={hideRemoveButton}
           editable={editable}
           addPendingConfig={{
             autoTag: "Gas Accessories",

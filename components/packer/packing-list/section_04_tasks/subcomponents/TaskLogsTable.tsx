@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, TouchableOpacity, Modal, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, Alert, ScrollView, Image } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Camera } from 'lucide-react-native';
 import { db } from '../../../../../utils/api/supabase';
@@ -17,6 +17,13 @@ interface LogRow {
   tasks?: { name?: string } | null;
   task_assignments?: Assignment[];
   task_packages?: TaskPackage[];
+}
+
+interface TaskMediaItem {
+  id: string;
+  image_url: string;
+  signedUrl: string | null;
+  created_at?: string;
 }
 
 interface TaskLogsTableProps {
@@ -73,6 +80,52 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
   const { size } = useTextSize();
   const [taskDetailsModal, setTaskDetailsModal] = useState<{ open: boolean; packerNames: string[]; boxNumbers: (number | null)[] }>({ open: false, packerNames: [], boxNumbers: []});
   const [taskPackageMap, setTaskPackageMap] = useState<Record<string, string[]>>({});
+  const [taskMediaMap, setTaskMediaMap] = useState<Record<string, TaskMediaItem[]>>({});
+  const [mediaPreview, setMediaPreview] = useState<{ open: boolean; taskLogId: string | null; media: TaskMediaItem | null }>({
+    open: false,
+    taskLogId: null,
+    media: null,
+  });
+  const [deletingMediaId, setDeletingMediaId] = useState<string | null>(null);
+
+  const loadTaskMediaForLog = async (taskLogId: string): Promise<TaskMediaItem[]> => {
+    if (!orderPackageId) return [];
+
+    const { data, error } = await db.query
+      .from('media')
+      .select('id, image_url, created_at')
+      .eq('designation', 'task')
+      .eq('order_package_id', orderPackageId)
+      .ilike('notes', `%task_log_id:${taskLogId}%`)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.warn(`Failed to load media for task ${taskLogId}:`, error);
+      return [];
+    }
+
+    const withSignedUrls = await Promise.all(
+      (data || []).map(async (media: any) => {
+        const { data: signed } = await db.query.storage
+          .from('media')
+          .createSignedUrl(media.image_url, 31536000);
+
+        return {
+          id: media.id,
+          image_url: media.image_url,
+          created_at: media.created_at,
+          signedUrl: signed?.signedUrl || null,
+        } as TaskMediaItem;
+      })
+    );
+
+    return withSignedUrls;
+  };
+
+  const refreshTaskMediaForLog = async (taskLogId: string) => {
+    const media = await loadTaskMediaForLog(taskLogId);
+    setTaskMediaMap((prev) => ({ ...prev, [taskLogId]: media }));
+  };
 
   const handleCameraPress = async (taskRow: LogRow) => {
     if (!orderPackageId) {
@@ -117,11 +170,12 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
     if (!orderPackageId) return;
     try {
       const taskName = taskRow.tasks?.name || 'Unknown Task';
-      const notes = `Task: ${taskName}`;
-      const { data, error } = await db.uploadMediaToStorage(orderPackageId, uri, 'task', notes);
+      const notes = `task_log_id:${taskRow.id}; task:${taskName}`;
+      const { error } = await db.uploadMediaToStorage(orderPackageId, uri, 'task', notes);
       if (error) {
         Alert.alert('Upload failed', 'Could not upload image to storage.');
       } else {
+        await refreshTaskMediaForLog(taskRow.id);
         Alert.alert('Uploaded', 'Image uploaded successfully.');
       }
     } catch (e) {
@@ -164,6 +218,77 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
       return packages ? packages.includes(currentPackageId) : false;
     });
   }, [rows, currentPackageId, taskPackageMap]);
+
+  useEffect(() => {
+    if (!orderPackageId) {
+      setTaskMediaMap({});
+      return;
+    }
+
+    if (filteredRows.length === 0) {
+      setTaskMediaMap({});
+      return;
+    }
+
+    let isMounted = true;
+    const loadMedia = async () => {
+      const entries = await Promise.all(
+        filteredRows.map(async (row) => {
+          const media = await loadTaskMediaForLog(row.id);
+          return { taskLogId: row.id, media };
+        })
+      );
+
+      if (!isMounted) return;
+
+      const nextMap: Record<string, TaskMediaItem[]> = {};
+      entries.forEach((entry) => {
+        nextMap[entry.taskLogId] = entry.media;
+      });
+      setTaskMediaMap(nextMap);
+    };
+
+    loadMedia();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [orderPackageId, filteredRows]);
+
+  const confirmDeletePreviewMedia = () => {
+    if (!mediaPreview.media || !mediaPreview.taskLogId) return;
+
+    Alert.alert('Delete image', 'Remove this task image?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          if (!mediaPreview.media || !mediaPreview.taskLogId) return;
+
+          setDeletingMediaId(mediaPreview.media.id);
+          try {
+            const { error } = await db.deleteMedia(mediaPreview.media.id);
+            if (error) {
+              Alert.alert('Delete failed', 'Could not delete image.');
+              return;
+            }
+
+            const taskLogId = mediaPreview.taskLogId;
+            const mediaId = mediaPreview.media.id;
+
+            setTaskMediaMap((prev) => ({
+              ...prev,
+              [taskLogId]: (prev[taskLogId] || []).filter((item) => item.id !== mediaId),
+            }));
+            setMediaPreview({ open: false, taskLogId: null, media: null });
+          } finally {
+            setDeletingMediaId(null);
+          }
+        },
+      },
+    ]);
+  };
 
   const openTaskDetails = (assignments?: Assignment[], taskPackages?: TaskPackage[], isCompleted?: boolean) => {
     // For completed tasks, show all assignments. For active tasks, filter out completed assignments.
@@ -210,48 +335,87 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
       {filteredRows.map((r) => {
         const completed = isTaskCompleted(r);
         const rowStyle = completed 
-          ? "flex-row items-center px-3 py-2 border-x border-b border-gray-200 bg-gray-100"
-          : "flex-row items-center px-3 py-2 border-x border-b border-gray-200 bg-white";
+          ? "flex-row items-center px-3 py-2 bg-gray-100"
+          : "flex-row items-center px-3 py-2 bg-white";
         const textStyle = completed ? "text-gray-500" : "text-gray-800";
+        const taskMedia = taskMediaMap[r.id] || [];
+        const wrapperClass = completed
+          ? 'border-x border-b border-gray-200 bg-gray-100'
+          : 'border-x border-b border-gray-200 bg-white';
         
         if (completed) {
           // Completed: row not clickable, restart remains prominent
           return (
-            <View key={r.id} className={rowStyle}>
-              <Text style={{ flex: 2.5, fontSize: cellFontSize }} className={`${textStyle}`} numberOfLines={1}>{r.tasks?.name || '—'}</Text>
-              <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatTime(r.start_time)}</Text>
-              <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatTime(r.end_time)}</Text>
-              <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
+            <View key={r.id} className={wrapperClass}>
+              <View className={rowStyle}>
+                <Text style={{ flex: 2.5, fontSize: cellFontSize }} className={`${textStyle}`} numberOfLines={1}>{r.tasks?.name || '—'}</Text>
+                <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatTime(r.start_time)}</Text>
+                <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatTime(r.end_time)}</Text>
+                <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
 
-              {/* Action buttons */}
-              <View style={{ flex: 2.5 }} className="flex-row flex-wrap items-center">
-                <TouchableOpacity
-                  style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
-                  className="rounded bg-blue-100"
-                  onPress={() => openTaskDetails(r.task_assignments, r.task_packages, true)}
-                >
-                  <Text style={{ fontSize: buttonFontSize }} className="text-blue-800">
-                    {(r.task_assignments || []).length} Packer{(r.task_assignments || []).length !== 1 ? 's' : ''} • {(r.task_packages || []).length} Box{(r.task_packages || []).length !== 1 ? 'es' : ''}
-                  </Text>
-                </TouchableOpacity>
-                {/* Finished status instead of Resume */}
-                <View
-                  style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginBottom: 2 }}
-                  className="rounded bg-green-50"
-                >
-                  <Text style={{ fontSize: buttonFontSize }} className="text-green-600 font-semibold">Finished</Text>
+                {/* Action buttons */}
+                <View style={{ flex: 2.5 }} className="flex-row flex-wrap items-center">
+                  <TouchableOpacity
+                    style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
+                    className="rounded bg-blue-100"
+                    onPress={() => openTaskDetails(r.task_assignments, r.task_packages, true)}
+                  >
+                    <Text style={{ fontSize: buttonFontSize }} className="text-blue-800">
+                      {(r.task_assignments || []).length} Packer{(r.task_assignments || []).length !== 1 ? 's' : ''} • {(r.task_packages || []).length} Box{(r.task_packages || []).length !== 1 ? 'es' : ''}
+                    </Text>
+                  </TouchableOpacity>
+                  {/* Finished status instead of Resume */}
+                  <View
+                    style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginBottom: 2 }}
+                    className="rounded bg-green-50"
+                  >
+                    <Text style={{ fontSize: buttonFontSize }} className="text-green-600 font-semibold">Finished</Text>
+                  </View>
                 </View>
+                {/* Camera icon */}
+                {orderPackageId && (
+                  <TouchableOpacity
+                    style={{ flex: 0.5 }}
+                    className="items-center justify-center"
+                    onPress={() => handleCameraPress(r)}
+                    activeOpacity={0.7}
+                  >
+                    <View className="w-10 h-10 rounded-md border border-blue-300 bg-blue-50 items-center justify-center">
+                      <Camera size={20} color="#2563eb" />
+                    </View>
+                  </TouchableOpacity>
+                )}
               </View>
-              {/* Camera icon */}
-              {orderPackageId && (
-                <TouchableOpacity
-                  style={{ flex: 0.5 }}
-                  className="items-center justify-center"
-                  onPress={() => handleCameraPress(r)}
-                  activeOpacity={0.7}
-                >
-                  <Camera size={18} color="#2563eb" />
-                </TouchableOpacity>
+
+              {taskMedia.length > 0 && (
+                <View className="px-3 pb-3">
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    <View className="flex-row">
+                      {taskMedia.map((media) => (
+                        <TouchableOpacity
+                          key={media.id}
+                          className="mr-2"
+                          activeOpacity={0.8}
+                          onPress={() => setMediaPreview({ open: true, taskLogId: r.id, media })}
+                        >
+                          <View className="w-16 h-16 rounded-lg border border-gray-300 bg-gray-100 overflow-hidden">
+                            {media.signedUrl ? (
+                              <Image
+                                source={{ uri: media.signedUrl }}
+                                style={{ width: '100%', height: '100%' }}
+                                resizeMode="cover"
+                              />
+                            ) : (
+                              <View className="flex-1 items-center justify-center">
+                                <Text className="text-[10px] text-gray-500">Image</Text>
+                              </View>
+                            )}
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </ScrollView>
+                </View>
               )}
             </View>
           );
@@ -259,66 +423,147 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
         
         // Active: row clickable
         return (
-          <TouchableOpacity key={r.id} className={rowStyle} onPress={() => onRowPress?.(r.id)} activeOpacity={0.7}>
-            <Text style={{ flex: 2.5, fontSize: cellFontSize }} className={`${textStyle}`} numberOfLines={1}>{r.tasks?.name || '—'}</Text>
-            <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatTime(r.start_time)}</Text>
-            <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatTime(r.end_time)}</Text>
-            <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
+          <View key={r.id} className={wrapperClass}>
+            <TouchableOpacity className={rowStyle} onPress={() => onRowPress?.(r.id)} activeOpacity={0.7}>
+              <Text style={{ flex: 2.5, fontSize: cellFontSize }} className={`${textStyle}`} numberOfLines={1}>{r.tasks?.name || '—'}</Text>
+              <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatTime(r.start_time)}</Text>
+              <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatTime(r.end_time)}</Text>
+              <Text style={{ flex: 1, fontSize: cellFontSize }} className={`${textStyle}`}>{formatDuration(r.start_time, r.end_time, r.duration_minutes)}</Text>
 
-            {/* Action buttons */}
-            <View style={{ flex: 2.5 }} className="flex-row flex-wrap">
-              <TouchableOpacity
-                style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
-                className="rounded bg-blue-100"
-                onPress={() => openTaskDetails(r.task_assignments, r.task_packages, false)}
-              >
-                <Text style={{ fontSize: buttonFontSize }} className="text-blue-800">
-                  {(r.task_assignments || []).filter(a => a?.task_status !== 'completed').length} Packer{(r.task_assignments || []).filter(a => a?.task_status !== 'completed').length !== 1 ? 's' : ''} • {(r.task_packages || []).length} Box{(r.task_assignments || []).length !== 1 ? 'es' : ''}
-                </Text>
-              </TouchableOpacity>
-              {readOnly ? (
-                <View
-                  style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginBottom: 2 }}
-                  className="rounded bg-gray-100"
+              {/* Action buttons */}
+              <View style={{ flex: 2.5 }} className="flex-row flex-wrap">
+                <TouchableOpacity
+                  style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
+                  className="rounded bg-blue-100"
+                  onPress={() => openTaskDetails(r.task_assignments, r.task_packages, false)}
                 >
-                  <Text style={{ fontSize: buttonFontSize }} className="text-gray-500">Locked</Text>
-                </View>
-              ) : (
-                <>
-                  <TouchableOpacity
-                    style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
-                    className={`rounded ${isTaskPaused(r) ? 'bg-blue-50 border border-blue-600' : 'bg-amber-50 border border-amber-600'}`}
-                    onPress={() => onPause?.(r.id)}
-                  >
-                    <Text style={{ fontSize: buttonFontSize }} className={isTaskPaused(r) ? 'text-blue-700' : 'text-amber-700'}>{isTaskPaused(r) ? 'Resume' : 'Pause'}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity 
+                  <Text style={{ fontSize: buttonFontSize }} className="text-blue-800">
+                    {(r.task_assignments || []).filter(a => a?.task_status !== 'completed').length} Packer{(r.task_assignments || []).filter(a => a?.task_status !== 'completed').length !== 1 ? 's' : ''} • {(r.task_packages || []).length} Box{(r.task_assignments || []).length !== 1 ? 'es' : ''}
+                  </Text>
+                </TouchableOpacity>
+                {readOnly ? (
+                  <View
                     style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginBottom: 2 }}
-                    className="rounded bg-green-50 border border-green-600" 
-                    onPress={() => onFinish?.(r.id)}
+                    className="rounded bg-gray-100"
                   >
-                    <Text style={{ fontSize: buttonFontSize }} className="text-green-700">Finish</Text>
-                  </TouchableOpacity>
-                </>
+                    <Text style={{ fontSize: buttonFontSize }} className="text-gray-500">Locked</Text>
+                  </View>
+                ) : (
+                  <>
+                    <TouchableOpacity
+                      style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginRight: 4, marginBottom: 2 }}
+                      className={`rounded ${isTaskPaused(r) ? 'bg-blue-50 border border-blue-600' : 'bg-amber-50 border border-amber-600'}`}
+                      onPress={() => onPause?.(r.id)}
+                    >
+                      <Text style={{ fontSize: buttonFontSize }} className={isTaskPaused(r) ? 'text-blue-700' : 'text-amber-700'}>{isTaskPaused(r) ? 'Resume' : 'Pause'}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                      style={{ paddingHorizontal: buttonPadding, paddingVertical: buttonPadding / 2, marginBottom: 2 }}
+                      className="rounded bg-green-50 border border-green-600" 
+                      onPress={() => onFinish?.(r.id)}
+                    >
+                      <Text style={{ fontSize: buttonFontSize }} className="text-green-700">Finish</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+              </View>
+              {/* Camera icon */}
+              {orderPackageId && (
+                <TouchableOpacity
+                  style={{ flex: 0.5 }}
+                  className="items-center justify-center"
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    handleCameraPress(r);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View className="w-10 h-10 rounded-md border border-blue-300 bg-blue-50 items-center justify-center">
+                    <Camera size={20} color="#2563eb" />
+                  </View>
+                </TouchableOpacity>
               )}
-            </View>
-            {/* Camera icon */}
-            {orderPackageId && (
-              <TouchableOpacity
-                style={{ flex: 0.5 }}
-                className="items-center justify-center"
-                onPress={(e) => {
-                  e.stopPropagation();
-                  handleCameraPress(r);
-                }}
-                activeOpacity={0.7}
-              >
-                <Camera size={18} color="#2563eb" />
-              </TouchableOpacity>
+            </TouchableOpacity>
+
+            {taskMedia.length > 0 && (
+              <View className="px-3 pb-3 bg-white">
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  <View className="flex-row">
+                    {taskMedia.map((media) => (
+                      <TouchableOpacity
+                        key={media.id}
+                        className="mr-2"
+                        activeOpacity={0.8}
+                        onPress={() => setMediaPreview({ open: true, taskLogId: r.id, media })}
+                      >
+                        <View className="w-16 h-16 rounded-lg border border-gray-300 bg-gray-100 overflow-hidden">
+                          {media.signedUrl ? (
+                            <Image
+                              source={{ uri: media.signedUrl }}
+                              style={{ width: '100%', height: '100%' }}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <View className="flex-1 items-center justify-center">
+                              <Text className="text-[10px] text-gray-500">Image</Text>
+                            </View>
+                          )}
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </ScrollView>
+              </View>
             )}
-          </TouchableOpacity>
+          </View>
         );
       })}
+
+      <Modal
+        visible={mediaPreview.open}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMediaPreview({ open: false, taskLogId: null, media: null })}
+      >
+        <View className="flex-1 bg-black/70 justify-center items-center px-4">
+          <View className="w-full bg-white rounded-xl p-4">
+            <Text className="text-gray-800 font-semibold mb-3 text-lg">Task Image</Text>
+            <View className="w-full rounded-lg overflow-hidden bg-gray-100" style={{ height: 320 }}>
+              {mediaPreview.media?.signedUrl ? (
+                <Image
+                  source={{ uri: mediaPreview.media.signedUrl }}
+                  style={{ width: '100%', height: '100%' }}
+                  resizeMode="contain"
+                />
+              ) : (
+                <View className="flex-1 items-center justify-center">
+                  <Text className="text-gray-500">{mediaPreview.media ? 'Image unavailable' : 'No image selected'}</Text>
+                </View>
+              )}
+            </View>
+
+            <View className="mt-4 flex-row justify-end gap-2">
+              {!readOnly && (
+                <TouchableOpacity
+                  onPress={confirmDeletePreviewMedia}
+                  disabled={deletingMediaId === mediaPreview.media?.id}
+                  className={`px-4 py-2 rounded border ${deletingMediaId === mediaPreview.media?.id ? 'bg-gray-100 border-gray-300' : 'bg-red-50 border-red-600'}`}
+                >
+                  <Text className={deletingMediaId === mediaPreview.media?.id ? 'text-gray-500 font-semibold' : 'text-red-700 font-semibold'}>
+                    {deletingMediaId === mediaPreview.media?.id ? 'Deleting...' : 'Delete'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                onPress={() => setMediaPreview({ open: false, taskLogId: null, media: null })}
+                className="px-4 py-2 rounded border border-blue-600 bg-blue-50"
+              >
+                <Text className="text-blue-700 font-semibold">Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Task Details modal - merged packers and boxes */}
       <Modal visible={taskDetailsModal.open} transparent animationType="fade" onRequestClose={() => setTaskDetailsModal({ open: false, packerNames: [], boxNumbers: []})}>

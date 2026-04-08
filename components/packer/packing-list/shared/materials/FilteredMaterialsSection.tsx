@@ -15,6 +15,8 @@ interface FilteredMaterialsSectionProps {
   quantityLabel?: string;
   materialTypeLabel: string;
   mediaDesignation?: string;
+  hideUseButton?: boolean;
+  hideRemoveButton?: boolean;
   editable?: boolean;
 }
 
@@ -25,6 +27,8 @@ const FilteredMaterialsSection: React.FC<FilteredMaterialsSectionProps> = ({
   quantityLabel = "Quantity",
   materialTypeLabel,
   mediaDesignation,
+  hideUseButton = false,
+  hideRemoveButton = false,
   editable = true,
 }) => {
   const variantSources: VariantSource[] = sources.map((source) =>
@@ -52,6 +56,8 @@ const FilteredMaterialsSection: React.FC<FilteredMaterialsSectionProps> = ({
       variantSources={variantSources as VariantSource[]}
       quantityLabel={quantityLabel}
       mediaDesignation={mediaDesignation}
+      hideUseButton={hideUseButton}
+      hideRemoveButton={hideRemoveButton}
       editable={editable}
       addPendingConfig={addPendingConfig}
     />

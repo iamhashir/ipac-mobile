@@ -13,9 +13,10 @@ interface Comment {
 
 interface CommentsSectionProps {
   orderPackageId: string;
+  editable?: boolean;
 }
 
-export const CommentsSection: React.FC<CommentsSectionProps> = ({ orderPackageId }) => {
+export const CommentsSection: React.FC<CommentsSectionProps> = ({ orderPackageId, editable = true }) => {
   const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState('');
   const [loading, setLoading] = useState(false);
@@ -153,16 +154,17 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({ orderPackageId
           )}
 
           {/* Add Comment Input */}
-          <View className="border-t border-gray-200 pt-3">
-            <Text className="text-sm font-medium text-gray-700 mb-2">
-              Add Comment
-            </Text>
-            <View className="flex-row items-end gap-2">
-              <View className="flex-1">
-                <TextInput
-                  value={newComment}
-                  onChangeText={setNewComment}
-                  placeholder="Type your comment..."
+          {editable && (
+            <View className="border-t border-gray-200 pt-3">
+              <Text className="text-sm font-medium text-gray-700 mb-2">
+                Add Comment
+              </Text>
+              <View className="flex-row items-end gap-2">
+                <View className="flex-1">
+                  <TextInput
+                    value={newComment}
+                    onChangeText={setNewComment}
+                    placeholder="Type your comment..."
                   multiline
                   numberOfLines={3}
                   className="border border-gray-300 rounded-lg px-3 py-2 text-gray-900 text-sm"
@@ -198,10 +200,12 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({ orderPackageId
               </TouchableOpacity>
             </View>
           </View>
+          )}
         </View>
       </CollapsibleCard>
     </View>
   );
 };
+
 
 export default CommentsSection;

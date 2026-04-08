@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
 export interface PackingRow {
   id: string;
   packageNumber: number | null;
+  reference: string | null;
   orderQuantity: number | null;
   equipmentName: string; // aggregated from package_items
   centerOfGravity: boolean | null;
@@ -20,8 +21,6 @@ export interface PackingRow {
   boxTypeIsFinal?: boolean;
   packingTypeName: string;
   packingTypeIsFinal?: boolean;
-  tare: number | null;
-  tareIsFinal?: boolean;
   netWeight: number | null;
   netWeightIsFinal?: boolean;
   grossWeight: number | null;
@@ -45,6 +44,7 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
   const isTiny = width < 600; // phones
   const isSmall = width >= 600 && width < 900; // small tablets/phones landscape
   const isMedium = width >= 900 && width < 1280; // tablets
+  const [referenceSort, setReferenceSort] = useState<'none' | 'asc' | 'desc'>('none');
 
   // Helper to render value with source indicator (matching TwoTierEditableCard style)
   const renderValueWithIndicator = (value: string, isFinal?: boolean) => {
@@ -79,24 +79,24 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
 
   type ColKey =
     | "box"
+    | "reference"
     | "name"
     | "cog"
     | "boxQty"
     | "boxType"
     | "packType"
-    | "tare"
     | "net"
     | "gross";
 
   const allCols: { key: ColKey; label: string; flex: number }[] = [
-    // Desired order: Box #, Box Quantity, Name, Box Type, S.E.I, Center of Gravity, Tare, Net, Gross
+    // Desired order: Box #, Reference, Box Quantity, Name, Box Type, S.E.I, Center of Gravity, Net, Gross
     { key: "box", label: "Box #", flex: 0.9 },
+    { key: "reference", label: "Reference", flex: 1.2 },
     { key: "boxQty", label: "Box Quantity", flex: 1.2 },
     { key: "name", label: "Name of Equipment", flex: 2.2 },
     { key: "boxType", label: "Box Type", flex: 1.6 },
     { key: "packType", label: "S.E.I", flex: 1.6 },
     { key: "cog", label: "Center of Gravity", flex: 1.2 },
-    { key: "tare", label: "Tare", flex: 1.1 },
     { key: "net", label: "Net Weight", flex: 1.2 },
     { key: "gross", label: "Gross Weight", flex: 1.2 },
   ];
@@ -112,7 +112,57 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
 
   const yesNo = (v: boolean | null) =>
     v === null || v === undefined ? "—" : v ? "Yes" : "No";
-  const fmt = (v: number | null) => (v === 0 || v ? String(v) : "—");
+  const fmt = (v: number | null) => {
+    if (v === null || v === undefined) return "—";
+    const rounded = Math.round(v * 100) / 100;
+    return Number.isInteger(rounded)
+      ? String(rounded)
+      : rounded.toFixed(2).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
+  };
+
+  const sortedRows = useMemo(() => {
+    if (referenceSort === 'none') return rows;
+
+    const normalizeReference = (value: string | null | undefined) =>
+      String(value ?? '').trim().toLowerCase();
+
+    return [...rows].sort((first, second) => {
+      const firstRef = normalizeReference(first.reference);
+      const secondRef = normalizeReference(second.reference);
+
+      if (!firstRef && !secondRef) {
+        return (first.packageNumber ?? Number.MAX_SAFE_INTEGER) - (second.packageNumber ?? Number.MAX_SAFE_INTEGER);
+      }
+      if (!firstRef) return 1;
+      if (!secondRef) return -1;
+
+      const comparison = firstRef.localeCompare(secondRef, undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      });
+
+      if (comparison === 0) {
+        return (first.packageNumber ?? Number.MAX_SAFE_INTEGER) - (second.packageNumber ?? Number.MAX_SAFE_INTEGER);
+      }
+
+      return referenceSort === 'asc' ? comparison : -comparison;
+    });
+  }, [rows, referenceSort]);
+
+  const toggleReferenceSort = () => {
+    setReferenceSort((previous) => {
+      if (previous === 'none') return 'asc';
+      if (previous === 'asc') return 'desc';
+      return 'none';
+    });
+  };
+
+  const referenceSortLabel =
+    referenceSort === 'asc'
+      ? 'Reference (asc)'
+      : referenceSort === 'desc'
+      ? 'Reference (desc)'
+      : 'Reference (sort)';
 
   // Tiny screens: render card layout (all fields, no horizontal scroll)
   if (isTiny) {
@@ -125,7 +175,7 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
             </Text>
           </View>
         ) : (
-          rows.map((r, idx) => (
+          sortedRows.map((r, idx) => (
             <TouchableOpacity
               key={r.id}
               activeOpacity={onRowPress ? 0.7 : 1}
@@ -173,6 +223,11 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
                     isFinal: r.boxQuantityIsFinal,
                   },
                   {
+                    label: "Reference",
+                    value: r.reference || "—",
+                    isFinal: undefined,
+                  },
+                  {
                     label: "Box Type",
                     value: r.boxTypeName || "—",
                     isFinal: undefined,
@@ -182,7 +237,6 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
                     value: r.packingTypeName || "—",
                     isFinal: undefined,
                   },
-                  { label: "Tare", value: fmt(r.tare), isFinal: r.tareIsFinal },
                   {
                     label: "Net Weight",
                     value: fmt(r.netWeight),
@@ -240,12 +294,23 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
                 className="px-3 py-2 border-r border-black"
                 style={{ flex: c.flex }}
               >
-                <Text
-                  className="text-black font-bold text-base text-center"
-                  numberOfLines={2}
-                >
-                  {c.label}
-                </Text>
+                {c.key === 'reference' ? (
+                  <TouchableOpacity onPress={toggleReferenceSort} activeOpacity={0.7}>
+                    <Text
+                      className="text-black font-bold text-base text-center"
+                      numberOfLines={2}
+                    >
+                      {referenceSortLabel}
+                    </Text>
+                  </TouchableOpacity>
+                ) : (
+                  <Text
+                    className="text-black font-bold text-base text-center"
+                    numberOfLines={2}
+                  >
+                    {c.label}
+                  </Text>
+                )}
               </View>
             ))}
           </View>
@@ -258,7 +323,7 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
               </Text>
             </View>
           ) : (
-            rows.map((r, idx) => (
+            sortedRows.map((r, idx) => (
               <TouchableOpacity
                 key={r.id}
                 activeOpacity={onRowPress ? 0.7 : 1}
@@ -281,6 +346,10 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
                     case "box":
                       value = r.packageNumber ?? ("—" as any);
                       break;
+                    case "reference":
+                      value = r.reference || "—";
+                      isFinal = undefined;
+                      break;
                     case "name":
                       value = r.equipmentName || "—";
                       break;
@@ -299,10 +368,6 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
                     case "packType":
                       value = r.packingTypeName || "—";
                       isFinal = undefined;
-                      break;
-                    case "tare":
-                      value = fmt(r.tare);
-                      isFinal = r.tareIsFinal;
                       break;
                     case "net":
                       value = fmt(r.netWeight);

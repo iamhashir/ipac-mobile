@@ -7,7 +7,6 @@ import {
   TextInput,
   ScrollView,
   Alert,
-  Image,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { db } from "../../../../../utils/api/supabase";
@@ -42,6 +41,21 @@ const OrderPackageServicesSection: React.FC<OrderPackageServicesSectionProps> = 
   title = "Services",
   editable = true,
 }) => {
+  const toTwoDecimalNumber = (value: string) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return null;
+    return Math.round(parsed * 100) / 100;
+  };
+
+  const formatTwoDecimals = (value: unknown) => {
+    const cast = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(cast)) return '—';
+    const rounded = Math.round(cast * 100) / 100;
+    return Number.isInteger(rounded)
+      ? String(rounded)
+      : rounded.toFixed(2).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
+  };
+
   const [services, setServices] = useState<Service[]>([]);
   const [addedServices, setAddedServices] = useState<OrderPackageService[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
@@ -52,6 +66,7 @@ const OrderPackageServicesSection: React.FC<OrderPackageServicesSectionProps> = 
   const [humidity, setHumidity] = useState("");
   const [temperature, setTemperature] = useState("");
   const [oxygen, setOxygen] = useState("");
+  const [leak, setLeak] = useState("");
   const [photos, setPhotos] = useState<{ [key: string]: string }>({});
 
   useEffect(() => {
@@ -93,6 +108,10 @@ const OrderPackageServicesSection: React.FC<OrderPackageServicesSectionProps> = 
         Alert.alert("Missing Fields", "Please enter both humidity and temperature.");
         return;
       }
+      if (toTwoDecimalNumber(humidity) === null || toTwoDecimalNumber(temperature) === null) {
+        Alert.alert("Invalid Values", "Humidity and temperature must be valid numbers.");
+        return;
+      }
       if (!photos["humidity"] || !photos["temperature"]) {
         Alert.alert("Missing Photos", "Please take photos for both humidity and temperature.");
         return;
@@ -102,8 +121,25 @@ const OrderPackageServicesSection: React.FC<OrderPackageServicesSectionProps> = 
         Alert.alert("Missing Fields", "Please enter oxygen level.");
         return;
       }
+      if (toTwoDecimalNumber(oxygen) === null) {
+        Alert.alert("Invalid Value", "Oxygen level must be a valid number.");
+        return;
+      }
       if (!photos["oxygen"]) {
         Alert.alert("Missing Photo", "Please take a photo for the oxygen level.");
+        return;
+      }
+    } else if (selectedService.ui_code === "leak") {
+      if (!leak) {
+        Alert.alert("Missing Fields", "Please enter leak reading.");
+        return;
+      }
+      if (toTwoDecimalNumber(leak) === null) {
+        Alert.alert("Invalid Value", "Leak reading must be a valid number.");
+        return;
+      }
+      if (!photos["leak"]) {
+        Alert.alert("Missing Photo", "Please take a photo for the leak reading.");
         return;
       }
     }
@@ -120,19 +156,27 @@ const OrderPackageServicesSection: React.FC<OrderPackageServicesSectionProps> = 
           `${selectedService.service} - ${key}` // notes
         );
         if (uploadError) throw uploadError;
-        if (path) uploadedPhotos[key] = path;
+        if (path && path.path) uploadedPhotos[key] = path.path;
       }
 
       // Construct result JSON
       let result: any = {};
       if (selectedService.ui_code === "hum/temp") {
+        const humidityValue = toTwoDecimalNumber(humidity);
+        const temperatureValue = toTwoDecimalNumber(temperature);
         result = {
-          humidity: { value: humidity, photo: uploadedPhotos["humidity"] },
-          temperature: { value: temperature, photo: uploadedPhotos["temperature"] },
+          humidity: { value: humidityValue ?? humidity, photo: uploadedPhotos["humidity"] },
+          temperature: { value: temperatureValue ?? temperature, photo: uploadedPhotos["temperature"] },
         };
       } else if (selectedService.ui_code === "oxygen") {
+        const oxygenValue = toTwoDecimalNumber(oxygen);
         result = {
-          oxygen: { value: oxygen, photo: uploadedPhotos["oxygen"] },
+          oxygen: { value: oxygenValue ?? oxygen, photo: uploadedPhotos["oxygen"] },
+        };
+      } else if (selectedService.ui_code === "leak") {
+        const leakValue = toTwoDecimalNumber(leak);
+        result = {
+          leak: { value: leakValue ?? leak, photo: uploadedPhotos["leak"] },
         };
       }
 
@@ -193,6 +237,7 @@ const OrderPackageServicesSection: React.FC<OrderPackageServicesSectionProps> = 
     setHumidity("");
     setTemperature("");
     setOxygen("");
+    setLeak("");
     setPhotos({});
   };
 
@@ -262,6 +307,27 @@ const OrderPackageServicesSection: React.FC<OrderPackageServicesSectionProps> = 
           </View>
         </View>
       );
+    } else if (selectedService.ui_code === "leak") {
+      return (
+        <View>
+          <Text className="text-gray-700 font-medium mb-1">Leak Reading</Text>
+          <View className="flex-row items-center space-x-2">
+            <TextInput
+              className="flex-1 border border-gray-300 rounded-lg p-3 bg-white"
+              placeholder="Enter leak reading"
+              keyboardType="numeric"
+              value={leak}
+              onChangeText={setLeak}
+            />
+            <TouchableOpacity
+              onPress={() => pickImage("leak")}
+              className={`p-3 rounded-lg ${photos["leak"] ? "bg-green-100 border-green-500" : "bg-gray-100 border-gray-300"} border`}
+            >
+              <Camera size={24} color={photos["leak"] ? "green" : "gray"} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      );
     }
     return null;
   };
@@ -297,12 +363,17 @@ const OrderPackageServicesSection: React.FC<OrderPackageServicesSectionProps> = 
                 <View className="mt-1">
                   {item.service.ui_code === "hum/temp" && (
                     <Text className="text-gray-600 text-sm">
-                      Hum: {item.result.humidity?.value}% | Temp: {item.result.temperature?.value}°C
+                      Hum: {formatTwoDecimals(item.result.humidity?.value)}% | Temp: {formatTwoDecimals(item.result.temperature?.value)}°C
                     </Text>
                   )}
                   {item.service.ui_code === "oxygen" && (
                     <Text className="text-gray-600 text-sm">
-                      Oxygen: {item.result.oxygen?.value}%
+                      Oxygen: {formatTwoDecimals(item.result.oxygen?.value)}%
+                    </Text>
+                  )}
+                  {item.service.ui_code === "leak" && (
+                    <Text className="text-gray-600 text-sm">
+                      Leak: {formatTwoDecimals(item.result.leak?.value)}
                     </Text>
                   )}
                 </View>

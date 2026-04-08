@@ -20,6 +20,11 @@ interface PackageItemInput {
   orderPackageId?: UUID;
   designation: string;
   quantity: number;
+  reference?: string | null;
+  length?: number | null;
+  width?: number | null;
+  height?: number | null;
+  net_weight?: number | null;
 }
 
 interface FinalDimensionInput {
@@ -37,6 +42,18 @@ interface PackageInfoInput {
   finalInfoId?: UUID | null;
   originalInfoId?: UUID | null;
 }
+
+type ProjectType = 'standard' | 'maintenance' | 'survey';
+
+interface CreatePackerProjectInput {
+  projectType: ProjectType;
+  clientId: UUID;
+  createdBy?: UUID | null;
+  orderName?: string | null;
+  description?: string | null;
+}
+
+type MaintenanceTaskCategory = 'survey' | 'unpack' | 'repack';
 
 const unwrapSingleRelation = <T>(relation: T | T[] | null | undefined): T | null => {
   if (Array.isArray(relation)) {
@@ -405,6 +422,7 @@ const baseDb = {
         id,
         order_name,
         description,
+        project_type,
         production_status,
         clients (
           name
@@ -422,6 +440,7 @@ const baseDb = {
         id: order.id,
         order_name: order.order_name,
         description: order.description,
+        project_type: (order as any).project_type || 'standard',
         production_status: order.production_status,
         client_name: client?.name || 'Unknown Client',
         assigned_packers_count: 0 // This could be calculated if needed
@@ -652,6 +671,7 @@ const baseDb = {
         id,
         order_name,
         description,
+        project_type,
         production_status,
         commercial_status,
         clients (
@@ -673,6 +693,7 @@ const baseDb = {
           id: data.id,
           order_name: data.order_name,
           description: data.description,
+          project_type: (data as any).project_type || 'standard',
           production_status: data.production_status || null,
           commercial_status: data.commercial_status || null,
           client_name: client?.name || 'Unknown Client',
@@ -773,6 +794,146 @@ const baseDb = {
     return { data, error };
   },
 
+  getClients: async () => {
+    const { data, error } = await supabase
+      .from('clients')
+      .select('id, name')
+      .order('name');
+
+    if (!error && (data || []).length > 0) {
+      return { data, error: null };
+    }
+
+    const { data: orderClients, error: orderClientsError } = await supabase
+      .from('orders')
+      .select(`
+        client_id,
+        clients (
+          id,
+          name
+        )
+      `)
+      .not('client_id', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(500);
+
+    if (orderClientsError) {
+      return { data: data || null, error: error || orderClientsError };
+    }
+
+    const unique = new Map<string, { id: string; name: string }>();
+    (orderClients || []).forEach((row: any) => {
+      const client = unwrapSingleRelation<{ id?: string; name?: string }>(row.clients);
+      const id = client?.id || row.client_id;
+      const name = client?.name;
+      if (!id || !name || unique.has(id)) return;
+      unique.set(id, { id, name });
+    });
+
+    const fallback = Array.from(unique.values()).sort((a, b) => a.name.localeCompare(b.name));
+    return { data: fallback, error: null };
+  },
+
+  createPackerProject: async ({ projectType, clientId, createdBy = null, orderName, description = null }: CreatePackerProjectInput) => {
+    let actorId = createdBy;
+    if (!actorId) {
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || !authData?.user?.id) {
+        return { data: null, error: authError || new Error('Authenticated user not found') };
+      }
+      actorId = authData.user.id;
+    }
+
+    const today = new Date();
+    const yyyy = String(today.getFullYear());
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const datePrefix = `${yyyy}-${mm}${dd}`;
+
+    const { data: clientRow, error: clientErr } = await supabase
+      .from('clients')
+      .select('id, name')
+      .eq('id', clientId)
+      .single();
+    if (clientErr || !clientRow) return { data: null, error: clientErr || new Error('Client not found') };
+
+    const clientKey = String(clientRow.name || 'CLIENT')
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, '-')
+      .replace(/[^A-Z0-9-]/g, '') || 'CLIENT';
+
+    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0).toISOString();
+    const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999).toISOString();
+
+    const { data: sameDayOrders, error: sameDayErr } = await supabase
+      .from('orders')
+      .select('id')
+      .eq('client_id', clientId)
+      .gte('created_at', startOfDay)
+      .lte('created_at', endOfDay);
+    if (sameDayErr) return { data: null, error: sameDayErr };
+
+    const dailySequence = String((sameDayOrders || []).length + 1).padStart(2, '0');
+    const autoName = `${datePrefix}-V01-${clientKey}-${dailySequence}`;
+    const chosenOrderName = (orderName || '').trim() || autoName;
+
+    const { data: orderRow, error: orderErr } = await supabase
+      .from('orders')
+      .insert({
+        order_name: chosenOrderName,
+        description: description || null,
+        client_id: clientId,
+        created_by: actorId,
+        commercial_status: 'draft',
+        production_status: 'pending',
+        project_type: projectType,
+      })
+      .select('id, order_name, project_type')
+      .single();
+    if (orderErr || !orderRow) return { data: null, error: orderErr || new Error('Failed to create order') };
+
+    const { data: origInfo, error: origErr } = await supabase
+      .from('package_info')
+      .insert({})
+      .select('id')
+      .single();
+    if (origErr || !origInfo) return { data: null, error: origErr || new Error('Failed to create original package info') };
+
+    const { data: finInfo, error: finErr } = await supabase
+      .from('package_info')
+      .insert({})
+      .select('id')
+      .single();
+    if (finErr || !finInfo) return { data: null, error: finErr || new Error('Failed to create final package info') };
+
+    const { data: orderPkg, error: pkgErr } = await supabase
+      .from('order_packages')
+      .insert({
+        order_id: orderRow.id,
+        package_number: 1,
+        description: null,
+        status: 'approved',
+        original_pkg_info: origInfo.id,
+        final_pkg_info: finInfo.id,
+      })
+      .select('id, order_id, package_number')
+      .single();
+    if (pkgErr || !orderPkg) return { data: null, error: pkgErr || new Error('Failed to create order package') };
+
+    return {
+      data: {
+        order_id: orderRow.id,
+        order_name: orderRow.order_name,
+        project_type: (orderRow as any).project_type,
+        order_package_id: orderPkg.id,
+        package_number: orderPkg.package_number,
+        auto_name: autoName,
+      },
+      error: null,
+    };
+  },
+
   getOrderPackageInternalDimensions: async (orderPackageId: string) => {
     type PackageInfoRow = {
       id: string;
@@ -832,6 +993,41 @@ const baseDb = {
       },
       error: null,
     };
+  },
+
+  getOrderPackageById: async (orderPackageId: UUID) => {
+    const { data, error } = await supabase
+      .from('order_packages')
+      .select('id, order_id, package_number, maintenance_package_type, original_pkg_info, final_pkg_info, status')
+      .eq('id', orderPackageId)
+      .single();
+    return { data, error };
+  },
+
+  updateOrderPackageFields: async (orderPackageId: UUID, fields: Record<string, unknown>) => {
+    const { data, error } = await supabase
+      .from('order_packages')
+      .update({ ...fields, updated_at: new Date().toISOString() })
+      .eq('id', orderPackageId)
+      .select('id, maintenance_package_type')
+      .single();
+    return { data, error };
+  },
+
+  getSeiCategories: async () => {
+    const { data, error } = await supabase
+      .from('sei_categories')
+      .select('id, code, name, description')
+      .order('id');
+    return { data, error };
+  },
+
+  getSeiProtections: async () => {
+    const { data, error } = await supabase
+      .from('sei_protection')
+      .select('id, code, name, description')
+      .order('id');
+    return { data, error };
   },
   /**
    * Upload media (image/video) to the 'media' bucket with structured folder path
@@ -995,6 +1191,149 @@ const baseDb = {
     } catch (e: any) {
       return { data: null, error: e };
     }
+  },
+
+  getMaintenanceTaskLogsForPackage: async (orderPackageId: UUID) => {
+    const { data, error } = await supabase
+      .from('maintenance_task_log')
+      .select('id, order_package_id, task_id, sequence_order, start_time, end_time, duration_minutes, task_status, category, created_at, updated_at, tasks(name, description)')
+      .eq('order_package_id', orderPackageId)
+      .order('sequence_order', { ascending: true });
+    return { data, error };
+  },
+
+  updateMaintenanceTaskLog: async (id: UUID, fields: Record<string, unknown>) => {
+    const { data, error } = await supabase
+      .from('maintenance_task_log')
+      .update({ ...fields, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('id, task_status, start_time, end_time, duration_minutes, category, sequence_order')
+      .single();
+    return { data, error };
+  },
+
+  addMaintenanceTaskLogRow: async (
+    orderPackageId: UUID,
+    taskId: UUID,
+    sequenceOrder: number,
+    category: MaintenanceTaskCategory
+  ) => {
+    const { data, error } = await supabase
+      .from('maintenance_task_log')
+      .insert({
+        order_package_id: orderPackageId,
+        task_id: taskId,
+        sequence_order: sequenceOrder,
+        category,
+        task_status: 'pending',
+      })
+      .select('id, sequence_order, category, task_status')
+      .single();
+    return { data, error };
+  },
+
+  getMaintenanceTaskAssignmentsByTaskLogIds: async (taskLogIds: UUID[]) => {
+    if (!taskLogIds || taskLogIds.length === 0) return { data: [], error: null };
+    const { data, error } = await supabase
+      .from('maintenance_task_assignments')
+      .select('id, maintenance_task_log_id, packer_id, profiles(full_name, username)')
+      .in('maintenance_task_log_id', taskLogIds);
+    return { data, error };
+  },
+
+  setMaintenanceTaskAssignments: async (maintenanceTaskLogId: UUID, packerIds: UUID[]) => {
+    const targetIds = Array.from(new Set((packerIds || []).filter(Boolean)));
+
+    const { data: existingRows, error: existingError } = await supabase
+      .from('maintenance_task_assignments')
+      .select('id, packer_id')
+      .eq('maintenance_task_log_id', maintenanceTaskLogId);
+    if (existingError) return { data: null, error: existingError };
+
+    const existingIds = new Set((existingRows || []).map((row: any) => row.packer_id));
+    const toInsert = targetIds.filter((id) => !existingIds.has(id));
+    const toDelete = (existingRows || [])
+      .map((row: any) => row.packer_id)
+      .filter((id: UUID) => !targetIds.includes(id));
+
+    if (toInsert.length > 0) {
+      const { error: insertError } = await supabase
+        .from('maintenance_task_assignments')
+        .insert(
+          toInsert.map((packerId) => ({
+            maintenance_task_log_id: maintenanceTaskLogId,
+            packer_id: packerId,
+          }))
+        );
+      if (insertError) return { data: null, error: insertError };
+    }
+
+    if (toDelete.length > 0) {
+      const { error: deleteError } = await supabase
+        .from('maintenance_task_assignments')
+        .delete()
+        .eq('maintenance_task_log_id', maintenanceTaskLogId)
+        .in('packer_id', toDelete);
+      if (deleteError) return { data: null, error: deleteError };
+    }
+
+    return { data: { maintenanceTaskLogId, assignedPackerIds: targetIds }, error: null };
+  },
+
+  getMediaForMaintenanceTask: async (maintenanceTaskLogId: UUID) => {
+    const { data, error } = await supabase
+      .from('media')
+      .select('*')
+      .eq('maintenance_task_log_id', maintenanceTaskLogId)
+      .order('created_at', { ascending: false });
+
+    if (error) return { data: null, error };
+
+    const mediaWithUrls = await Promise.all(
+      (data || []).map(async (item: any) => {
+        const { data: signedUrlData } = await supabase
+          .storage
+          .from('media')
+          .createSignedUrl(item.image_url, 31536000);
+
+        return {
+          ...item,
+          signedUrl: signedUrlData?.signedUrl || null,
+        };
+      })
+    );
+
+    return { data: mediaWithUrls, error: null };
+  },
+
+  uploadMaintenanceTaskMedia: async (
+    orderPackageId: UUID,
+    maintenanceTaskLogId: UUID,
+    category: MaintenanceTaskCategory,
+    fileUri: string,
+    notes?: string
+  ) => {
+    const designation = category === 'survey'
+      ? 'maint_survey'
+      : category === 'unpack'
+      ? 'maint_unpack'
+      : 'maint_repack';
+
+    const uploaded = await baseDb.uploadMediaToStorage(orderPackageId, fileUri, designation, notes);
+    if (uploaded.error || !uploaded.data?.mediaId) {
+      return uploaded;
+    }
+
+    const { error: linkError } = await supabase
+      .from('media')
+      .update({ maintenance_task_log_id: maintenanceTaskLogId })
+      .eq('id', uploaded.data.mediaId);
+
+    if (linkError) {
+      return { data: null, error: linkError };
+    }
+
+    return uploaded;
   },
 
   /**

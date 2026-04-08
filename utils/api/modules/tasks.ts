@@ -6,6 +6,7 @@ interface StartTaskInput {
   orderPackageIds?: UUID[];
   packerIds?: UUID[];
   notes?: string | null;
+  startTimeIso?: string | null;
 }
 
 export const createTasksApi = (supabase: SupabaseClient) => ({
@@ -44,6 +45,7 @@ export const createTasksApi = (supabase: SupabaseClient) => ({
       .select(`
         id,
         start_time,
+        created_at,
         end_time,
         duration_minutes,
         pause_duration,
@@ -84,10 +86,25 @@ export const createTasksApi = (supabase: SupabaseClient) => ({
 
     const { data, error } = await supabase
       .from('task_logs')
-      .select('id, start_time, end_time, duration_minutes, pause_duration, restart_time, task_id, update_counter, notes, tasks(name), task_assignments(packer_id, task_status, profiles(full_name)), task_packages(order_package_id)')
+      .select('id, start_time, created_at, end_time, duration_minutes, pause_duration, restart_time, task_id, update_counter, notes, tasks(name), task_assignments(packer_id, task_status, profiles(full_name)), task_packages(order_package_id)')
       .in('id', taskLogIds)
       .order('start_time', { ascending: false });
     return { data, error };
+  },
+
+  getTaskMediaCount: async (taskLogId: UUID, orderPackageIds: UUID[] = []) => {
+    let query = supabase
+      .from('media')
+      .select('id', { count: 'exact', head: true })
+      .eq('designation', 'task')
+      .ilike('notes', `%task_log_id:${taskLogId}%`);
+
+    if (orderPackageIds.length > 0) {
+      query = query.in('order_package_id', orderPackageIds);
+    }
+
+    const { count, error } = await query;
+    return { data: count || 0, error };
   },
 
   addTaskPackages: async (taskLogId: UUID, orderPackageIds: UUID[]) => {
@@ -107,7 +124,7 @@ export const createTasksApi = (supabase: SupabaseClient) => ({
   getTaskLogById: async (id: UUID) => {
     const { data, error } = await supabase
       .from('task_logs')
-      .select('id, start_time, end_time, duration_minutes, pause_duration, restart_time, task_id, update_counter, notes, tasks(name)')
+      .select('id, start_time, created_at, end_time, duration_minutes, pause_duration, restart_time, task_id, update_counter, notes, tasks(name)')
       .eq('id', id)
       .single();
     return { data, error };
@@ -287,11 +304,12 @@ export const createTasksApi = (supabase: SupabaseClient) => ({
     return { data, error };
   },
 
-  startTaskForPackages: async ({ taskTypeId, orderPackageIds = [], packerIds = [], notes = null }: StartTaskInput) => {
+  startTaskForPackages: async ({ taskTypeId, orderPackageIds = [], packerIds = [], notes = null, startTimeIso = null }: StartTaskInput) => {
     const nowIso = new Date().toISOString();
+    const resolvedStartTime = startTimeIso && !Number.isNaN(new Date(startTimeIso).getTime()) ? startTimeIso : nowIso;
     const { data: taskLog, error: logErr } = await supabase
       .from('task_logs')
-      .insert({ start_time: nowIso, task_id: taskTypeId, notes, pause_duration: 0, duration_minutes: 0, update_counter: 0 })
+      .insert({ start_time: resolvedStartTime, task_id: taskTypeId, notes, pause_duration: 0, duration_minutes: 0, update_counter: 0 })
       .select()
       .single();
     if (logErr || !taskLog) return { data: null, error: logErr || new Error('Failed to create task log') };
@@ -311,6 +329,44 @@ export const createTasksApi = (supabase: SupabaseClient) => ({
     }
 
     return { data: { task_log_id: logId }, error: null };
+  },
+
+  completeTaskWithComputedEnd: async (taskLogId: UUID, endTimeIso: string, durationMinutes: number) => {
+    const safeDuration = Number.isFinite(durationMinutes) ? Math.max(0, Math.floor(durationMinutes)) : 0;
+
+    const { data: current, error: currentError } = await supabase
+      .from('task_logs')
+      .select('update_counter')
+      .eq('id', taskLogId)
+      .single();
+
+    if (currentError) return { data: null, error: currentError };
+
+    const nextCounter = (current?.update_counter || 0) + 1;
+
+    const { data: logData, error: logError } = await supabase
+      .from('task_logs')
+      .update({
+        end_time: endTimeIso,
+        duration_minutes: safeDuration,
+        update_counter: nextCounter,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', taskLogId)
+      .select('id, end_time, duration_minutes, update_counter')
+      .single();
+
+    if (logError) return { data: null, error: logError };
+
+    const { error: assignmentError } = await supabase
+      .from('task_assignments')
+      .update({ task_status: 'completed' })
+      .eq('task_id', taskLogId)
+      .neq('task_status', 'completed');
+
+    if (assignmentError) return { data: null, error: assignmentError };
+
+    return { data: logData, error: null };
   },
 
   canResumeTask: async (taskLogId: UUID) => {

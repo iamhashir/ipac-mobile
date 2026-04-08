@@ -7,6 +7,7 @@ import {
   TextInput,
   ScrollView,
   Alert,
+  Keyboard,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import CollapsibleCard from "../../common/CollapsibleCard";
@@ -72,6 +73,8 @@ interface OrderPackageMaterialsSectionProps {
   showDimensions?: boolean;
   showComment?: boolean;
   showCameraColumn?: boolean;
+  hideUseButton?: boolean;
+  hideRemoveButton?: boolean;
   additionalFields?: AdditionalFieldConfig[];
   editable?: boolean;
 }
@@ -98,6 +101,18 @@ const normalizeVariant = (raw: any): VariantOption | null => {
   };
 };
 
+const roundToTwo = (value: number) => Math.round(value * 100) / 100;
+
+const formatNumeric = (value: unknown) => {
+  if (value === null || value === undefined || value === "") return "—";
+  const cast = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(cast)) return String(value);
+  const rounded = roundToTwo(cast);
+  return Number.isInteger(rounded)
+    ? String(rounded)
+    : rounded.toFixed(2).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
+};
+
 const OrderPackageMaterialsSection: React.FC<
   OrderPackageMaterialsSectionProps
 > = ({
@@ -116,6 +131,8 @@ const OrderPackageMaterialsSection: React.FC<
   showDimensions = true,
   showComment = true,
   showCameraColumn,
+  hideUseButton = false,
+  hideRemoveButton = false,
   additionalFields = EMPTY_ADDITIONAL_FIELDS,
   editable = true,
 }) => {
@@ -164,6 +181,9 @@ const OrderPackageMaterialsSection: React.FC<
   }, [additionalFields]);
 
   const [formVariant, setFormVariant] = useState<string | null>(null);
+  const [formIsPending, setFormIsPending] = useState(false);
+  const [pendingFormLabel, setPendingFormLabel] = useState('');
+  const [pendingLabelMap, setPendingLabelMap] = useState<Record<string, string>>({});
   const [formQuantity, setFormQuantity] = useState<string>("");
   const [formUnit, setFormUnit] = useState<string | null>(null);
   const [formLength, setFormLength] = useState<string>("");
@@ -191,6 +211,14 @@ const OrderPackageMaterialsSection: React.FC<
   const variantLabelById = (id: string | null | undefined) => {
     if (!id) return "—";
     return variants.find((v) => v.value === id)?.label || "—";
+  };
+
+  const variantLabelForRow = (row: any) => {
+    if (row.material_variant_id) return variantLabelById(row.material_variant_id);
+    if (row.variant_request_id) {
+      return (pendingLabelMap[row.variant_request_id] ?? 'Pending...') + ' 🕒';
+    }
+    return '—';
   };
 
   const fetchVariants = async (): Promise<VariantOption[]> => {
@@ -263,12 +291,32 @@ const OrderPackageMaterialsSection: React.FC<
       });
       setVariantUnitIdMap(vMap);
 
+      // Fetch labels for pending variant rows
+      const pendingRequestIds = (rows || [])
+        .filter((r: any) => !r.material_variant_id && r.variant_request_id)
+        .map((r: any) => r.variant_request_id as string);
+      if (pendingRequestIds.length > 0) {
+        const { data: pendingRows } = await db.query
+          .from('material_variant_requests')
+          .select('id, variant_name')
+          .in('id', pendingRequestIds);
+        const labelMap: Record<string, string> = {};
+        (pendingRows || []).forEach((pr: any) => {
+          labelMap[pr.id] = pr.variant_name || 'Pending...';
+        });
+        setPendingLabelMap(labelMap);
+      } else {
+        setPendingLabelMap({});
+      }
+
       const allowedIds = new Set(
         (variantOptions || []).map((opt) => opt.value)
       );
 
       const filtered = (rows || []).filter((row: any) => {
         if (row.material_type !== materialType) return false;
+        // Always show pending rows (they have no material_variant_id)
+        if (!row.material_variant_id && row.variant_request_id) return true;
         if (!restrictToAllowedVariants) return true;
         if (allowedIds.size === 0) return true;
         return allowedIds.has(row.material_variant_id);
@@ -288,6 +336,8 @@ const OrderPackageMaterialsSection: React.FC<
 
   const resetForm = () => {
     setFormVariant(null);
+    setFormIsPending(false);
+    setPendingFormLabel('');
     setFormQuantity("");
     setFormUnit(null);
     setFormLength("");
@@ -331,19 +381,20 @@ const OrderPackageMaterialsSection: React.FC<
     if (!isEditable) return;
     if (!validate()) return;
 
-    const qtyNum = Number(formQuantity);
+    const qtyNum = roundToTwo(Number(formQuantity));
     const unitIdToUse: string =
       formUnit || (variantUnitIdMap[formVariant as string] as string);
 
     const payload: any = {
       order_package_id: orderPackageId,
-      material_variant_id: formVariant,
+      material_variant_id: formIsPending ? null : formVariant,
+      variant_request_id: formIsPending ? formVariant : null,
       material_type: materialType,
       is_final: true,
       quantity: qtyNum,
       unit_id: unitIdToUse,
-      length: showDimensions ? (formLength ? Number(formLength) : null) : null,
-      width: showDimensions ? (formWidth ? Number(formWidth) : null) : null,
+      length: showDimensions ? (formLength ? roundToTwo(Number(formLength)) : null) : null,
+      width: showDimensions ? (formWidth ? roundToTwo(Number(formWidth)) : null) : null,
       comment: showComment ? formComment || null : null,
       item_used: false,
     };
@@ -354,6 +405,9 @@ const OrderPackageMaterialsSection: React.FC<
         payload[field.key] = null;
       } else if (field.transform) {
         payload[field.key] = field.transform(rawValue);
+      } else if (field.keyboard === 'numeric') {
+        const parsed = Number(rawValue);
+        payload[field.key] = Number.isFinite(parsed) ? roundToTwo(parsed) : rawValue;
       } else {
         payload[field.key] = rawValue;
       }
@@ -361,16 +415,36 @@ const OrderPackageMaterialsSection: React.FC<
 
     try {
       setIsSaving(true);
-      const { error } = await db.addOrderPackageMaterial(payload);
+      const { data, error } = await db.addOrderPackageMaterial(payload);
       if (error) {
         const msg =
           error?.message || error?.details || error?.hint || "Failed to add item";
         Alert.alert("Error", String(msg));
         return;
       }
+
+      if (formIsPending && formVariant && pendingFormLabel) {
+        setPendingLabelMap((prev) => ({ ...prev, [formVariant]: pendingFormLabel }));
+      }
+
+      const allowedIds = new Set((variants || []).map((opt) => opt.value));
+      const shouldIncludeRow = (() => {
+        if (!data) return false;
+        if (data.material_type !== materialType) return false;
+        if (!data.material_variant_id && data.variant_request_id) return true;
+        if (!restrictToAllowedVariants) return true;
+        if (allowedIds.size === 0) return true;
+        return allowedIds.has(data.material_variant_id);
+      })();
+
+      if (data && shouldIncludeRow) {
+        setItems((prev) => [...prev, data]);
+      } else {
+        await load();
+      }
+
       setAddOpen(false);
       resetForm();
-      await load();
     } finally {
       setIsSaving(false);
     }
@@ -382,7 +456,11 @@ const OrderPackageMaterialsSection: React.FC<
       item_used: true,
     });
     if (error) Alert.alert("Error", "Failed to update item used");
-    else await load();
+    else {
+      setItems((prev) =>
+        prev.map((row) => (row.id === id ? { ...row, item_used: true } : row))
+      );
+    }
   };
 
   const removeRow = async (id: string) => {
@@ -395,7 +473,9 @@ const OrderPackageMaterialsSection: React.FC<
         onPress: async () => {
           const { error } = await db.deleteOrderPackageMaterial(id);
           if (error) Alert.alert("Error", "Failed to delete");
-          else await load();
+          else {
+            setItems((prev) => prev.filter((row) => row.id !== id));
+          }
         },
       },
     ]);
@@ -482,7 +562,7 @@ const OrderPackageMaterialsSection: React.FC<
 
   const formatDimensionValue = (value: any) => {
     if (value === null || value === undefined || value === "") return "—";
-    return value;
+    return formatNumeric(value);
   };
 
   const openCommentModal = (row: any) => {
@@ -494,7 +574,8 @@ const OrderPackageMaterialsSection: React.FC<
   const closeCommentModal = () =>
     setCommentPreview({ visible: false, text: "", title: "" });
 
-  const HeaderRow = () => (
+  const HeaderRow = () => {
+    return (
     <View className="flex-row items-center bg-white/70 border border-gray-300 rounded px-2 py-2">
       <View style={{ flex: FLEX.item }}>
         <Text className="text-xs font-semibold text-gray-700">Item</Text>
@@ -540,29 +621,29 @@ const OrderPackageMaterialsSection: React.FC<
         </View>
       )}
     </View>
-  );
+    );
+  };
 
   const DataRow = ({ row }: { row: any }) => {
     const hasComment =
       typeof row.comment === "string" && row.comment.trim().length > 0;
+
     return (
       <View className="flex-row items-center bg-white border border-gray-200 rounded px-2 py-2 mt-1">
         <View style={{ flex: FLEX.item }}>
           <Text className="text-sm text-gray-800" numberOfLines={1}>
-            {variantLabelById(row.material_variant_id)}
+            {variantLabelForRow(row)}
           </Text>
         </View>
         <View style={{ flex: FLEX.quantity }}>
-          <Text className="text-sm text-gray-800">{row.quantity ?? ""}</Text>
+          <Text className="text-sm text-gray-800">{formatNumeric(row.quantity)}</Text>
         </View>
         {additionalColumns.map((col) => (
           <View key={col.key} style={{ flex: col.flex }}>
             {col.render ? (
               col.render(row)
             ) : (
-              <Text className="text-sm text-gray-800">
-                {row[col.key] ?? ""}
-              </Text>
+              <Text className="text-sm text-gray-800">{formatNumeric(row[col.key])}</Text>
             )}
           </View>
         ))}
@@ -613,7 +694,7 @@ const OrderPackageMaterialsSection: React.FC<
         )}
         <View style={{ flex: FLEX.actions, paddingRight: 12 }}>
           <View className="flex-row gap-2 flex-wrap items-center justify-start">
-            {!row.item_used ? (
+            {!hideUseButton && !row.item_used ? (
               <TouchableOpacity
                 disabled={!isEditable}
                 onPress={() => markUsed(row.id)}
@@ -634,34 +715,36 @@ const OrderPackageMaterialsSection: React.FC<
                   </Text>
                 </View>
               </TouchableOpacity>
-            ) : (
+            ) : !hideUseButton && row.item_used ? (
               <View className="px-2 py-1 rounded bg-gray-100 border border-gray-300">
                 <View className="flex-row items-center">
                   <Check size={18} color="#6b7280" />
                   <Text className="text-gray-600 text-xs ml-1">Used</Text>
                 </View>
               </View>
+            ) : null}
+            {!hideRemoveButton && (
+              <TouchableOpacity
+                disabled={!isEditable}
+                onPress={() => removeRow(row.id)}
+                className={`px-2 py-1 rounded border ${
+                  isEditable
+                    ? "bg-red-50 border-red-600"
+                    : "bg-gray-100 border-gray-300"
+                }`}
+              >
+                <View className="flex-row items-center">
+                  <X size={18} color={isEditable ? "#ff0000" : "#9ca3af"} />
+                  <Text
+                    className={`text-xs ml-1 ${
+                      isEditable ? "text-red-800" : "text-gray-400"
+                    }`}
+                  >
+                    Remove
+                  </Text>
+                </View>
+              </TouchableOpacity>
             )}
-            <TouchableOpacity
-              disabled={!isEditable}
-              onPress={() => removeRow(row.id)}
-              className={`px-2 py-1 rounded border ${
-                isEditable
-                  ? "bg-red-50 border-red-600"
-                  : "bg-gray-100 border-gray-300"
-              }`}
-            >
-              <View className="flex-row items-center">
-                <X size={18} color={isEditable ? "#ff0000" : "#9ca3af"} />
-                <Text
-                  className={`text-xs ml-1 ${
-                    isEditable ? "text-red-800" : "text-gray-400"
-                  }`}
-                >
-                  Remove
-                </Text>
-              </View>
-            </TouchableOpacity>
           </View>
         </View>
         {cameraEnabled && (
@@ -709,7 +792,15 @@ const OrderPackageMaterialsSection: React.FC<
                 <Text className="text-xs text-gray-500">Editing locked</Text>
               )}
               <TouchableOpacity
-                onPress={() => isEditable && setAddOpen(true)}
+                onPress={() => {
+                  if (!isEditable) return;
+                  if (addOpen) {
+                    setAddOpen(false);
+                    resetForm();
+                  } else {
+                    setAddOpen(true);
+                  }
+                }}
                 disabled={!isEditable}
                 className={`px-3 py-1.5 rounded border ${
                   isEditable
@@ -722,302 +813,294 @@ const OrderPackageMaterialsSection: React.FC<
                     isEditable ? "text-blue-700" : "text-gray-400"
                   }`}
                 >
-                  {addButtonLabel}
+                  {addOpen ? "Cancel" : addButtonLabel}
                 </Text>
               </TouchableOpacity>
             </View>
           </View>
 
           <HeaderRow />
-          {(items || []).map((row) => (
-            <DataRow key={row.id} row={row} />
-          ))}
+          {isEditable && addOpen && (
+            <View className="flex-row items-center bg-blue-50 border border-blue-300 rounded px-2 py-2 mt-1">
+              <View style={{ flex: FLEX.item }}>
+                <TouchableOpacity
+                  onPress={() => setVariantPickerOpen((v) => !v)}
+                  className="border border-gray-300 rounded p-2 bg-white"
+                >
+                  <View className="flex-row items-center justify-between">
+                    <Text className="text-gray-800" numberOfLines={1}>
+                      {formIsPending ? `${pendingFormLabel} 🕒` : variantLabelById(formVariant)}
+                    </Text>
+                    <ChevronDown size={16} color="#374151" />
+                  </View>
+                </TouchableOpacity>
+                {errors.variant ? (
+                  <Text className="text-red-600 text-xs mt-1">{errors.variant}</Text>
+                ) : null}
+              </View>
+
+              <View style={{ flex: FLEX.quantity }} className="px-1">
+                <TextInput
+                  value={formQuantity}
+                  onChangeText={(t) => {
+                    setFormQuantity(t);
+                    setErrors((e) => ({ ...e, quantity: undefined }));
+                  }}
+                  keyboardType="numeric"
+                  className="border border-gray-300 rounded p-2 bg-white text-sm"
+                  placeholder={quantityPlaceholder}
+                  returnKeyType="done"
+                  blurOnSubmit
+                  onSubmitEditing={() => Keyboard.dismiss()}
+                  autoCorrect={false}
+                />
+                {errors.quantity ? (
+                  <Text className="text-red-600 text-xs mt-1">{errors.quantity}</Text>
+                ) : null}
+              </View>
+
+              {additionalFields.map((field) => {
+                const colFlex = field.column?.flex ?? 10;
+                return (
+                  <View key={field.key} style={{ flex: colFlex }} className="px-1">
+                    <TextInput
+                      value={additionalValues[field.key]}
+                      onChangeText={(t) =>
+                        setAdditionalValues((prev) => ({ ...prev, [field.key]: t }))
+                      }
+                      keyboardType={field.keyboard || 'default'}
+                      className="border border-gray-300 rounded p-2 bg-white text-sm"
+                      placeholder={field.placeholder || field.label}
+                      returnKeyType="done"
+                      blurOnSubmit
+                      onSubmitEditing={() => Keyboard.dismiss()}
+                      autoCorrect={false}
+                    />
+                    {errors[field.key] ? (
+                      <Text className="text-red-600 text-xs mt-1">{errors[field.key]}</Text>
+                    ) : null}
+                  </View>
+                );
+              })}
+
+              <View style={{ flex: FLEX.unit }} className="px-1">
+                <TouchableOpacity
+                  onPress={() => setUnitPickerOpen((v) => !v)}
+                  className="border border-gray-300 rounded p-2 bg-white"
+                >
+                  <View className="flex-row items-center justify-between">
+                    <Text className="text-gray-800" numberOfLines={1}>
+                      {formUnit ? unitsMap[formUnit] || '—' : 'Unit'}
+                    </Text>
+                    <ChevronDown size={16} color="#374151" />
+                  </View>
+                </TouchableOpacity>
+                {errors.unit ? (
+                  <Text className="text-red-600 text-xs mt-1">{errors.unit}</Text>
+                ) : null}
+              </View>
+
+              {showDimensions && (
+                <>
+                  <View style={{ flex: FLEX.length }} className="px-1">
+                    <TextInput
+                      value={formLength}
+                      onChangeText={setFormLength}
+                      keyboardType="numeric"
+                      className="border border-gray-300 rounded p-2 bg-white text-sm"
+                      placeholder="Len"
+                      returnKeyType="done"
+                      blurOnSubmit
+                      onSubmitEditing={() => Keyboard.dismiss()}
+                      autoCorrect={false}
+                    />
+                  </View>
+                  <View style={{ flex: FLEX.width }} className="px-1">
+                    <TextInput
+                      value={formWidth}
+                      onChangeText={setFormWidth}
+                      keyboardType="numeric"
+                      className="border border-gray-300 rounded p-2 bg-white text-sm"
+                      placeholder="Wid"
+                      returnKeyType="done"
+                      blurOnSubmit
+                      onSubmitEditing={() => Keyboard.dismiss()}
+                      autoCorrect={false}
+                    />
+                  </View>
+                </>
+              )}
+
+              {showComment && (
+                <View style={{ flex: FLEX.comment }} className="px-1">
+                  <TextInput
+                    value={formComment}
+                    onChangeText={setFormComment}
+                    className="border border-gray-300 rounded p-2 bg-white text-sm"
+                    placeholder="Comment"
+                    returnKeyType="done"
+                    blurOnSubmit
+                    onSubmitEditing={() => Keyboard.dismiss()}
+                    autoCorrect={false}
+                  />
+                </View>
+              )}
+
+              <View style={{ flex: FLEX.actions, paddingRight: 12 }}>
+                <View className="flex-row gap-2 flex-wrap items-center justify-start">
+                  <TouchableOpacity
+                    onPress={() => {
+                      setAddOpen(false);
+                      resetForm();
+                    }}
+                    className="px-2 py-1 rounded bg-red-50 border border-red-600"
+                  >
+                    <Text className="text-red-800 text-xs">Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={saveNew}
+                    className="px-2 py-1 rounded bg-blue-50 border border-blue-600"
+                    disabled={isSaving}
+                  >
+                    <Text className="text-blue-700 text-xs">
+                      {isSaving ? 'Saving...' : 'Save'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {cameraEnabled && (
+                <View style={{ flex: FLEX.camera }} className="items-center justify-center">
+                  <Text className="text-xs text-gray-500">After save</Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          {(items || []).length === 0 ? (
+            <View className="mt-2 p-3 bg-white border border-gray-200 rounded">
+              <Text className="text-sm text-gray-500">No rows added yet.</Text>
+            </View>
+          ) : (
+            (items || []).map((row) => <DataRow key={row.id} row={row} />)
+          )}
         </View>
       </CollapsibleCard>
 
-      <Modal
-        visible={isEditable && addOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setAddOpen(false)}
-      >
-        <TouchableOpacity
-          activeOpacity={1}
-          className="flex-1 bg-black/40 justify-center items-center"
-          onPress={() => {
-            setAddOpen(false);
-            resetForm();
-          }}
-        >
-          <TouchableOpacity
-            activeOpacity={1}
-            className="w-11/12 bg-white rounded-lg p-4"
-            onPress={(e) => e.stopPropagation()}
-          >
-            <Text className="text-lg font-semibold text-gray-800 mb-3">
-              {resolvedModalTitle}
-            </Text>
-
-            <Text className="text-sm text-gray-700 mb-1">
-              Item<Text className="text-red-600">*</Text>
-            </Text>
-            <TouchableOpacity
-              onPress={() => setVariantPickerOpen((v) => !v)}
-              className="border border-gray-300 rounded p-2 mb-1 bg-white"
-            >
-              <View className="flex-row items-center justify-between">
-                <Text className="text-gray-800">
-                  {variantLabelById(formVariant)}
-                </Text>
-                <ChevronDown size={16} color="#374151" />
-              </View>
-            </TouchableOpacity>
-            {errors.variant ? (
-              <Text className="text-red-600 text-xs mb-2">
-                {errors.variant}
-              </Text>
-            ) : (
-              <View className="mb-1" />
-            )}
-            {variantPickerOpen && (
-              <View className="max-h-60 border border-gray-200 rounded mb-2 bg-white">
-                <View className="p-2 border-b border-gray-200">
-                  <TextInput
-                    value={variantSearchQuery}
-                    onChangeText={setVariantSearchQuery}
-                    placeholder="Type to search items..."
-                    className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
-                    autoFocus
-                  />
-                </View>
-                <ScrollView>
-                  {variants.length === 0 ? (
-                    <View className="px-3 py-4">
-                      <Text className="text-gray-500 text-sm text-center">
-                        No items found.
-                      </Text>
-                    </View>
-                  ) : (
-                    variants
-                      .filter((opt) => {
-                        if (!variantSearchQuery.trim()) return true;
-                        return opt.label
-                          .toLowerCase()
-                          .includes(variantSearchQuery.toLowerCase());
-                      })
-                      .map((opt) => (
-                        <TouchableOpacity
-                          key={opt.value}
-                          onPress={() => {
-                            setFormVariant(opt.value);
-                            setErrors((e) => ({ ...e, variant: undefined }));
-                            const autoUnit = opt.unit_id || null;
-                            setFormUnit(autoUnit);
-                            setErrors((e) => ({ ...e, unit: undefined }));
-                            setVariantPickerOpen(false);
-                            setVariantSearchQuery("");
-                          }}
-                          className="px-3 py-2 border-b border-gray-100"
-                        >
-                          <View className="flex-row justify-between items-center">
-                            <Text className="text-gray-800">{opt.label}</Text>
-                            {opt.unit_id ? (
-                              <View className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
-                                <Text className="text-[10px] text-slate-700">
-                                  {unitsMap[opt.unit_id as string] || "—"}
-                                </Text>
-                              </View>
-                            ) : null}
-                          </View>
-                        </TouchableOpacity>
-                      ))
-                  )}
-                </ScrollView>
-                {addPendingConfig && (
-                  <View className="p-2 border-t border-gray-300">
-                    <TouchableOpacity
-                      onPress={() => {
-                        setVariantPickerOpen(false);
-                        setShowAddMaterialModal(true);
-                      }}
-                      className="bg-blue-50 border border-blue-500 rounded px-3 py-2"
-                    >
-                      <Text className="text-blue-700 text-center font-medium text-sm">
-                        Can't find it? Add new material
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-              </View>
-            )}
-
-            <Text className="text-sm text-gray-700 mb-1">
-              {quantityLabel}
-              <Text className="text-red-600">*</Text>
-            </Text>
-            <TextInput
-              value={formQuantity}
-              onChangeText={(t) => {
-                setFormQuantity(t);
-                setErrors((e) => ({ ...e, quantity: undefined }));
-              }}
-              keyboardType="numeric"
-              className="border border-gray-300 rounded p-2 mb-1 bg-white"
-              placeholder={quantityPlaceholder}
-            />
-            {errors.quantity ? (
-              <Text className="text-red-600 text-xs mb-2">
-                {errors.quantity}
-              </Text>
-            ) : (
-              <View className="mb-1" />
-            )}
-
-            {additionalFields.map((field) => (
-              <View key={field.key}>
-                <Text className="text-sm text-gray-700 mb-1">
-                  {field.label}
-                  {field.required ? <Text className="text-red-600">*</Text> : null}
-                </Text>
+      {isEditable && addOpen && variantPickerOpen && (
+            <View className="max-h-60 border border-gray-200 rounded mt-2 bg-white">
+              <View className="p-2 border-b border-gray-200">
                 <TextInput
-                  value={additionalValues[field.key]}
-                  onChangeText={(t) =>
-                    setAdditionalValues((prev) => ({ ...prev, [field.key]: t }))
-                  }
-                  keyboardType={field.keyboard || "default"}
-                  className="border border-gray-300 rounded p-2 mb-1 bg-white"
-                  placeholder={field.placeholder}
+                  value={variantSearchQuery}
+                  onChangeText={setVariantSearchQuery}
+                  placeholder="Type to search items..."
+                  className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+                  returnKeyType="done"
+                  blurOnSubmit
+                  onSubmitEditing={() => Keyboard.dismiss()}
+                  autoCorrect={false}
                 />
-                {errors[field.key] ? (
-                  <Text className="text-red-600 text-xs mb-2">
-                    {errors[field.key]}
-                  </Text>
+              </View>
+              <ScrollView keyboardShouldPersistTaps="always">
+                {variants.length === 0 ? (
+                  <View className="px-3 py-4">
+                    <Text className="text-gray-500 text-sm text-center">
+                      No items found.
+                    </Text>
+                  </View>
                 ) : (
-                  <View className="mb-1" />
-                )}
-              </View>
-            ))}
-
-            <Text className="text-sm text-gray-700 mb-1">
-              Unit<Text className="text-red-600">*</Text>
-            </Text>
-            <TouchableOpacity
-              onPress={() => setUnitPickerOpen((v) => !v)}
-              className="border border-gray-300 rounded p-2 mb-1 bg-white"
-            >
-              <View className="flex-row items-center justify-between">
-                <Text className="text-gray-800">
-                  {formUnit ? unitsMap[formUnit] || "—" : "Select unit"}
-                </Text>
-                <ChevronDown size={16} color="#374151" />
-              </View>
-            </TouchableOpacity>
-            {formVariant && variantUnitIdMap[formVariant] && (
-              <Text className="text-[10px] text-gray-500 mb-1">
-                Default: {unitsMap[variantUnitIdMap[formVariant] as string] || "—"}
-              </Text>
-            )}
-            {errors.unit ? (
-              <Text className="text-red-600 text-xs mb-2">{errors.unit}</Text>
-            ) : (
-              <View className="mb-1" />
-            )}
-            {unitPickerOpen && (
-              <View className="max-h-60 border border-gray-200 rounded mb-2 bg-white">
-                <View className="p-2 border-b border-gray-200">
-                  <TextInput
-                    value={unitSearchQuery}
-                    onChangeText={setUnitSearchQuery}
-                    placeholder="Type to search units..."
-                    className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
-                    autoFocus
-                  />
-                </View>
-                <ScrollView>
-                  {units
+                  variants
                     .filter((opt) => {
-                      if (!unitSearchQuery.trim()) return true;
+                      if (!variantSearchQuery.trim()) return true;
                       return opt.label
                         .toLowerCase()
-                        .includes(unitSearchQuery.toLowerCase());
+                        .includes(variantSearchQuery.toLowerCase());
                     })
                     .map((opt) => (
                       <TouchableOpacity
                         key={opt.value}
                         onPress={() => {
-                          setFormUnit(opt.value);
+                          setFormVariant(opt.value);
+                          setErrors((e) => ({ ...e, variant: undefined }));
+                          const autoUnit = opt.unit_id || null;
+                          setFormUnit(autoUnit);
                           setErrors((e) => ({ ...e, unit: undefined }));
-                          setUnitPickerOpen(false);
-                          setUnitSearchQuery("");
+                          setVariantPickerOpen(false);
+                          setVariantSearchQuery("");
                         }}
                         className="px-3 py-2 border-b border-gray-100"
                       >
-                        <Text className="text-gray-800">{opt.label}</Text>
+                        <View className="flex-row justify-between items-center">
+                          <Text className="text-gray-800">{opt.label}</Text>
+                          {opt.unit_id ? (
+                            <View className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
+                              <Text className="text-[10px] text-slate-700">
+                                {unitsMap[opt.unit_id as string] || "—"}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
                       </TouchableOpacity>
-                    ))}
-                </ScrollView>
-              </View>
-            )}
-
-            {showDimensions && (
-              <View className="flex-row gap-2">
-                <View className="flex-1">
-                  <Text className="text-sm text-gray-700 mb-1">Length</Text>
-                  <TextInput
-                    value={formLength}
-                    onChangeText={setFormLength}
-                    keyboardType="numeric"
-                    className="border border-gray-300 rounded p-2 mb-2"
-                    placeholder="cm"
-                  />
+                    ))
+                )}
+              </ScrollView>
+              {addPendingConfig && (
+                <View className="p-2 border-t border-gray-300">
+                  <TouchableOpacity
+                    onPress={() => {
+                      setVariantPickerOpen(false);
+                      setShowAddMaterialModal(true);
+                    }}
+                    className="bg-blue-50 border border-blue-500 rounded px-3 py-2"
+                  >
+                    <Text className="text-blue-700 text-center font-medium text-sm">
+                      Can't find it? Add new material
+                    </Text>
+                  </TouchableOpacity>
                 </View>
-                <View className="flex-1">
-                  <Text className="text-sm text-gray-700 mb-1">Width</Text>
-                  <TextInput
-                    value={formWidth}
-                    onChangeText={setFormWidth}
-                    keyboardType="numeric"
-                    className="border border-gray-300 rounded p-2 mb-2"
-                    placeholder="cm"
-                  />
-                </View>
-              </View>
-            )}
-
-            {showComment && (
-              <>
-                <Text className="text-sm text-gray-700 mb-1">Comment</Text>
-                <TextInput
-                  value={formComment}
-                  onChangeText={setFormComment}
-                  className="border border-gray-300 rounded p-2 mb-3"
-                  placeholder="Optional notes"
-                />
-              </>
-            )}
-
-            <View className="flex-row justify-end gap-2">
-              <TouchableOpacity
-                onPress={() => {
-                  setAddOpen(false);
-                  resetForm();
-                }}
-                className="px-3 py-2 rounded bg-red-50 border border-red-600"
-              >
-                <Text className="text-red-800">Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={saveNew}
-                className="px-3 py-2 rounded bg-blue-50 border border-blue-600"
-              >
-                <Text className="text-blue-700">
-                  {isSaving ? "Saving..." : "Save"}
-                </Text>
-              </TouchableOpacity>
+              )}
             </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
+      )}
+
+      {isEditable && addOpen && unitPickerOpen && (
+            <View className="max-h-60 border border-gray-200 rounded mt-2 bg-white">
+              <View className="p-2 border-b border-gray-200">
+                <TextInput
+                  value={unitSearchQuery}
+                  onChangeText={setUnitSearchQuery}
+                  placeholder="Type to search units..."
+                  className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+                  returnKeyType="done"
+                  blurOnSubmit
+                  onSubmitEditing={() => Keyboard.dismiss()}
+                  autoCorrect={false}
+                />
+              </View>
+              <ScrollView keyboardShouldPersistTaps="always">
+                {units
+                  .filter((opt) => {
+                    if (!unitSearchQuery.trim()) return true;
+                    return opt.label
+                      .toLowerCase()
+                      .includes(unitSearchQuery.toLowerCase());
+                  })
+                  .map((opt) => (
+                    <TouchableOpacity
+                      key={opt.value}
+                      onPress={() => {
+                        setFormUnit(opt.value);
+                        setErrors((e) => ({ ...e, unit: undefined }));
+                        setUnitPickerOpen(false);
+                        setUnitSearchQuery("");
+                      }}
+                      className="px-3 py-2 border-b border-gray-100"
+                    >
+                      <Text className="text-gray-800">{opt.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+              </ScrollView>
+            </View>
+      )}
 
       <Modal
         visible={commentPreview.visible}
@@ -1057,14 +1140,16 @@ const OrderPackageMaterialsSection: React.FC<
         <AddPendingMaterialModal
           visible={showAddMaterialModal}
           onClose={() => setShowAddMaterialModal(false)}
-          onSuccess={async (variantId) => {
-            const result = await load();
-            setFormVariant(variantId);
-            const defaultUnit = result?.variantUnitMap?.[variantId];
-            if (defaultUnit) {
-              setFormUnit(defaultUnit);
+          onSuccess={async (payload) => {
+            await load();
+            setFormVariant(payload.id);
+            setFormIsPending(true);
+            setPendingFormLabel(payload.label);
+            if (payload.unitId) {
+              setFormUnit(payload.unitId);
               setErrors((errs) => ({ ...errs, unit: undefined }));
             }
+            setErrors((errs) => ({ ...errs, variant: undefined }));
             setShowAddMaterialModal(false);
             setAddOpen(true);
           }}

@@ -22,11 +22,16 @@ interface PackageItemInput {
   orderPackageId?: UUID;
   designation: string;
   quantity: number;
+  reference?: string | null;
+  length?: number | null;
+  width?: number | null;
+  height?: number | null;
+  net_weight?: number | null;
 }
 
 interface OrderPackageMaterialInput {
   order_package_id: UUID;
-  material_variant_id: UUID;
+  material_variant_id: UUID | null;
   material_type: string;
   is_final?: boolean;
   quantity?: number | string | null;
@@ -38,12 +43,55 @@ interface OrderPackageMaterialInput {
   item_used?: boolean;
   original?: UUID | null;
   quantity_used?: number | null;
+  variant_request_id?: UUID | null;
 }
+
+const roundToTwoDecimals = (value: number) => Math.round(value * 100) / 100;
+
+const toNullableNumber = (value?: number | string | null) => {
+  if (typeof value === 'number' && Number.isFinite(value)) return roundToTwoDecimals(value);
+  if (value === null || value === undefined || value === '') return null;
+  const cast = Number(value);
+  return Number.isFinite(cast) ? roundToTwoDecimals(cast) : null;
+};
+
+const roundNumericFields = (fields: Record<string, unknown>) => {
+  const numericFieldNames = new Set([
+    'quantity',
+    'tare',
+    'net_weight',
+    'gross_weight',
+    'internal_length',
+    'internal_width',
+    'internal_height',
+    'external_length',
+    'external_width',
+    'external_height',
+  ]);
+
+  const rounded: Record<string, unknown> = { ...fields };
+  Object.entries(rounded).forEach(([key, value]) => {
+    if (!numericFieldNames.has(key)) return;
+    if (value === null || value === undefined || value === '') {
+      rounded[key] = null;
+      return;
+    }
+    const cast = Number(value);
+    rounded[key] = Number.isFinite(cast) ? roundToTwoDecimals(cast) : value;
+  });
+
+  return rounded;
+};
 
 const normalizePackageItemInput = (input: PackageItemInput) => ({
   order_package_id: input.order_package_id ?? input.orderPackageId ?? null,
   designation: input.designation,
   quantity: input.quantity,
+  reference: input.reference?.trim() || null,
+  length: toNullableNumber(input.length),
+  width: toNullableNumber(input.width),
+  height: toNullableNumber(input.height),
+  net_weight: toNullableNumber(input.net_weight),
 });
 
 const MATERIAL_TYPES = ['Accessories', 'Securing', 'Gas Packing', 'Vacuum Packing'];
@@ -97,7 +145,7 @@ export const createPackingApi = (supabase: SupabaseClient) => ({
     if (!ids || ids.length === 0) return { data: [], error: null };
     const { data, error } = await supabase
       .from('package_info')
-      .select('id, center_of_gravity, quantity, box_type_id, packing_type_id, tare, net_weight, gross_weight, internal_length, internal_width, internal_height, external_length, external_width, external_height')
+      .select('id, center_of_gravity, quantity, box_type_id, packing_type_id, sei_category, sei_protection, tare, net_weight, gross_weight, internal_length, internal_width, internal_height, external_length, external_width, external_height')
       .in('id', ids);
     return { data, error };
   },
@@ -109,8 +157,16 @@ export const createPackingApi = (supabase: SupabaseClient) => ({
 
     const targetInfoId = finalInfoId ?? originalInfoId;
     const payload = scope === 'internal'
-      ? { internal_length: length, internal_width: width, internal_height: height }
-      : { external_length: length, external_width: width, external_height: height };
+      ? {
+          internal_length: toNullableNumber(length),
+          internal_width: toNullableNumber(width),
+          internal_height: toNullableNumber(height),
+        }
+      : {
+          external_length: toNullableNumber(length),
+          external_width: toNullableNumber(width),
+          external_height: toNullableNumber(height),
+        };
 
     const { data, error } = await supabase
       .from('package_info')
@@ -288,7 +344,7 @@ export const createPackingApi = (supabase: SupabaseClient) => ({
   getOrderPackageMaterials: async (orderPackageId: UUID) => {
     const { data, error } = await supabase
       .from('order_package_materials')
-      .select('id, order_package_id, material_variant_id, material_type, quantity, quantity_used, unit_id, length, width, comment, item_used')
+      .select('id, order_package_id, material_variant_id, variant_request_id, material_type, quantity, quantity_used, unit_id, length, width, height, comment, item_used')
       .eq('order_package_id', orderPackageId)
       .order('created_at', { ascending: true });
     return { data, error };
@@ -302,15 +358,15 @@ export const createPackingApi = (supabase: SupabaseClient) => ({
     })();
 
     const asNumber = (value?: number | string | null) => {
-      if (typeof value === 'number' && Number.isFinite(value)) return value;
+      if (typeof value === 'number' && Number.isFinite(value)) return roundToTwoDecimals(value);
       if (value === null || value === undefined || value === '') return null;
       const cast = Number(value);
-      return Number.isFinite(cast) ? cast : null;
+      return Number.isFinite(cast) ? roundToTwoDecimals(cast) : null;
     };
 
     const row = {
       order_package_id: payload.order_package_id,
-      material_variant_id: payload.material_variant_id,
+      material_variant_id: payload.material_variant_id ?? null,
       material_type: canonType,
       is_final: payload.is_final ?? false,
       quantity: asNumber(payload.quantity) ?? 0,
@@ -322,12 +378,13 @@ export const createPackingApi = (supabase: SupabaseClient) => ({
       item_used: payload.item_used ?? false,
       original: payload.original ?? null,
       quantity_used: asNumber(payload.quantity_used),
+      variant_request_id: payload.variant_request_id ?? null,
     };
 
     const { data, error } = await supabase
       .from('order_package_materials')
       .insert(row)
-      .select('id')
+      .select('id, order_package_id, material_variant_id, variant_request_id, material_type, quantity, quantity_used, unit_id, length, width, height, comment, item_used')
       .single();
     return { data, error };
   },
@@ -382,16 +439,22 @@ export const createPackingApi = (supabase: SupabaseClient) => ({
         order_package_id: normalized.order_package_id,
         designation: normalized.designation,
         quantity: normalized.quantity,
+        reference: normalized.reference,
+        length: normalized.length,
+        width: normalized.width,
+        height: normalized.height,
+        net_weight: normalized.net_weight,
       })
-      .select('id')
+      .select('id, order_package_id, designation, quantity, reference, length, width, height, net_weight')
       .single();
     return { data, error };
   },
 
   updatePackageInfo: async (id: UUID, fields: Record<string, unknown>) => {
+    const normalized = roundNumericFields(fields);
     const { error } = await supabase
       .from('package_info')
-      .update({ ...fields })
+      .update({ ...normalized })
       .eq('id', id);
     return { data: { id }, error };
   },
@@ -875,7 +938,7 @@ export const createPackingApi = (supabase: SupabaseClient) => ({
     if (!orderPackageIds || orderPackageIds.length === 0) return { data: [], error: null };
     const { data, error } = await supabase
       .from('package_items')
-      .select('order_package_id, designation, quantity')
+      .select('id, order_package_id, designation, quantity, reference, length, width, height, net_weight')
       .in('order_package_id', orderPackageIds);
     return { data, error };
   },

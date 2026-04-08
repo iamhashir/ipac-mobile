@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, Platform, Alert } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { Camera } from 'lucide-react-native';
+import { Camera, ChevronDown, ChevronRight } from 'lucide-react-native';
 import GroupBox from '../common/GroupBox';
 import TwoTierEditableCard from '../common/TwoTierEditableCard';
 import OrderPackageMaterialsSection, { VariantSource } from '../shared/materials/OrderPackageMaterialsSection';
@@ -22,6 +22,9 @@ interface InternalDimensionsProp {
 interface ManufacturingSectionProps {
   orderPackageId: string;
   internalDimensions?: InternalDimensionsProp | null;
+  hideUseButton?: boolean;
+  hideRemoveButton?: boolean;
+  requireOriginalBeforeFinal?: boolean;
 }
 
  type Side = 'big_sides' | 'small_sides' | 'lid' | 'base';
@@ -59,9 +62,16 @@ const dimensionExceedsThreshold = (dims: DimensionTriple | null | undefined) => 
  
  const smallWidth = 160;
  const typeWideWidth = 240;
+
+const hasFieldValue = (value: unknown) => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  return true;
+};
  
- const ManufacturingSection: React.FC<ManufacturingSectionProps & { editTarget?: 'original' | 'final'; editable?: boolean; autoSave?: boolean }> = ({ orderPackageId, editTarget = 'final', editable = true, autoSave = true, internalDimensions }) => {
+ const ManufacturingSection: React.FC<ManufacturingSectionProps & { editTarget?: 'original' | 'final'; editable?: boolean; autoSave?: boolean }> = ({ orderPackageId, editTarget: initialEditTarget = 'final', editable = true, autoSave = true, internalDimensions, hideUseButton = false, hideRemoveButton = false, requireOriginalBeforeFinal = false }) => {
   const { size } = useTextSize();
+  const [isOpen, setIsOpen] = useState(true);
   const [fetchedDimensions, setFetchedDimensions] = useState<InternalDimensionsProp | null>(internalDimensions ?? null);
   const effectiveDimensions = internalDimensions ?? fetchedDimensions;
   const dimensionBasis = effectiveDimensions?.final ?? effectiveDimensions?.original ?? null;
@@ -263,9 +273,14 @@ const dimensionExceedsThreshold = (dims: DimensionTriple | null | undefined) => 
   const horizontalTitle = side === 'base' ? 'Beams Length' : 'Horizontal bars';
   const verticalTitle = side === 'base' ? 'Beams Filling' : 'Vertical bars';
 
-    const saveTemplate = async (fields: any) => {
+    const resolveTierForField = (originalValue: unknown): 'original' | 'final' => {
+      if (!requireOriginalBeforeFinal) return initialEditTarget;
+      return hasFieldValue(originalValue) ? 'final' : 'original';
+    };
+
+    const saveTemplate = async (fields: any, targetTier: 'original' | 'final') => {
       if (!editable) return;
-      const isFinal = editTarget === 'final';
+      const isFinal = targetTier === 'final';
 
       if (!autoSave) {
         // Stage pending template fields for this side
@@ -292,9 +307,9 @@ const dimensionExceedsThreshold = (dims: DimensionTriple | null | undefined) => 
       setData(updated || []);
     };
 
-    const saveBeam = async (beamKey: 'horizontal_bar' | 'vertical_bar' | 'skids', fields: any) => {
+    const saveBeam = async (beamKey: 'horizontal_bar' | 'vertical_bar' | 'skids', fields: any, targetTier: 'original' | 'final') => {
       if (!editable) return;
-      const isFinal = editTarget === 'final';
+      const isFinal = targetTier === 'final';
 
       if (!autoSave) {
         // Stage pending beam fields for this side
@@ -323,77 +338,110 @@ const dimensionExceedsThreshold = (dims: DimensionTriple | null | undefined) => 
 
     return (
       <View className="px-4">
-        {/* Top row: Quantity | Type | Thickness */}
-        <View className="flex-row flex-wrap">
-          <TwoTierEditableCard key={`${side}-quantity-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.quantity ?? null} final={tmplFin?.quantity ?? null} type="number" onChange={(v) => saveTemplate({ quantity: v })} width={smallWidth} draftValue={(pending as any)[side]?.template?.quantity} />
-          <TwoTierEditableCard key={`${side}-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.type_id, bodyVariants)} final={variantLabelById(tmplFin?.type_id, bodyVariants)} type="select" selectItems={bodyVariants} onChange={(v) => saveTemplate({ type_id: v })} width={typeWideWidth} finalSelectValue={tmplFin?.type_id || null} defaultSelectValue={tmplOrig?.type_id || null} draftValue={(pending as any)[side]?.template?.type_id} />
-          <TwoTierEditableCard key={`${side}-thickness-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.thickness ?? null} final={tmplFin?.thickness ?? null} type="number" onChange={(v) => saveTemplate({ thickness: v })} width={smallWidth} draftValue={(pending as any)[side]?.template?.thickness} />
-        </View>
+        {(() => {
+          const quantityTier = resolveTierForField(tmplOrig?.quantity ?? null);
+          const typeTier = resolveTierForField(tmplOrig?.type_id ?? null);
+          const thicknessTier = resolveTierForField(tmplOrig?.thickness ?? null);
+          const hbQtyTier = resolveTierForField(tmplOrig?.horizontal_bar?.quantity ?? null);
+          const hbTypeTier = resolveTierForField(tmplOrig?.horizontal_bar?.type ?? null);
+          const hbSpaceTier = resolveTierForField(tmplOrig?.horizontal_bar?.space ?? null);
+          const hbWidthTier = resolveTierForField(tmplOrig?.horizontal_bar?.width ?? null);
+          const hbThicknessTier = resolveTierForField(tmplOrig?.horizontal_bar?.thickness ?? null);
+          const vbQtyTier = resolveTierForField(tmplOrig?.vertical_bar?.quantity ?? null);
+          const vbTypeTier = resolveTierForField(tmplOrig?.vertical_bar?.type ?? null);
+          const vbSpaceTier = resolveTierForField(tmplOrig?.vertical_bar?.space ?? null);
+          const vbWidthTier = resolveTierForField(tmplOrig?.vertical_bar?.width ?? null);
+          const vbThicknessTier = resolveTierForField(tmplOrig?.vertical_bar?.thickness ?? null);
+          const skQtyTier = resolveTierForField(tmplOrig?.skids?.quantity ?? null);
+          const skTypeTier = resolveTierForField(tmplOrig?.skids?.type ?? null);
+          const skThicknessTier = resolveTierForField(tmplOrig?.skids?.thickness ?? null);
 
-  {/* Horizontal/Beams — for base side with large dimensions, use materials section */}
-  {side === 'base' && shouldShowAdditionalWood ? (
-    <View style={{ marginTop: 16 }}>
-      <OrderPackageMaterialsSection
-        orderPackageId={orderPackageId}
-        title={horizontalTitle}
-        materialType="Base"
-        variantSources={[{ type: 'variantTag', value: 'Bar' }]}
-        addButtonLabel="Add beam"
-        quantityLabel="Qty"
-        mediaDesignation="base_beam"
-        editable={editable}
-        showDimensions={true}
-        showComment={true}
-      />
-    </View>
-  ) : (
-    <GroupBox title={horizontalTitle}>
-      <View className="flex-row flex-wrap">
-        <TwoTierEditableCard key={`${side}-hb-qty-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.horizontal_bar?.quantity ?? null} final={tmplFin?.horizontal_bar?.quantity ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { quantity: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.quantity} />
-        <TwoTierEditableCard key={`${side}-hb-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.horizontal_bar?.type, barVariants)} final={variantLabelById(tmplFin?.horizontal_bar?.type, barVariants)} type="select" selectItems={barVariants} onChange={(v) => saveBeam('horizontal_bar', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.horizontal_bar?.type || null} defaultSelectValue={tmplOrig?.horizontal_bar?.type || null} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.type} />
-        <TwoTierEditableCard key={`${side}-hb-space-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Space" original={tmplOrig?.horizontal_bar?.space ?? null} final={tmplFin?.horizontal_bar?.space ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { space: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.space} />
-        <TwoTierEditableCard key={`${side}-hb-width-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Width" original={tmplOrig?.horizontal_bar?.width ?? null} final={tmplFin?.horizontal_bar?.width ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { width: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.width} />
-        <TwoTierEditableCard key={`${side}-hb-thick-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.horizontal_bar?.thickness ?? null} final={tmplFin?.horizontal_bar?.thickness ?? null} type="number" onChange={(v) => saveBeam('horizontal_bar', { thickness: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.thickness} />
-      </View>
-    </GroupBox>
-  )}
+          return (
+            <>
+              {/* Top row: Quantity | Type | Thickness */}
+              <View className="flex-row flex-wrap">
+                <TwoTierEditableCard key={`${side}-quantity`} editTarget={quantityTier} editable={editable} compact label="Quantity" original={tmplOrig?.quantity ?? null} final={tmplFin?.quantity ?? null} type="number" onChange={(v, tier) => saveTemplate({ quantity: v }, tier || quantityTier)} width={smallWidth} draftValue={(pending as any)[side]?.template?.quantity} />
+                <TwoTierEditableCard key={`${side}-type`} editTarget={typeTier} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.type_id, bodyVariants)} final={variantLabelById(tmplFin?.type_id, bodyVariants)} type="select" selectItems={bodyVariants} onChange={(v, tier) => saveTemplate({ type_id: v }, tier || typeTier)} width={typeWideWidth} finalSelectValue={tmplFin?.type_id || null} defaultSelectValue={tmplOrig?.type_id || null} draftValue={(pending as any)[side]?.template?.type_id} />
+                <TwoTierEditableCard key={`${side}-thickness`} editTarget={thicknessTier} editable={editable} compact label="Thickness" original={tmplOrig?.thickness ?? null} final={tmplFin?.thickness ?? null} type="number" onChange={(v, tier) => saveTemplate({ thickness: v }, tier || thicknessTier)} width={smallWidth} draftValue={(pending as any)[side]?.template?.thickness} />
+              </View>
 
-  {/* Vertical/Beams Filling */}
-  <GroupBox title={verticalTitle}>
-          <View className="flex-row flex-wrap">
-            <TwoTierEditableCard key={`${side}-vb-qty-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.vertical_bar?.quantity ?? null} final={tmplFin?.vertical_bar?.quantity ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { quantity: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.vertical_bar?.quantity} />
-            <TwoTierEditableCard key={`${side}-vb-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.vertical_bar?.type, barVariants)} final={variantLabelById(tmplFin?.vertical_bar?.type, barVariants)} type="select" selectItems={barVariants} onChange={(v) => saveBeam('vertical_bar', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.vertical_bar?.type || null} defaultSelectValue={tmplOrig?.vertical_bar?.type || null} draftValue={(pending as any)[side]?.beams?.vertical_bar?.type} />
-            <TwoTierEditableCard key={`${side}-vb-space-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Space" original={tmplOrig?.vertical_bar?.space ?? null} final={tmplFin?.vertical_bar?.space ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { space: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.vertical_bar?.space} />
-            <TwoTierEditableCard key={`${side}-vb-width-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Width" original={tmplOrig?.vertical_bar?.width ?? null} final={tmplFin?.vertical_bar?.width ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { width: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.vertical_bar?.width} />
-            <TwoTierEditableCard key={`${side}-vb-thick-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.vertical_bar?.thickness ?? null} final={tmplFin?.vertical_bar?.thickness ?? null} type="number" onChange={(v) => saveBeam('vertical_bar', { thickness: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.vertical_bar?.thickness} />
-          </View>
-        </GroupBox>
+              {/* Horizontal/Beams — for base side with large dimensions, use materials section */}
+              {side === 'base' && shouldShowAdditionalWood ? (
+                <View style={{ marginTop: 16 }}>
+                  <OrderPackageMaterialsSection
+                    orderPackageId={orderPackageId}
+                    title={horizontalTitle}
+                    materialType="Base"
+                    variantSources={[{ type: 'variantTag', value: 'Bar' }]}
+                    addButtonLabel="Add beam"
+                    quantityLabel="Qty"
+                    mediaDesignation="base_beam"
+                    editable={editable}
+                    showDimensions={true}
+                    showComment={true}
+                    hideUseButton={hideUseButton}
+                    hideRemoveButton={hideRemoveButton}
+                  />
+                </View>
+              ) : (
+                <GroupBox title={horizontalTitle}>
+                  <View className="flex-row flex-wrap">
+                    <TwoTierEditableCard key={`${side}-hb-qty`} editTarget={hbQtyTier} editable={editable} compact label="Quantity" original={tmplOrig?.horizontal_bar?.quantity ?? null} final={tmplFin?.horizontal_bar?.quantity ?? null} type="number" onChange={(v, tier) => saveBeam('horizontal_bar', { quantity: v }, tier || hbQtyTier)} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.quantity} />
+                    <TwoTierEditableCard key={`${side}-hb-type`} editTarget={hbTypeTier} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.horizontal_bar?.type, barVariants)} final={variantLabelById(tmplFin?.horizontal_bar?.type, barVariants)} type="select" selectItems={barVariants} onChange={(v, tier) => saveBeam('horizontal_bar', { type: v }, tier || hbTypeTier)} width={smallWidth} finalSelectValue={tmplFin?.horizontal_bar?.type || null} defaultSelectValue={tmplOrig?.horizontal_bar?.type || null} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.type} />
+                    <TwoTierEditableCard key={`${side}-hb-space`} editTarget={hbSpaceTier} editable={editable} compact label="Space" original={tmplOrig?.horizontal_bar?.space ?? null} final={tmplFin?.horizontal_bar?.space ?? null} type="number" onChange={(v, tier) => saveBeam('horizontal_bar', { space: v }, tier || hbSpaceTier)} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.space} />
+                    <TwoTierEditableCard key={`${side}-hb-width`} editTarget={hbWidthTier} editable={editable} compact label="Width" original={tmplOrig?.horizontal_bar?.width ?? null} final={tmplFin?.horizontal_bar?.width ?? null} type="number" onChange={(v, tier) => saveBeam('horizontal_bar', { width: v }, tier || hbWidthTier)} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.width} />
+                    <TwoTierEditableCard key={`${side}-hb-thick`} editTarget={hbThicknessTier} editable={editable} compact label="Thickness" original={tmplOrig?.horizontal_bar?.thickness ?? null} final={tmplFin?.horizontal_bar?.thickness ?? null} type="number" onChange={(v, tier) => saveBeam('horizontal_bar', { thickness: v }, tier || hbThicknessTier)} width={smallWidth} draftValue={(pending as any)[side]?.beams?.horizontal_bar?.thickness} />
+                  </View>
+                </GroupBox>
+              )}
 
-        {/* Skids for Base only */}
-        {side === 'base' && (
-          <GroupBox title="Skids">
-            <View className="flex-row flex-wrap">
-              <TwoTierEditableCard key={`${side}-sk-qty-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Quantity" original={tmplOrig?.skids?.quantity ?? null} final={tmplFin?.skids?.quantity ?? null} type="number" onChange={(v) => saveBeam('skids', { quantity: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.skids?.quantity} />
-              <TwoTierEditableCard key={`${side}-sk-type-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.skids?.type, woodVariants)} final={variantLabelById(tmplFin?.skids?.type, woodVariants)} type="select" selectItems={woodVariants} onChange={(v) => saveBeam('skids', { type: v })} width={smallWidth} finalSelectValue={tmplFin?.skids?.type || null} defaultSelectValue={tmplOrig?.skids?.type || null} draftValue={(pending as any)[side]?.beams?.skids?.type} />
-              <TwoTierEditableCard key={`${side}-sk-thick-${editTarget}`} editTarget={editTarget} editable={editable} compact label="Thickness" original={tmplOrig?.skids?.thickness ?? null} final={tmplFin?.skids?.thickness ?? null} type="number" onChange={(v) => saveBeam('skids', { thickness: v })} width={smallWidth} draftValue={(pending as any)[side]?.beams?.skids?.thickness} />
-            </View>
-          </GroupBox>
-        )}
+              {/* Vertical/Beams Filling */}
+              <GroupBox title={verticalTitle}>
+                <View className="flex-row flex-wrap">
+                  <TwoTierEditableCard key={`${side}-vb-qty`} editTarget={vbQtyTier} editable={editable} compact label="Quantity" original={tmplOrig?.vertical_bar?.quantity ?? null} final={tmplFin?.vertical_bar?.quantity ?? null} type="number" onChange={(v, tier) => saveBeam('vertical_bar', { quantity: v }, tier || vbQtyTier)} width={smallWidth} draftValue={(pending as any)[side]?.beams?.vertical_bar?.quantity} />
+                  <TwoTierEditableCard key={`${side}-vb-type`} editTarget={vbTypeTier} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.vertical_bar?.type, barVariants)} final={variantLabelById(tmplFin?.vertical_bar?.type, barVariants)} type="select" selectItems={barVariants} onChange={(v, tier) => saveBeam('vertical_bar', { type: v }, tier || vbTypeTier)} width={smallWidth} finalSelectValue={tmplFin?.vertical_bar?.type || null} defaultSelectValue={tmplOrig?.vertical_bar?.type || null} draftValue={(pending as any)[side]?.beams?.vertical_bar?.type} />
+                  <TwoTierEditableCard key={`${side}-vb-space`} editTarget={vbSpaceTier} editable={editable} compact label="Space" original={tmplOrig?.vertical_bar?.space ?? null} final={tmplFin?.vertical_bar?.space ?? null} type="number" onChange={(v, tier) => saveBeam('vertical_bar', { space: v }, tier || vbSpaceTier)} width={smallWidth} draftValue={(pending as any)[side]?.beams?.vertical_bar?.space} />
+                  <TwoTierEditableCard key={`${side}-vb-width`} editTarget={vbWidthTier} editable={editable} compact label="Width" original={tmplOrig?.vertical_bar?.width ?? null} final={tmplFin?.vertical_bar?.width ?? null} type="number" onChange={(v, tier) => saveBeam('vertical_bar', { width: v }, tier || vbWidthTier)} width={smallWidth} draftValue={(pending as any)[side]?.beams?.vertical_bar?.width} />
+                  <TwoTierEditableCard key={`${side}-vb-thick`} editTarget={vbThicknessTier} editable={editable} compact label="Thickness" original={tmplOrig?.vertical_bar?.thickness ?? null} final={tmplFin?.vertical_bar?.thickness ?? null} type="number" onChange={(v, tier) => saveBeam('vertical_bar', { thickness: v }, tier || vbThicknessTier)} width={smallWidth} draftValue={(pending as any)[side]?.beams?.vertical_bar?.thickness} />
+                </View>
+              </GroupBox>
 
-        {shouldShowAdditionalWood && (
-          <View style={{ marginTop: 16 }}>
-            <OrderPackageMaterialsSection
-              orderPackageId={orderPackageId}
-              title={`Additional Wood — ${SIDE_LABELS[side]}`}
-              materialType="Additional Wood"
-              variantSources={ADDITIONAL_WOOD_VARIANT_SOURCES}
-              addButtonLabel="Add wood"
-              quantityLabel="Qty"
-              mediaDesignation="additional_wood"
-              editable={editable}
-            />
-          </View>
-        )}
+              {/* Skids for Base only */}
+              {side === 'base' && (
+                <GroupBox title="Skids">
+                  <View className="flex-row flex-wrap">
+                    <TwoTierEditableCard key={`${side}-sk-qty`} editTarget={skQtyTier} editable={editable} compact label="Quantity" original={tmplOrig?.skids?.quantity ?? null} final={tmplFin?.skids?.quantity ?? null} type="number" onChange={(v, tier) => saveBeam('skids', { quantity: v }, tier || skQtyTier)} width={smallWidth} draftValue={(pending as any)[side]?.beams?.skids?.quantity} />
+                    <TwoTierEditableCard key={`${side}-sk-type`} editTarget={skTypeTier} editable={editable} compact label="Type" original={variantLabelById(tmplOrig?.skids?.type, woodVariants)} final={variantLabelById(tmplFin?.skids?.type, woodVariants)} type="select" selectItems={woodVariants} onChange={(v, tier) => saveBeam('skids', { type: v }, tier || skTypeTier)} width={smallWidth} finalSelectValue={tmplFin?.skids?.type || null} defaultSelectValue={tmplOrig?.skids?.type || null} draftValue={(pending as any)[side]?.beams?.skids?.type} />
+                    <TwoTierEditableCard key={`${side}-sk-thick`} editTarget={skThicknessTier} editable={editable} compact label="Thickness" original={tmplOrig?.skids?.thickness ?? null} final={tmplFin?.skids?.thickness ?? null} type="number" onChange={(v, tier) => saveBeam('skids', { thickness: v }, tier || skThicknessTier)} width={smallWidth} draftValue={(pending as any)[side]?.beams?.skids?.thickness} />
+                  </View>
+                </GroupBox>
+              )}
+
+              {shouldShowAdditionalWood ? (
+                <View style={{ marginTop: 16 }}>
+                  <OrderPackageMaterialsSection
+                    orderPackageId={orderPackageId}
+                    title={`Additional Wood — ${SIDE_LABELS[side]}`}
+                    materialType="Additional Wood"
+                    variantSources={ADDITIONAL_WOOD_VARIANT_SOURCES}
+                    addButtonLabel="Add wood"
+                    quantityLabel="Qty"
+                    mediaDesignation="additional_wood"
+                    editable={editable}
+                    hideUseButton={hideUseButton}
+                    hideRemoveButton={hideRemoveButton}
+                  />
+                </View>
+              ) : (
+                <GroupBox title={`Additional Wood — ${SIDE_LABELS[side]}`}>
+                  <View style={{ paddingVertical: 10 }}>
+                    <Text style={{ color: '#6b7280', fontSize: 12 }}>No additional wood rows for current dimensions.</Text>
+                  </View>
+                </GroupBox>
+              )}
+            </>
+          );
+        })()}
       </View>
     );
   };
@@ -423,7 +471,7 @@ const dimensionExceedsThreshold = (dims: DimensionTriple | null | undefined) => 
           >
             <Camera size={18} color="#ffffff" />
           </TouchableOpacity>
-          {(editTarget === 'original' || !autoSave) && (
+          {!autoSave && (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             {!autoSave && (
               <Text style={{ color: anyPending ? '#b45309' : '#16a34a', fontSize: buttonFontSize - 2 }}>{anyPending ? 'Unsaved changes' : 'All changes saved'}</Text>
@@ -434,7 +482,7 @@ const dimensionExceedsThreshold = (dims: DimensionTriple | null | undefined) => 
                 if (!autoSave) {
                   // Apply all pending changes (for current editTarget tier)
                   const sides: Side[] = ['big_sides','small_sides','lid','base'];
-                  const isFinal = editTarget === 'final';
+                  const isFinal = initialEditTarget === 'final';
                   const failed: Side[] = [];
                   const succeeded: Side[] = [];
 
@@ -514,8 +562,18 @@ const dimensionExceedsThreshold = (dims: DimensionTriple | null | undefined) => 
           </TouchableOpacity>
           </View>
         )}
+          <TouchableOpacity
+            onPress={() => setIsOpen((prev) => !prev)}
+            style={{ padding: 6, borderRadius: 9999, backgroundColor: '#dbeafe', minWidth: 30, alignItems: 'center' }}
+            activeOpacity={0.7}
+          >
+            {isOpen ? <ChevronDown size={18} color="#1e40af" /> : <ChevronRight size={18} color="#1e40af" />}
+          </TouchableOpacity>
         </View>
       </View>
+
+      {isOpen && (
+        <>
       
       {/* Tabs header (no className to avoid css-interop navigation checks) */}
       <View style={{ flexDirection: 'row', alignItems: 'flex-end', columnGap: 24, paddingHorizontal: 16, marginTop: 8, borderBottomWidth: 1, borderBottomColor: '#bfdbfe' }}>
@@ -573,6 +631,8 @@ const dimensionExceedsThreshold = (dims: DimensionTriple | null | undefined) => 
           );
         })}
       </View>
+        </>
+      )}
     </View>
   );
 };

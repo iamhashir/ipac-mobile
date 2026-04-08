@@ -8,12 +8,12 @@ export type VersionEntry = {
 export const versionHistory: VersionEntry[] = [
   {
     tag: 'Beta',
-    versionCode: '0.9.0-beta',
-    releaseDate: '2025-11-18',
+    versionCode: '0.10.0-beta',
+    releaseDate: '2026-03-09',
     highlights: [
-      'New release workflow automatically completes open tasks and attendance when a project is released.',
-      'On-hold projects now appear in the dashboard list with a dedicated highlight color so teams can reclaim them quickly.',
-      'Settings screen consolidates accessibility controls, including the new version badge shown below.',
+      'Pending material requests: packers can now submit new materials on-the-fly from any section — available to use immediately while pending admin catalogue review.',
+      'Pending items display inline in all material sections with a clock indicator until approved.',
+      'Active tab is now larger and bolder for easier navigation on tablets.',
     ],
   },
 ];

@@ -12,8 +12,8 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useAuth } from "../../utils/AuthContext";
 import { usePackerSession } from "../../utils/PackerSessionContext";
 import { useTextSize } from "../../utils/TextSizeContext";
-import { db } from "../../utils/api/supabase";
-import { ArrowLeft } from "lucide-react-native";
+import { db, supabase } from "../../utils/api/supabase";
+import { ArrowLeft, Plus } from "lucide-react-native";
 import { NavigationButtons } from "../../components/NavigationButtons";
 import TabLayout, {
   TabDefinition,
@@ -22,12 +22,14 @@ import PackingListTable, {
   PackingRow,
 } from "../../components/packer/packing-list/section_00_overview/PackingListTable";
 import BoxDetailsTab from "../../components/packer/packing-list/section_01_packing_info/BoxDetailsTab";
+import AddPackageTab from "../../components/packer/packing-list/AddPackageTab";
 import OrderTasksManagement from "../../components/packer/packing-list/section_04_tasks/OrderTasksManagement";
 import ManufacturingSection from "../../components/packer/packing-list/section_05_manufacturing/ManufacturingSection";
 import VacuumPackingSection from "../../components/packer/packing-list/section_08_vacuum/VacuumPackingSection";
 import GasPackingSection from "../../components/packer/packing-list/section_07_gas/GasPackingSection";
 import AccessoriesSection from "../../components/packer/packing-list/section_09_accessories/AccessoriesSection";
 import SecuringSection from "../../components/packer/packing-list/section_06_securing/SecuringSection";
+import CoverSection from "../../components/packer/packing-list/section_10_cover/CoverSection";
 import CommentsSection from "../../components/packer/packing-list/section_03_comments/CommentsSection";
 import CollapsibleCard from "../../components/packer/packing-list/common/CollapsibleCard";
 import { PackageInfoChangeEvent } from "../../components/packer/packing-list/section_01_packing_info/types";
@@ -36,12 +38,15 @@ interface Order {
   id: string;
   order_name: string;
   client_name: string;
+  production_status?: string;
+  project_type?: 'standard' | 'maintenance' | 'survey' | null;
 }
 
 interface OrderPackage {
   id: string;
   order_id: string;
   package_number: number | null;
+  reference: string | null;
   description: string | null;
   status: string;
   quantity: number | null;
@@ -65,6 +70,8 @@ interface PackageInfo {
   external_length: number | null;
   external_width: number | null;
   external_height: number | null;
+  sei_category?: number | null;
+  sei_protection?: number | null;
 }
 
 const createEmptyPackageInfo = (id: string): PackageInfo => ({
@@ -82,6 +89,8 @@ const createEmptyPackageInfo = (id: string): PackageInfo => ({
   external_length: null,
   external_width: null,
   external_height: null,
+  sei_category: null,
+  sei_protection: null,
 });
 
 export default function PackingListPage() {
@@ -210,9 +219,10 @@ export default function PackingListPage() {
     }
   }, [orderId, sessionLoading]);
 
-  const loadData = async () => {
+  // Modify loadData to accept an optional parameter for the initial loading spinner
+  const loadData = async (showLoadingSpinner = true) => {
     try {
-      setLoading(true);
+      if (showLoadingSpinner) setLoading(true);
       if (!orderId) {
         console.warn("No orderId provided to loadData");
         return;
@@ -332,7 +342,7 @@ export default function PackingListPage() {
     } finally {
       // Always set loading to false, regardless of success or failure
       console.log("loadData completed, setting loading to false");
-      setLoading(false);
+      if (showLoadingSpinner) setLoading(false);
     }
   };
 
@@ -421,6 +431,43 @@ export default function PackingListPage() {
     [hydrateBoxType, hydratePackingType]
   );
 
+  const normalizeReferenceValue = (value: string | null | undefined) => {
+    const normalized = String(value ?? "").trim();
+    return normalized.length > 0 ? normalized : null;
+  };
+
+  const handleOrderPackageReferenceChange = useCallback(
+    async (orderPackageId: string, nextReference: string | null) => {
+      const normalizedReference = normalizeReferenceValue(nextReference);
+      let previousReference: string | null = null;
+
+      setOrderPackages((prev) =>
+        prev.map((pkg) => {
+          if (pkg.id !== orderPackageId) return pkg;
+          previousReference = pkg.reference ?? null;
+          return { ...pkg, reference: normalizedReference };
+        })
+      );
+
+      const { error } = await db.updateOrderPackageFields(orderPackageId, {
+        reference: normalizedReference,
+      });
+
+      if (error) {
+        console.error("Error updating package reference:", error);
+        Alert.alert("Error", "Failed to save reference");
+        setOrderPackages((prev) =>
+          prev.map((pkg) =>
+            pkg.id === orderPackageId
+              ? { ...pkg, reference: previousReference }
+              : pkg
+          )
+        );
+      }
+    },
+    []
+  );
+
   const rows: PackingRow[] = useMemo(() => {
     return orderPackages.map((p) => {
       // Get original and final info
@@ -456,7 +503,6 @@ export default function PackingListPage() {
         finalInfo?.packing_type_id,
         originalInfo?.packing_type_id
       );
-      const tare = getValue(finalInfo?.tare, originalInfo?.tare);
       const netWeight = getValue(
         finalInfo?.net_weight,
         originalInfo?.net_weight
@@ -469,6 +515,7 @@ export default function PackingListPage() {
       return {
         id: p.id,
         packageNumber: p.package_number ?? null,
+        reference: p.reference ?? null,
         orderQuantity: p.quantity ?? null,
         equipmentName: equipmentMap[p.id] || "—",
         centerOfGravity: centerOfGravity.value,
@@ -481,8 +528,6 @@ export default function PackingListPage() {
           ? packingTypes[packingTypeId.value] || "—"
           : "—",
         packingTypeIsFinal: packingTypeId.isFinal,
-        tare: tare.value,
-        tareIsFinal: tare.isFinal,
         netWeight: netWeight.value,
         netWeightIsFinal: netWeight.isFinal,
         grossWeight: grossWeight.value,
@@ -501,9 +546,11 @@ export default function PackingListPage() {
   ]);
 
   const tabs: TabDefinition[] = useMemo(() => {
+    const isMaintenanceFlow = (order?.project_type || 'standard') !== 'standard';
+
     const listTab: TabDefinition = {
       key: "list",
-      title: "Packing List",
+      title: isMaintenanceFlow ? "Maintenance List" : "Packing List",
       content: (
         <PackingListTable
           rows={rows}
@@ -600,15 +647,24 @@ export default function PackingListPage() {
               finalBoxTypeId={final?.box_type_id || null}
               originalPackingTypeId={original?.packing_type_id || null}
               finalPackingTypeId={final?.packing_type_id || null}
+              useSeiFlow={isMaintenanceFlow}
+              projectType={order?.project_type || 'standard'}
+              reference={p.reference ?? null}
               status={p.status}
-              onStatusChange={loadData}
+              isOrderCompleted={order?.production_status === 'completed'}
+              onStatusChange={() => loadData(false)}
+              onReferenceChange={(nextReference) =>
+                handleOrderPackageReferenceChange(p.id, nextReference)
+              }
               onDataChange={handlePackageInfoChange}
             />
-			
-            {/* Comments section */}
-            <CommentsSection orderPackageId={p.id} />
 
-            {/* Per-package Task Management (collapsible, white background, rounded, separated by main blue bg) */}
+            {/* Comments section */}
+            <CommentsSection 
+              orderPackageId={p.id} 
+              editable={p.status !== "packed" && order?.production_status !== 'completed'} 
+            />
+
             <View
               className="mx-4 mt-4 mb-4"
               onLayout={(event) => {
@@ -628,109 +684,145 @@ export default function PackingListPage() {
                   orderPackages={[
                     { id: p.id, package_number: p.package_number },
                   ]}
-                  readOnly={p.status === "packed"}
+                  readOnly={p.status === "packed" || order?.production_status === 'completed'}
+                  requirePhotoForFinish={isMaintenanceFlow}
                 />
               </CollapsibleCard>
             </View>
 
-            {/* Manufacturing section */}
-            <View
-              onLayout={(event) => {
-                const { y } = event.nativeEvent.layout;
-                sectionRefs.current["securing"] = y;
-              }}
-            >
-              <ManufacturingSection
+            <>
+              <View
+                onLayout={(event) => {
+                  const { y } = event.nativeEvent.layout;
+                  sectionRefs.current["securing"] = y;
+                }}
+              >
+                <ManufacturingSection
+                  orderPackageId={p.id}
+                  editTarget={isMaintenanceFlow ? "original" : "final"}
+                  requireOriginalBeforeFinal={isMaintenanceFlow}
+                  editable={p.status !== "packed" && order?.production_status !== 'completed'}
+                  internalDimensions={{ original: internalDimsOriginal, final: internalDimsFinal }}
+                />
+              </View>
+
+              <View
+                onLayout={(event) => {
+                  const { y } = event.nativeEvent.layout;
+                  sectionRefs.current["securing-materials"] = y;
+                }}
+              >
+                <SecuringSection
+                  orderPackageId={p.id}
+                  editable={p.status !== "packed" && order?.production_status !== 'completed'}
+                />
+              </View>
+
+              {(() => {
+                const finalId =
+                  (pkgInfoMap[p.final_pkg_info || ""] as any)?.packing_type_id ||
+                  null;
+                const originalId =
+                  (pkgInfoMap[p.original_pkg_info || ""] as any)
+                    ?.packing_type_id || null;
+                const hasGas = finalId
+                  ? packTypeHasGas[finalId]
+                  : originalId
+                  ? packTypeHasGas[originalId]
+                  : false;
+                return hasGas ? (
+                  <View>
+                    <GasPackingSection
+                      orderPackageId={p.id}
+                      editable={p.status !== "packed" && order?.production_status !== 'completed'}
+                    />
+                  </View>
+                ) : null;
+              })()}
+
+              {(() => {
+                const finalId =
+                  (pkgInfoMap[p.final_pkg_info || ""] as any)?.packing_type_id ||
+                  null;
+                const originalId =
+                  (pkgInfoMap[p.original_pkg_info || ""] as any)
+                    ?.packing_type_id || null;
+                const hasVac = finalId
+                  ? packTypeHasVacuum[finalId]
+                  : originalId
+                  ? packTypeHasVacuum[originalId]
+                  : false;
+                return hasVac ? (
+                  <View>
+                    <VacuumPackingSection
+                      orderPackageId={p.id}
+                      editable={p.status !== "packed" && order?.production_status !== 'completed'}
+                    />
+                  </View>
+                ) : null;
+              })()}
+
+              <View
+                onLayout={(event) => {
+                  const { y } = event.nativeEvent.layout;
+                  sectionRefs.current["accessories"] = y;
+                }}
+              >
+                <AccessoriesSection
+                  orderPackageId={p.id}
+                  editable={p.status !== "packed" && order?.production_status !== 'completed'}
+                />
+              </View>
+
+              <CoverSection
                 orderPackageId={p.id}
-                editTarget="final"
-                editable={p.status !== "packed"}
-                internalDimensions={{ original: internalDimsOriginal, final: internalDimsFinal }}
+                editable={p.status !== "packed" && order?.production_status !== 'completed'}
               />
-            </View>
-
-            {/* Securing materials section */}
-            <View
-              onLayout={(event) => {
-                const { y } = event.nativeEvent.layout;
-                sectionRefs.current["securing-materials"] = y;
-              }}
-            >
-              <SecuringSection
-                orderPackageId={p.id}
-                editable={p.status !== "packed"}
-              />
-            </View>
-
-            {/* Gas packing (Final packing type) */}
-            {(() => {
-              const finalId =
-                (pkgInfoMap[p.final_pkg_info || ""] as any)?.packing_type_id ||
-                null;
-              const originalId =
-                (pkgInfoMap[p.original_pkg_info || ""] as any)
-                  ?.packing_type_id || null;
-              const hasGas =
-                (finalId && packTypeHasGas[finalId]) ||
-                (originalId && packTypeHasGas[originalId]);
-              return hasGas ? (
-                <View>
-                  <GasPackingSection
-                    orderPackageId={p.id}
-                    editable={p.status !== "packed"}
-                  />
-                </View>
-              ) : null;
-            })()}
-
-            {/* Vacuum packing (Final packing type) */}
-            {(() => {
-              const finalId =
-                (pkgInfoMap[p.final_pkg_info || ""] as any)?.packing_type_id ||
-                null;
-              const originalId =
-                (pkgInfoMap[p.original_pkg_info || ""] as any)
-                  ?.packing_type_id || null;
-              const hasVac =
-                (finalId && packTypeHasVacuum[finalId]) ||
-                (originalId && packTypeHasVacuum[originalId]);
-              return hasVac ? (
-                <View>
-                  <VacuumPackingSection
-                    orderPackageId={p.id}
-                    editable={p.status !== "packed"}
-                  />
-                </View>
-              ) : null;
-            })()}
-
-            {/* Accessories section */}
-            <View
-              onLayout={(event) => {
-                const { y } = event.nativeEvent.layout;
-                sectionRefs.current["accessories"] = y;
-              }}
-            >
-              <AccessoriesSection
-                orderPackageId={p.id}
-                editable={p.status !== "packed"}
-              />
-            </View>
+            </>
           </View>
         ),
       } as TabDefinition;
     });
 
-    return [listTab, ...boxTabs];
+    const addTab: TabDefinition = {
+      key: "add-package",
+      title: (
+        <View className="flex-row items-center">
+          <Plus size={16} color="#0284c7" />
+          <Text className="text-sky-700 font-semibold ml-1">Add Box</Text>
+        </View>
+      ),
+      content: (
+        <AddPackageTab
+          orderId={orderId}
+          useSeiFlow={isMaintenanceFlow}
+          isMaintenanceFlow={isMaintenanceFlow}
+          nextPackageNumber={
+            orderPackages.length > 0
+              ? Math.max(...orderPackages.map((p) => p.package_number || 0)) + 1
+              : 1
+          }
+          onSaved={(newId) => {
+            loadData(false);
+            handleTabChange(newId);
+          }}
+        />
+      ),
+    };
+
+    return [listTab, ...boxTabs, addTab];
   }, [
     rows,
     orderPackages,
     orderId,
+    order?.project_type,
     pkgInfoMap,
     boxTypes,
     packingTypes,
     boxStartedMap,
     packTypeHasVacuum,
     packTypeHasGas,
+    handleOrderPackageReferenceChange,
     handlePackageInfoChange,
   ]);
 
@@ -739,6 +831,86 @@ export default function PackingListPage() {
     const { error } = await signOut();
     if (error) Alert.alert("Error", "Failed to sign out");
     else router.replace("/auth/login");
+  };
+
+  const handleEndProject = () => {
+    Alert.alert(
+      "Complete Project",
+      "Are you sure you want to end this project? We will check if all boxes are marked as completed, and if so, your team's current attendance session will be ended.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Check & Complete",
+          onPress: performEndProject,
+        },
+      ]
+    );
+  };
+
+  const performEndProject = async () => {
+    try {
+      setLoading(true);
+      if (orderPackages.length === 0) {
+        Alert.alert("Cannot Complete", "There are no boxes in this order.");
+        setLoading(false);
+        return;
+      }
+      
+      const unpackaged = orderPackages.filter(p => p.status !== "packed");
+      if (unpackaged.length > 0) {
+        const boxNums = unpackaged.map(p => p.package_number).join(", ");
+        Alert.alert("Incomplete Boxes", `Please mark all boxes as completed before ending the project.\n\nIncomplete boxes: ${boxNums}`);
+        setLoading(false);
+        return;
+      }
+
+      // Final validation sweep
+      for (const p of orderPackages) {
+        const { data: validation, error: vErr } = await supabase.rpc('validate_box_completion', { op_id: p.id });
+        if (vErr) {
+           Alert.alert("Validation Error", `Could not validate box #${p.package_number}.`);
+           setLoading(false);
+           return;
+        }
+        if (!validation?.valid) {
+          Alert.alert("Incomplete Box", `Box #${p.package_number} has incomplete requirements:\n\n${!validation.materials_valid ? `\u2022 ${validation.materials_message}\n` : ''}${!validation.tasks_valid ? `\u2022 ${validation.tasks_message}\n` : ''}`);
+          setLoading(false);
+          return;
+        }
+      }
+
+      const endIso = new Date().toISOString();
+
+      // 1. Update project status
+      const { error: orderErr } = await supabase
+        .from('orders')
+        .update({ production_status: 'completed', completion_date: endIso })
+        .eq('id', orderId);
+        
+      if (orderErr) throw orderErr;
+
+      // 2. End attendance logs
+      const { error: attErr } = await supabase
+        .from('attendance_logs')
+        .update({ 
+          end_time: endIso, 
+          updated_at: endIso 
+        })
+        .eq('order_id', orderId)
+        .is('end_time', null);
+
+      if (attErr) {
+        console.warn("Failed to auto update attendance:", attErr);
+      }
+
+      Alert.alert("Success", "Project has been marked as fully completed!", [
+        { text: "OK", onPress: () => router.replace("/(packer)/dashboard" as any) }
+      ]);
+
+    } catch (err: any) {
+      Alert.alert("Error", err.message || "An unexpected error occurred.");
+      setLoading(false);
+    }
   };
 
   const headerFontSize =
@@ -856,19 +1028,38 @@ export default function PackingListPage() {
         {/* Order summary */}
         {order && (
           <View className="bg-white rounded-lg border border-gray-200 m-4 p-4">
-            <View className="flex-row justify-between">
-              <Text
-                style={{ fontSize: titleFontSize }}
-                className="text-gray-800 font-semibold"
-              >
-                Project: <Text className="font-bold">{order.order_name}</Text>
-              </Text>
-              <Text
-                style={{ fontSize: textFontSize }}
-                className="text-gray-600"
-              >
-                Client: {order.client_name}
-              </Text>
+            <View className="flex-row justify-between items-start">
+              <View className="flex-1">
+                <Text
+                  style={{ fontSize: titleFontSize }}
+                  className="text-gray-800 font-semibold"
+                >
+                  Project: <Text className="font-bold">{order.order_name}</Text>
+                </Text>
+                <Text
+                  style={{ fontSize: textFontSize }}
+                  className="text-gray-600 mb-1"
+                >
+                  Client: {order.client_name}
+                </Text>
+                <Text
+                  style={{ fontSize: textFontSize }}
+                  className="text-gray-600"
+                >
+                  Status: <Text className="capitalize font-medium text-gray-800">{order.production_status?.replace('_', ' ') || 'Pending'}</Text>
+                </Text>
+              </View>
+              {order.production_status !== 'completed' && (
+                <TouchableOpacity
+                  onPress={handleEndProject}
+                  className="bg-green-600 px-4 py-3 rounded-lg flex-row items-center ml-4"
+                  style={{ minHeight: 48 }}
+                >
+                  <Text style={{ fontSize: buttonFontSize }} className="text-white font-bold">
+                    Complete Project
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
             <Text
               style={{ fontSize: textFontSize }}

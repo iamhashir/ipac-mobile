@@ -6,6 +6,7 @@ import OrderPackingInfo, { BoxInfoDetails } from './order_packing_info';
 import OrderPackingDimensions from './order_packing_dimensions';
 import { DimensionsTriple } from '../common/DimensionsBox';
 import OrderPackingItems from '../section_02_packing_items/order_packing_items';
+import TwoTierEditableCard from '../common/TwoTierEditableCard';
 import { PackageInfoChangeEvent } from './types';
 
 interface BoxInfoPair {
@@ -31,12 +32,37 @@ interface BoxDetailsTabProps {
   finalBoxTypeId?: string | null;
   originalPackingTypeId?: string | null;
   finalPackingTypeId?: string | null;
+  useSeiFlow?: boolean;
+  reference?: string | null;
   status?: string;
+  isOrderCompleted?: boolean;
+  projectType?: 'standard' | 'maintenance' | 'survey' | null;
   onStatusChange?: () => void;
+  onReferenceChange?: (value: string | null) => Promise<void> | void;
   onDataChange?: (change: PackageInfoChangeEvent) => void; // Callback when any data changes
+  hidePackingItems?: boolean;
 }
 
-const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, status, onStatusChange, onDataChange }) => {
+const hasAnyValue = (value: unknown): boolean => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  return true;
+};
+
+const normalizeReferenceValue = (value: unknown): string | null => {
+  const normalized = String(value ?? '').trim();
+  return normalized.length > 0 ? normalized : null;
+};
+
+const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, useSeiFlow = false, reference = null, status, isOrderCompleted, projectType = 'standard', onStatusChange, onReferenceChange, onDataChange, hidePackingItems = false }) => {
+  const isEditable = status !== 'packed' && !isOrderCompleted;
+  const requiresOriginalFirst = projectType === 'maintenance' || projectType === 'survey';
+  const referenceEditTarget: 'original' | 'final' = requiresOriginalFirst
+    ? hasAnyValue(reference)
+      ? 'final'
+      : 'original'
+    : 'final';
+
   const handleMarkComplete = async () => {
     try {
   const { supabase } = await import('../../../../utils/api/supabase');
@@ -142,41 +168,57 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
     <View className="bg-white rounded-b-lg p-4">
       <View className="flex-row items-center justify-between">
         <Text className="text-lg font-semibold text-gray-800">Box #{packageNumber ?? '—'}</Text>
-        <View className="flex-row gap-2">
-          <TouchableOpacity 
-            onPress={askSource} 
-            accessibilityLabel="Attach images"
-            className="bg-primary-500 px-3 py-2 rounded flex items-center justify-center"
-            style={{ minWidth: 44, minHeight: 44 }}
-          >
-            <Camera size={20} color="#ffffff" />
-          </TouchableOpacity>
-          {status === 'packed' ? (
+        {!isOrderCompleted && (
+          <View className="flex-row gap-2">
             <TouchableOpacity 
-              onPress={handleUndo} 
-              className="px-3 py-1 rounded bg-orange-500"
+              onPress={askSource} 
+              accessibilityLabel="Attach images"
+              className="bg-primary-500 px-3 py-2 rounded flex items-center justify-center"
+              style={{ minWidth: 44, minHeight: 44 }}
             >
-              <Text className="text-white text-sm">
-                Undo Completion
-              </Text>
+              <Camera size={20} color="#ffffff" />
             </TouchableOpacity>
-          ) : (
-            <TouchableOpacity 
-              onPress={handleMarkComplete} 
-              className="px-3 py-1 rounded bg-green-600"
-            >
-              <Text className="text-white text-sm">
-                Mark box as completed
-              </Text>
-            </TouchableOpacity>
-          )}
-        </View>
+            {status === 'packed' ? (
+              <TouchableOpacity 
+                onPress={handleUndo} 
+                className="px-3 py-1 rounded border border-orange-700 bg-orange-300 justify-center items-center"
+              >
+                <Text className="text-orange-900 text-md font-semibold">
+                  Undo Completion
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity 
+                onPress={handleMarkComplete} 
+                className="px-3 py-1 rounded border border-lime-600 bg-lime-400 justify-center items-center"
+              >
+                <Text className="text-lime-900 text-md font-semibold">
+                  Box Packed
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
       </View>
       {description ? (
         <Text className="text-gray-600 mt-2">{description}</Text>
       ) : (
         <Text className="text-gray-500 mt-2">No description provided.</Text>
       )}
+
+      <View className="mt-4" style={{ width: 260 }}>
+        <TwoTierEditableCard
+          label="Reference"
+          original={reference}
+          final={reference}
+          type="text"
+          editTarget={referenceEditTarget}
+          editable={isEditable && !!onReferenceChange}
+          onChange={async (value) => {
+            await onReferenceChange?.(normalizeReferenceValue(value));
+          }}
+        />
+      </View>
 
       {/* Packing Info cards */}
       <View className="mt-4">
@@ -190,7 +232,10 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
           finalBoxTypeId={finalBoxTypeId || null}
           originalPackingTypeId={originalPackingTypeId || null}
           finalPackingTypeId={finalPackingTypeId || null}
-          editable={status !== 'packed'}
+          useSeiFlow={useSeiFlow}
+          editTarget="final"
+          requiresOriginalFirst={requiresOriginalFirst}
+          editable={isEditable}
           onChange={(change) => onDataChange?.({ ...change, source: 'info' })}
         />
       </View>
@@ -203,19 +248,23 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
           finalInfoId={finalPkgInfoId || null}
           internal={dimensions?.internal || { original: null, final: null }}
           external={dimensions?.external || { original: null, final: null }}
-          editable={status !== 'packed'}
+          editTarget="final"
+          allowFinalEdit
+          requiresOriginalFirst={requiresOriginalFirst}
+          editable={isEditable}
           onChange={(change) => onDataChange?.({ ...change, source: 'dimensions' })}
         />
       </View>
 
-      {/* Packing Items */}
-      <View className="mt-4">
-        <OrderPackingItems 
-          orderPackageId={orderPackageId} 
-          onAttachPics={onAttachPics} 
-          editable={status !== 'packed'}
-        />
-      </View>
+      {!hidePackingItems && (
+        <View className="mt-4">
+          <OrderPackingItems 
+            orderPackageId={orderPackageId} 
+            onAttachPics={onAttachPics} 
+            editable={isEditable}
+          />
+        </View>
+      )}
     </View>
   );
 };

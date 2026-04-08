@@ -102,7 +102,7 @@ export default function AttendanceScreen() {
   const isPortraitPhone = !isLandscape && width < 480;
   
   // Guard: require team selection session before accessing attendance
-  const { session, loading: sessionLoading, canAccessAttendance, markAttendanceCompleted } = usePackerSession();
+  const { session, loading: sessionLoading, canAccessAttendance, markAttendanceCompleted, isRetrospectiveMode, setRetrospectiveMode, retrospectiveDate, setRetrospectiveDate, getRetrospectiveTimestamp } = usePackerSession();
   useEffect(() => {
     if (!sessionLoading) {
       if (!canAccessAttendance()) {
@@ -142,7 +142,7 @@ export default function AttendanceScreen() {
     if (!orderId || packers.length === 0) return;
 
     const checkAndAutoMarkShifts = async () => {
-      const now = new Date();
+      const now = getEffectiveDate();
       const hour = now.getHours();
 
       if (hour >= 12) {
@@ -160,7 +160,7 @@ export default function AttendanceScreen() {
             if (!packerIdentifier) continue;
 
             try {
-              const today = new Date().toISOString().split('T')[0];
+              const today = getRetrospectiveTimestamp().split('T')[0];
               const endTimeISO = new Date(`${today} 12:00:00`).toISOString();
 
               const { error } = await db.updateAttendanceEndTimeByDetails(
@@ -345,7 +345,7 @@ export default function AttendanceScreen() {
   const loadExistingAttendance = async (packersResponse: OrderPackerSummary[], initialAttendance: AttendanceRecord) => {
     try {
       // Get today's date
-      const today = new Date().toISOString().split('T')[0];
+      const today = getRetrospectiveTimestamp().split('T')[0];
       let anyToolboxCompleted = false;
       
       // Load existing attendance records for each packer
@@ -437,14 +437,18 @@ export default function AttendanceScreen() {
     });
   };
 
+  const getEffectiveDate = () => {
+    return (isRetrospectiveMode && retrospectiveDate) ? new Date(retrospectiveDate) : new Date();
+  };
+
   const checkAfternoonTime = () => {
-    const now = new Date();
+    const now = getEffectiveDate();
     const hour = now.getHours();
     setIsAfternoon(hour >= 12);
   };
 
-  const isMorning = () => {
-    const now = new Date();
+  const isMorningFunc = () => {
+    const now = getEffectiveDate();
     const hour = now.getHours();
     return hour < 12;
   };
@@ -620,7 +624,7 @@ export default function AttendanceScreen() {
 
     try {
       const currentTime = getCurrentTime();
-      const today = new Date().toISOString().split('T')[0];
+      const today = getRetrospectiveTimestamp().split('T')[0];
       const startTimeISO = new Date(`${today} ${currentTime}`).toISOString();
       
       // Log attendance record to database
@@ -732,7 +736,7 @@ export default function AttendanceScreen() {
 
   const bulkToggleTime = async (period: TimePeriod, timeType: 'start' | 'end') => {
     if (timeType === 'end') {
-      const newTime = new Date().toISOString();
+      const newTime = getRetrospectiveTimestamp();
       const promises = packers.map(name => {
         const packerData = packersData.find(p => p.full_name === name);
         if (!packerData || !attendance[name][period].present || !attendance[name][period].startTime) {
@@ -794,7 +798,7 @@ export default function AttendanceScreen() {
 
     try {
       const currentTime = getCurrentTime();
-      const today = new Date().toISOString().split('T')[0];
+      const today = getRetrospectiveTimestamp().split('T')[0];
       const startTimeISO = new Date(`${today} ${currentTime}`).toISOString();
       
       // Always create a new attendance log (like Present button does)
@@ -855,7 +859,7 @@ export default function AttendanceScreen() {
     }
 
     try {
-      const endTime = new Date().toISOString();
+      const endTime = getRetrospectiveTimestamp();
       
       const { error } = await db.updateAttendanceEndTimeByDetails(
         orderId,
@@ -903,7 +907,7 @@ export default function AttendanceScreen() {
 
     try {
       // 1) End any active attendance record (present/absent without end_time)
-      const endIso = new Date().toISOString();
+      const endIso = getRetrospectiveTimestamp();
   await db.updateAttendanceEndTimeByDetails(orderId, packerIdentifier, period, endIso);
 
       // 2) Apply the requested change
@@ -919,7 +923,7 @@ export default function AttendanceScreen() {
   };
 
   const getCurrentTime = () => {
-    const now = new Date();
+    const now = getEffectiveDate();
     return now.toLocaleTimeString('en-GB', {
       hour: '2-digit',
       minute: '2-digit',
@@ -928,7 +932,7 @@ export default function AttendanceScreen() {
   };
 
   const getCurrentDateTime = () => {
-    const now = new Date();
+    const now = getEffectiveDate();
     return now.toLocaleString('en-GB', {
       weekday: 'long',
       day: '2-digit',
@@ -1106,7 +1110,7 @@ export default function AttendanceScreen() {
               names={packers}
               attendance={attendance}
               isAfternoon={isAfternoon}
-              isMorning={isMorning()}
+              isMorning={isMorningFunc()}
               onPresenceToggle={togglePresence}
               onToggleTime={toggleStartEndTime}
               onLongPress={handleLongPress}

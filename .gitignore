@@ -60,3 +60,5 @@ check-*.sql
 
 # Legacy Appwrite artifacts (remove when possible)
 functions/appwrite/
+
+supabase/migrations/*

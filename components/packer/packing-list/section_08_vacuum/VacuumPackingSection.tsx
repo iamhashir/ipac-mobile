@@ -6,11 +6,15 @@ import CollapsibleCard from "../common/CollapsibleCard";
 
 interface VacuumPackingSectionProps {
   orderPackageId: string;
+  hideUseButton?: boolean;
+  hideRemoveButton?: boolean;
   editable?: boolean;
 }
 
 const VacuumPackingSection: React.FC<VacuumPackingSectionProps> = ({
   orderPackageId,
+  hideUseButton = false,
+  hideRemoveButton = false,
   editable = true,
 }) => {
   const canEdit = editable !== false;
@@ -29,6 +33,8 @@ const VacuumPackingSection: React.FC<VacuumPackingSectionProps> = ({
           quantityLabel="in Bands"
           variantSources={[{ type: "material", value: "Laminate" }]}
           mediaDesignation="vacuum_packing"
+          hideUseButton={hideUseButton}
+          hideRemoveButton={hideRemoveButton}
           editable={canEdit}
           addPendingConfig={{
             autoTag: "Laminate",
@@ -42,6 +48,8 @@ const VacuumPackingSection: React.FC<VacuumPackingSectionProps> = ({
           materialType="Vacuum Packing"
           variantSources={[{ type: "material", value: "Desiccant" }]}
           mediaDesignation="vacuum_packing"
+          hideUseButton={hideUseButton}
+          hideRemoveButton={hideRemoveButton}
           editable={canEdit}
           addPendingConfig={{
             autoTag: "Desiccant",
@@ -55,6 +63,8 @@ const VacuumPackingSection: React.FC<VacuumPackingSectionProps> = ({
           materialType="Vacuum Packing"
           variantSources={[{ type: "tag", value: "Vacuum Accessories" }]}
           mediaDesignation="vacuum_packing"
+          hideUseButton={hideUseButton}
+          hideRemoveButton={hideRemoveButton}
           editable={canEdit}
           addPendingConfig={{
             autoTag: "Vacuum Accessories",

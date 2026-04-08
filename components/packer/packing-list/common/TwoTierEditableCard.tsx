@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Keyboard } from 'react-native';
 import SimpleSelect from '../section_04_tasks/subcomponents/SimpleSelect';
 
 export type EditableType = 'text' | 'number' | 'switch' | 'select';
@@ -9,7 +9,7 @@ interface TwoTierEditableCardProps {
   original: any;
   final: any;
   type: EditableType;
-  onChange: (val: any) => Promise<void> | void;
+  onChange: (val: any, tier?: 'original' | 'final') => Promise<void> | void;
   selectItems?: { label: string; value: string; labelShort?: string; tooltip?: string }[];
   width?: number | string;
   flex?: number;
@@ -26,17 +26,30 @@ interface TwoTierEditableCardProps {
 const formatValue = (v: any) => {
   if (v === null || v === undefined) return '—';
   if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    const rounded = Math.round(v * 100) / 100;
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
+  }
   return String(v);
 };
 
 const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, original, final, type, onChange, selectItems, width, flex, finalSelectValue, defaultSelectValue, compact = false, editTarget = 'final', editable = true, draftValue, commitDebounceMs = 600, highlightChanges = false }) => {
-  const isEditingOriginal = editTarget === 'original';
+  const [activeEditTarget, setActiveEditTarget] = useState<'original' | 'final'>(editTarget);
+  const [isInputFocused, setIsInputFocused] = useState(false);
+  const isEditingOriginal = activeEditTarget === 'original';
   // Determine initial value based on which tier is editable, overridden by draftValue if provided
   const initialSelect = isEditingOriginal ? (defaultSelectValue ?? null) : (finalSelectValue ?? null);
   const baseVal = isEditingOriginal ? (original ?? null) : (final ?? null);
   const initial = draftValue !== undefined ? draftValue : (type === 'select' ? initialSelect : baseVal);
   const [val, setVal] = useState<any>(initial);
   const [touched, setTouched] = useState(false); // only true after user input within this component
+
+  // Keep prop-driven tier updates, but avoid switching the active tier while user is typing.
+  useEffect(() => {
+    if (!isInputFocused) {
+      setActiveEditTarget(editTarget);
+    }
+  }, [editTarget, isInputFocused]);
 
   // Keep internal state in sync when props or draft change, but don't commit on programmatic sync
   useEffect(() => {
@@ -54,13 +67,14 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
 
   // Immediate stage: propagate on each user change so Save always sees latest drafts
   // For numbers, parse into number|null; for text, pass string|null on empty
-  const stageImmediate = async (nextVal: any) => {
+  const stageImmediate = async (nextVal: any, tier: 'original' | 'final') => {
     if (!editable) return;
     if (type === 'number') {
       const n = nextVal === null || nextVal === '' ? null : Number(nextVal);
-      await onChange(Number.isFinite(n as number) ? n : null);
+      const rounded = Number.isFinite(n as number) ? Math.round((n as number) * 100) / 100 : null;
+      await onChange(rounded, tier);
     } else {
-      await onChange(nextVal);
+      await onChange(nextVal, tier);
     }
   };
 
@@ -83,12 +97,12 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
         {isEditingOriginal && editable ? (
           type === 'select' ? (
             <View style={{ width: compact ? '90%' : '85%' }}>
-              <SimpleSelect label={''} items={selectItems || []} value={val} onChange={async (v) => { setVal(v); setTouched(true); await onChange(v); }} placeholder="Select" widthPercent={1} centerText={true} />
+              <SimpleSelect label={''} items={selectItems || []} value={val} onChange={async (v) => { setVal(v); setTouched(true); await onChange(v, 'original'); }} placeholder="Select" widthPercent={1} centerText={true} />
             </View>
           ) : type === 'switch' ? (
             <TouchableOpacity
               activeOpacity={0.8}
-              onPress={async () => { const next = !val; setVal(next); setTouched(true); await onChange(next); }}
+              onPress={async () => { const next = !val; setVal(next); setTouched(true); await onChange(next, 'original'); }}
               className={`rounded ${compact ? 'w-[90%]' : 'w-[85%]'} py-2`}
             >
               <Text className={`text-gray-700 ${compact ? 'text-xs' : 'text-sm'} text-center`}>{val ? 'Yes' : 'No'}</Text>
@@ -98,9 +112,14 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
               <TextInput
                 className="border border-gray-200 bg-white rounded px-1 py-1 text-center"
                 value={val === null || val === undefined ? '' : String(val)}
-                onChangeText={async (t) => { setVal(t); setTouched(true); await stageImmediate(t); }}
+                onChangeText={async (t) => { setVal(t); setTouched(true); await stageImmediate(t, 'original'); }}
                 keyboardType={type === 'number' ? 'numeric' : 'default'}
                 style={{ width: '100%', textAlign: 'center' }}
+                returnKeyType="done"
+                blurOnSubmit
+                onFocus={() => setIsInputFocused(true)}
+                onBlur={() => setIsInputFocused(false)}
+                onSubmitEditing={() => Keyboard.dismiss()}
               />
             </View>
           )
@@ -115,12 +134,12 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
         {!isEditingOriginal && editable ? (
           type === 'select' ? (
             <View style={{ width: compact ? '90%' : '85%' }}>
-              <SimpleSelect label={''} items={selectItems || []} value={val} onChange={async (v) => { setVal(v); setTouched(true); await onChange(v); }} placeholder="Select" widthPercent={1} centerText={true} />
+              <SimpleSelect label={''} items={selectItems || []} value={val} onChange={async (v) => { setVal(v); setTouched(true); await onChange(v, 'final'); }} placeholder="Select" widthPercent={1} centerText={true} />
             </View>
           ) : type === 'switch' ? (
             <TouchableOpacity
               activeOpacity={0.8}
-              onPress={async () => { const next = !val; setVal(next); setTouched(true); await onChange(next); }}
+              onPress={async () => { const next = !val; setVal(next); setTouched(true); await onChange(next, 'final'); }}
               className={`rounded ${compact ? 'w-[90%]' : 'w-[85%]'} py-2`}
             >
               <Text className={`text-gray-700 ${compact ? 'text-xs' : 'text-sm'} text-center`}>{val ? 'Yes' : 'No'}</Text>
@@ -130,9 +149,14 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
               <TextInput
                 className="border border-gray-200 bg-white rounded px-1 py-1 text-center"
                 value={val === null || val === undefined ? '' : String(val)}
-                onChangeText={async (t) => { setVal(t); setTouched(true); await stageImmediate(t); }}
+                onChangeText={async (t) => { setVal(t); setTouched(true); await stageImmediate(t, 'final'); }}
                 keyboardType={type === 'number' ? 'numeric' : 'default'}
                 style={{ width: '100%', textAlign: 'center' }}
+                returnKeyType="done"
+                blurOnSubmit
+                onFocus={() => setIsInputFocused(true)}
+                onBlur={() => setIsInputFocused(false)}
+                onSubmitEditing={() => Keyboard.dismiss()}
               />
             </View>
           )

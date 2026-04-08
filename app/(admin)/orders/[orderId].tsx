@@ -272,7 +272,7 @@ export default function OrderDetailsPage() {
                     <Text className="text-white font-medium">Add Item</Text>
                   </TouchableOpacity>
                 </View>
-                <OrderPackingItems orderPackageId={p.id} />
+                <OrderPackingItems orderPackageId={p.id} editable={false} />
               </View>
 
               {/* Securing section: admin edits ORIGINAL fields inline (manual save) */}

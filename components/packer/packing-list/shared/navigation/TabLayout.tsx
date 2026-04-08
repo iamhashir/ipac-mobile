@@ -4,7 +4,7 @@ import { useTextSize } from '../../../../../utils/TextSizeContext';
 
 export interface TabDefinition {
   key: string;
-  title: string;
+  title: string | React.ReactNode;
   content: React.ReactNode;
   isPacked?: boolean; // Box completed (sky)
   isStarted?: boolean; // Box has tasks started (lime)

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, Modal, ScrollView, TextInput, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, ScrollView, TextInput, Alert, Image } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import TabLayout, { TabDefinition } from '../shared/navigation/TabLayout';
 import SimpleSelect from './subcomponents/SimpleSelect';
 import TaskAssignmentHeader from './subcomponents/TaskAssignmentHeader';
@@ -10,11 +11,44 @@ interface OrderTasksManagementProps {
   orderId: string;
   orderPackages: { id: string; package_number: number | null }[];
   readOnly?: boolean; // When true, disable all editing (box is completed)
+  requirePhotoForFinish?: boolean;
 }
 
 interface TeamPacker { id: string; full_name?: string; username?: string; packer_status?: string; }
 
-const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, orderPackages, readOnly = false }) => {
+const formatDateInput = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const formatTimeInput = (date: Date) => {
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+};
+
+const buildTaskDateTimeIso = (dateText: string, timeText: string) => {
+  const normalizedDate = dateText.trim();
+  const normalizedTime = timeText.trim();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) return null;
+  if (!/^\d{2}:\d{2}$/.test(normalizedTime)) return null;
+
+  const date = new Date(`${normalizedDate}T${normalizedTime}:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+};
+
+const calculateDurationMinutes = (startIso: string, endIso: string) => {
+  const startMs = new Date(startIso).getTime();
+  const endMs = new Date(endIso).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return 0;
+  return Math.max(0, Math.floor((endMs - startMs) / 60000));
+};
+
+const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, orderPackages, readOnly = false, requirePhotoForFinish = false }) => {
   const [teamPackers, setTeamPackers] = useState<TeamPacker[]>([]);
   const [availableCount, setAvailableCount] = useState(0);
   const [busyCount, setBusyCount] = useState(0);
@@ -44,6 +78,11 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
   const [consolidateOpen, setConsolidateOpen] = useState(false);
   const [selectedPackageIds, setSelectedPackageIds] = useState<string[]>(orderPackages.length ? [orderPackages[0].id] : []);
   const [notes, setNotes] = useState<string>('');
+  const [taskDate, setTaskDate] = useState<string>(() => formatDateInput(new Date()));
+  const [taskTime, setTaskTime] = useState<string>(() => formatTimeInput(new Date()));
+  const [taskEndDate, setTaskEndDate] = useState<string>('');
+  const [taskEndTime, setTaskEndTime] = useState<string>('');
+  const [taskPhotoUris, setTaskPhotoUris] = useState<string[]>([]);
   const [isCreatingTask, setIsCreatingTask] = useState(false);
   const isCreatingTaskRef = useRef(false); // Ref for immediate blocking
 
@@ -230,6 +269,76 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
     }
   };
 
+  const promptTaskPhotoSource = () => {
+    Alert.alert('Attach task photo', 'Choose source', [
+      { text: 'Gallery', onPress: pickTaskPhotoFromGallery },
+      { text: 'Camera', onPress: takeTaskPhoto },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const pickTaskPhotoFromGallery = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Media library access is needed.');
+      return;
+    }
+
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.8,
+    });
+
+    if (!res.canceled && res.assets && res.assets.length > 0) {
+      const uri = res.assets[0]?.uri;
+      if (uri) {
+        setTaskPhotoUris((prev) => [...prev, uri]);
+      }
+    }
+  };
+
+  const takeTaskPhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Camera access is needed.');
+      return;
+    }
+
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    if (!res.canceled && res.assets && res.assets.length > 0) {
+      const uri = res.assets[0]?.uri;
+      if (uri) {
+        setTaskPhotoUris((prev) => [...prev, uri]);
+      }
+    }
+  };
+
+  const uploadTaskPhotosForNewTask = async (taskLogId: string, taskName: string, packageIds: string[]) => {
+    if (!taskPhotoUris.length) {
+      return { ok: true };
+    }
+
+    const uniquePackageIds = Array.from(new Set((packageIds || []).filter(Boolean)));
+    if (!uniquePackageIds.length) {
+      return { ok: false, message: 'Task was created, but no package was selected for photo upload.' };
+    }
+
+    const notes = `task_log_id:${taskLogId}; task:${taskName}`;
+    const uploadResults = await Promise.all(
+      uniquePackageIds.flatMap((packageId) =>
+        taskPhotoUris.map((uri) => db.uploadMediaToStorage(packageId, uri, 'task', notes))
+      )
+    );
+
+    const failed = uploadResults.find((result) => result?.error);
+    if (failed?.error) {
+      console.error('Error uploading task photos:', failed.error);
+      return { ok: false, message: 'Task was created, but one or more photos failed to upload.' };
+    }
+
+    return { ok: true };
+  };
+
   // Handle Break button - pause all active tasks for all packers
   const handleBreak = async () => {
     const now = Date.now();
@@ -294,6 +403,12 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
       setSelectedPackerIds([]);
       setSelectedPackageIds(orderPackages.length ? [orderPackages[0].id] : []);
       setNotes('');
+      const now = new Date();
+      setTaskDate(formatDateInput(now));
+      setTaskTime(formatTimeInput(now));
+      setTaskEndDate('');
+      setTaskEndTime('');
+      setTaskPhotoUris([]);
       return;
     }
     
@@ -396,12 +511,54 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                   await refreshBusyStatus();
                 }}
                 onFinish={async (id) => {
-                  // Use server-side completion to ensure assignments, counters, and durations are correct per business rules
-                  const { error } = await db.completeTask(id);
-                  if (error) {
-                    console.error('Error completing task:', error);
+                  const task = (taskLogs as any[]).find((entry) => entry.id === id);
+
+                  if (requirePhotoForFinish) {
+                    const packageIds = ((task?.task_packages || [])
+                      .map((pkg: any) => pkg.order_package_id)
+                      .filter(Boolean)) as string[];
+
+                    const { data: mediaCount, error: mediaError } = await db.getTaskMediaCount(id as any, packageIds as any);
+                    if (mediaError) {
+                      console.error('Error checking task media count:', mediaError);
+                      Alert.alert('Error', 'Unable to verify task photos. Please try again.');
+                      return;
+                    }
+
+                    if (!mediaCount || mediaCount <= 0) {
+                      Alert.alert('Photo required', 'Please add at least one task photo before finishing this task.');
+                      return;
+                    }
+                  }
+
+                  let completionError: any = null;
+
+                  const startMs = task?.start_time ? new Date(task.start_time).getTime() : NaN;
+                  const createdMs = task?.created_at ? new Date(task.created_at).getTime() : NaN;
+                  const isRetrospectiveTask = Number.isFinite(startMs) && Number.isFinite(createdMs) && (startMs + 30000) < createdMs;
+
+                  if (isRetrospectiveTask) {
+                    const nowMs = Date.now();
+                    const elapsedSinceCreateMs = Math.max(0, nowMs - createdMs);
+                    const pauseMs = Math.max(0, Number(task?.pause_duration || 0) * 1000);
+                    const effectiveElapsedMs = Math.max(0, elapsedSinceCreateMs - pauseMs);
+                    const computedEndIso = new Date(startMs + effectiveElapsedMs).toISOString();
+                    const computedDurationMinutes = Math.max(0, Math.floor(effectiveElapsedMs / 60000));
+
+                    const { error } = await db.completeTaskWithComputedEnd(id, computedEndIso, computedDurationMinutes);
+                    completionError = error;
+                  } else {
+                    // Standard flow: server-side completion uses current wall-clock end time.
+                    const { error } = await db.completeTask(id);
+                    completionError = error;
+                  }
+
+                  if (completionError) {
+                    console.error('Error completing task:', completionError);
+                    Alert.alert('Error', 'Failed to complete task. Please try again.');
                     return;
                   }
+
                   setOpenTaskIds(prev => prev.filter(x => x !== id));
                   await refreshLogs();
                   await refreshBusyStatus();
@@ -442,6 +599,65 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
             onChange={setSelectedTaskTypeId}
             placeholder="Select a task"
           />
+
+          <View className="mt-4">
+            <Text className="text-gray-600 mb-2">Task Start Date/Time</Text>
+            <View className="flex-row">
+              <View className="flex-1 mr-2">
+                <Text className="text-gray-500 text-xs mb-1">Date (YYYY-MM-DD)</Text>
+                <TextInput
+                  className="border border-gray-300 rounded-md bg-white px-2 py-2"
+                  placeholder="2026-04-01"
+                  value={taskDate}
+                  onChangeText={setTaskDate}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+              <View className="w-32">
+                <Text className="text-gray-500 text-xs mb-1">Time (HH:mm)</Text>
+                <TextInput
+                  className="border border-gray-300 rounded-md bg-white px-2 py-2"
+                  placeholder="14:30"
+                  value={taskTime}
+                  onChangeText={setTaskTime}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+            </View>
+          </View>
+
+          <View className="mt-4">
+            <Text className="text-gray-600 mb-2">Task End Date/Time (Optional)</Text>
+            <View className="flex-row">
+              <View className="flex-1 mr-2">
+                <Text className="text-gray-500 text-xs mb-1">End Date (YYYY-MM-DD)</Text>
+                <TextInput
+                  className="border border-gray-300 rounded-md bg-white px-2 py-2"
+                  placeholder="2026-04-01"
+                  value={taskEndDate}
+                  onChangeText={setTaskEndDate}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+              <View className="w-32">
+                <Text className="text-gray-500 text-xs mb-1">End Time (HH:mm)</Text>
+                <TextInput
+                  className="border border-gray-300 rounded-md bg-white px-2 py-2"
+                  placeholder="16:00"
+                  value={taskEndTime}
+                  onChangeText={setTaskEndTime}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+            </View>
+            <Text className="text-gray-500 text-xs mt-2">
+              Add end date/time for retrospective tasks. When both fields are filled, the task is created as completed immediately.
+            </Text>
+          </View>
 
           {/* Packers multi-select (small boxes) */}
           <View className="mt-4">
@@ -505,6 +721,35 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
             />
           </View>
 
+          <View className="mt-4">
+            <Text className="text-gray-600 mb-2">Task Photos (Optional)</Text>
+            <TouchableOpacity
+              className="bg-blue-50 border border-blue-300 px-4 py-2 rounded-lg self-start"
+              onPress={promptTaskPhotoSource}
+            >
+              <Text className="text-blue-700 font-medium">Add Photo</Text>
+            </TouchableOpacity>
+
+            {taskPhotoUris.length > 0 && (
+              <ScrollView horizontal className="mt-3">
+                {taskPhotoUris.map((uri, index) => (
+                  <View key={`${uri}-${index}`} className="mr-3 items-center">
+                    <Image
+                      source={{ uri }}
+                      style={{ width: 84, height: 84, borderRadius: 8, borderWidth: 1, borderColor: '#cbd5e1' }}
+                    />
+                    <TouchableOpacity
+                      className="mt-1 px-2 py-1 rounded border border-red-300 bg-red-50"
+                      onPress={() => setTaskPhotoUris((prev) => prev.filter((_, photoIndex) => photoIndex !== index))}
+                    >
+                      <Text className="text-red-700 text-xs">Remove</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+
           {/* Bottom Action Buttons */}
           <View className="flex-row justify-between mt-6">
             <TouchableOpacity className="bg-blue-50 border border-blue-300 px-4 py-3 rounded-lg flex-1 mr-2" onPress={() => setConsolidateOpen(true)}>
@@ -534,6 +779,40 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                       return;
                     }
 
+                    const startTimeIso = buildTaskDateTimeIso(taskDate, taskTime);
+                    if (!startTimeIso) {
+                      Alert.alert('Invalid date/time', 'Use date format YYYY-MM-DD and time format HH:mm.');
+                      return;
+                    }
+
+                    const hasEndDate = taskEndDate.trim().length > 0;
+                    const hasEndTime = taskEndTime.trim().length > 0;
+                    const hasEndInput = hasEndDate || hasEndTime;
+
+                    let endTimeIso: string | null = null;
+                    if (hasEndInput) {
+                      if (!hasEndDate || !hasEndTime) {
+                        Alert.alert('Invalid end date/time', 'Fill both end date and end time, or leave both blank.');
+                        return;
+                      }
+
+                      endTimeIso = buildTaskDateTimeIso(taskEndDate, taskEndTime);
+                      if (!endTimeIso) {
+                        Alert.alert('Invalid end date/time', 'Use date format YYYY-MM-DD and time format HH:mm for task end.');
+                        return;
+                      }
+
+                      if (new Date(endTimeIso).getTime() < new Date(startTimeIso).getTime()) {
+                        Alert.alert('Invalid range', 'End date/time must be after the start date/time.');
+                        return;
+                      }
+                    }
+
+                    if (endTimeIso && requirePhotoForFinish && taskPhotoUris.length === 0) {
+                      Alert.alert('Photo required', 'Please add at least one task photo for retrospective completion.');
+                      return;
+                    }
+
                     // LOCK immediately with ref (synchronous)
                     isCreatingTaskRef.current = true;
                     setIsCreatingTask(true);
@@ -547,14 +826,43 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                         return;
                       }
 
+                      const taskName = taskTypes.find((task) => task.id === selectedTaskTypeId)?.name || 'Task';
+
                       const { data, error } = await db.startTaskForPackages({
                         taskTypeId: selectedTaskTypeId,
                         orderPackageIds: selectedPackageIds,
                         packerIds: selectedPackerIds,
                         notes: notes || null,
+                        startTimeIso,
                       } as any);
                       
                       if (!error && data?.task_log_id) {
+                        const taskLogId = data.task_log_id;
+
+                        if (taskPhotoUris.length > 0) {
+                          const uploadResult = await uploadTaskPhotosForNewTask(taskLogId, taskName, selectedPackageIds);
+                          if (!uploadResult.ok) {
+                            Alert.alert('Photo upload failed', uploadResult.message || 'Task created, but photos failed to upload.');
+                            await refreshLogs();
+                            await refreshBusyStatus();
+                            setActiveKey('overview');
+                            return;
+                          }
+                        }
+
+                        if (endTimeIso) {
+                          const durationMinutes = calculateDurationMinutes(startTimeIso, endTimeIso);
+                          const { error: completionError } = await db.completeTaskWithComputedEnd(taskLogId, endTimeIso, durationMinutes);
+                          if (completionError) {
+                            console.error('Error completing retrospective task:', completionError);
+                            Alert.alert('Error', 'Task was created, but failed to mark it as completed.');
+                            await refreshLogs();
+                            await refreshBusyStatus();
+                            setActiveKey('overview');
+                            return;
+                          }
+                        }
+
                         // Switch to overview FIRST (immediate user feedback)
                         setActiveKey('overview');
                         
@@ -562,12 +870,20 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                         await refreshLogs();
                         await refreshBusyStatus();
                         
-                        // persist detail tab for the new task
-                        setOpenTaskIds(prev => [...prev, data.task_log_id]);
+                        // Keep detail tab only for active tasks.
+                        if (!endTimeIso) {
+                          setOpenTaskIds(prev => [...prev, taskLogId]);
+                        }
                         
                         // reset selections (keep task for convenience)
                         setSelectedPackerIds([]);
                         setNotes('');
+                        const now = new Date();
+                        setTaskDate(formatDateInput(now));
+                        setTaskTime(formatTimeInput(now));
+                        setTaskEndDate('');
+                        setTaskEndTime('');
+                        setTaskPhotoUris([]);
                       } else if (error) {
                         Alert.alert('Error', 'Failed to create task. Please try again.');
                       }
@@ -582,7 +898,7 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
                   }}
                 >
                   <Text className={`text-center font-medium ${(!selectedTaskTypeId || !selectedPackageIds.length || !selectedPackerIds.length || isCreatingTask) ? 'text-gray-600' : 'text-green-700'}`}>
-                    {isCreatingTask ? 'Creating...' : 'Start Task'}
+                    {isCreatingTask ? 'Creating...' : (taskEndDate.trim() && taskEndTime.trim() ? 'Save Completed Task' : 'Start Task')}
                   </Text>
                 </TouchableOpacity>
           </View>
@@ -809,7 +1125,7 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
     const baseTabs = (activeKey === 'new' && !readOnly) ? [overview, newTask] : [overview];
     return [...baseTabs, ...details];
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskLogs, taskTypes, teamPackers, activeKey, selectedTaskTypeId, selectedPackerIds, selectedPackageIds, readOnly]);
+  }, [taskLogs, taskTypes, teamPackers, activeKey, selectedTaskTypeId, selectedPackerIds, selectedPackageIds, notes, taskDate, taskTime, taskEndDate, taskEndTime, taskPhotoUris, isCreatingTask, busyPackerIds, pausedTaskIds, pauseStartMap, allOrderPackages, consolidateOpen, currentDetailPackages, detailNotesMap, readOnly, requirePhotoForFinish]);
 
   // Build modal data
   const idToName = useMemo(() => {

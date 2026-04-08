@@ -11,6 +11,8 @@ interface AccessoriesSectionProps {
   addModalAutoTag?: string;
   itemLabel?: string;
   mediaDesignation?: string;
+  hideUseButton?: boolean;
+  hideRemoveButton?: boolean;
   editable?: boolean;
 }
 
@@ -21,6 +23,8 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({
   materialType = "Accessories",
   addModalAutoTag,
   mediaDesignation = "accessory",
+  hideUseButton = false,
+  hideRemoveButton = false,
   editable = true,
 }) => {
   const sources: VariantSource[] = variantTag
@@ -44,6 +48,8 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({
       quantityLabel="Qty"
       quantityPlaceholder="e.g. 1"
       mediaDesignation={mediaDesignation}
+      hideUseButton={hideUseButton}
+      hideRemoveButton={hideRemoveButton}
       editable={editable}
       addPendingConfig={addPendingConfig}
     />

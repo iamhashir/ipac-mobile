@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Alert, useWindowDimensions } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Alert, useWindowDimensions, Modal, TextInput, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
@@ -15,9 +15,15 @@ interface Order {
   id: string;
   order_name: string;
   description: string;
+  project_type?: 'standard' | 'maintenance' | 'survey' | null;
   client_name: string;
   production_status: string;
   assigned_packers_count: number;
+}
+
+interface ClientOption {
+  id: string;
+  name: string;
 }
 
 interface Packer {
@@ -71,6 +77,15 @@ export default function PackerDashboard() {
   // Add/Remove packer mode
   const [isAddRemoveMode, setIsAddRemoveMode] = useState(false);
   const [packerActionModal, setPackerActionModal] = useState<{visible: boolean; packerId: string | null; packerName: string; action: 'add' | 'remove'}>({visible: false, packerId: null, packerName: '', action: 'add'});
+  const [projectTypeFilter, setProjectTypeFilter] = useState<'standard' | 'maintenance' | 'survey'>('standard');
+  const [maintViewMode, setMaintViewMode] = useState<'view' | 'create'>('view');
+  const [createModalVisible, setCreateModalVisible] = useState(false);
+  const [clients, setClients] = useState<ClientOption[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [clientPickerOpen, setClientPickerOpen] = useState(false);
+  const [generatedName, setGeneratedName] = useState('');
+  const [manualName, setManualName] = useState('');
+  const [creatingProject, setCreatingProject] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -203,6 +218,135 @@ export default function PackerDashboard() {
       setLoading(false);
     }
   };
+
+  const getOrdersForType = (type: 'standard' | 'maintenance' | 'survey') =>
+    availableOrders.filter((order) => (order.project_type || 'standard') === type);
+
+  const buildAutoProjectName = (clientName: string) => {
+    const now = new Date();
+    const yyyy = String(now.getFullYear());
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const datePrefix = `${yyyy}-${mm}${dd}`;
+    const clientToken = String(clientName || 'CLIENT')
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, '-')
+      .replace(/[^A-Z0-9-]/g, '') || 'CLIENT';
+
+    const todaysClientCount = getOrdersForType(projectTypeFilter).filter((order) => {
+      const upperName = String(order.order_name || '').toUpperCase();
+      return upperName.includes(datePrefix) && upperName.includes(`-${clientToken}-`);
+    }).length;
+
+    const sequence = String(todaysClientCount + 1).padStart(2, '0');
+    return `${datePrefix}-V01-${clientToken}-${sequence}`;
+  };
+
+  const refreshAutoNameForClient = (clientId: string | null, sourceClients: ClientOption[] = clients) => {
+    const selectedClient = sourceClients.find((client) => client.id === clientId);
+    const nextName = buildAutoProjectName(selectedClient?.name || 'DEWA');
+    setGeneratedName(nextName);
+    setManualName(nextName);
+  };
+
+  const openCreateProjectModal = async () => {
+    try {
+      const { data, error } = await db.getClients();
+      if (error) {
+        toast.error('Failed to load clients');
+        return;
+      }
+
+      const clientOptions = (data || []) as ClientOption[];
+      if (clientOptions.length === 0) {
+        toast.error('No clients available. Please contact admin to add at least one client.');
+        return;
+      }
+
+      setClients(clientOptions);
+
+      const defaultClient = clientOptions.find((client) => String(client.name).toUpperCase() === 'DEWA') || clientOptions[0] || null;
+      const defaultClientId = defaultClient?.id || null;
+      setSelectedClientId(defaultClientId);
+      refreshAutoNameForClient(defaultClientId, clientOptions);
+      setClientPickerOpen(false);
+      setCreateModalVisible(true);
+    } catch (error) {
+      console.error('Error opening create project modal:', error);
+      toast.error('Could not open create project form');
+    }
+  };
+
+  const closeCreateProjectModal = () => {
+    if (creatingProject) return;
+    setCreateModalVisible(false);
+    setSelectedClientId(null);
+    setClientPickerOpen(false);
+    setGeneratedName('');
+    setManualName('');
+  };
+
+  const handleCreateProject = async () => {
+    if (projectTypeFilter === 'standard') {
+      toast.error('Standard projects are created by admin');
+      return;
+    }
+
+    if (!selectedClientId) {
+      toast.error('Please select a client');
+      return;
+    }
+
+    try {
+      setCreatingProject(true);
+      const customName = manualName.trim();
+      const { data, error } = await db.createPackerProject({
+        projectType: projectTypeFilter,
+        clientId: selectedClientId,
+        createdBy: profile?.id || null,
+        orderName: customName || generatedName,
+      });
+
+      if (error || !data) {
+        console.error('Error creating project:', error);
+        toast.error(error?.message || 'Failed to create project');
+        return;
+      }
+
+      await loadData();
+      setSelectedOrder(data.order_id);
+      setMaintViewMode('view');
+      closeCreateProjectModal();
+      toast.success(`${projectTypeFilter === 'maintenance' ? 'Maintenance' : 'Survey'} project created`);
+    } catch (error) {
+      console.error('Error creating project:', error);
+      toast.error('Unexpected error while creating project');
+    } finally {
+      setCreatingProject(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedOrder) {
+      const selected = availableOrders.find((order) => order.id === selectedOrder);
+      const selectedType = (selected?.project_type || 'standard') as 'standard' | 'maintenance' | 'survey';
+      if (selectedType !== projectTypeFilter) {
+        setProjectTypeFilter(selectedType);
+        return;
+      }
+    }
+
+    if (projectTypeFilter === 'standard') {
+      setMaintViewMode('view');
+    }
+    if (selectedOrder) {
+      const validForFilter = getOrdersForType(projectTypeFilter).some((order) => order.id === selectedOrder);
+      if (!validForFilter) {
+        setSelectedOrder(null);
+      }
+    }
+  }, [projectTypeFilter, availableOrders, selectedOrder]);
 
   const resetReleaseModalState = () => {
     setReleaseTargets([]);
@@ -693,6 +837,12 @@ export default function PackerDashboard() {
     (isTeamLead || isOnlySelfOnTeam)
   );
 
+  const ordersForType = getOrdersForType(projectTypeFilter);
+  const visibleOrders = projectTypeFilter === 'standard'
+    ? ordersForType
+    : ordersForType.filter((order) => ['pending', 'in_progress'].includes(order.production_status));
+  const isCreateModeActive = projectTypeFilter !== 'standard' && maintViewMode === 'create';
+
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-gray-50" edges={['top','bottom','left','right']}>
@@ -793,24 +943,183 @@ export default function PackerDashboard() {
         )}
       </ConfirmModal>
 
+      <Modal
+        visible={createModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeCreateProjectModal}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={closeCreateProjectModal}
+          className="flex-1 bg-black/40 justify-center items-center p-4"
+        >
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={(event) => event.stopPropagation()}
+            className="bg-white rounded-xl w-full max-w-2xl max-h-[85%]"
+          >
+            <View className="px-5 py-4 border-b border-gray-200">
+              <Text className="text-lg font-semibold text-gray-900">
+                Create New {projectTypeFilter === 'maintenance' ? 'Maintenance' : 'Survey'} Project
+              </Text>
+            </View>
+
+            <ScrollView className="px-5 py-4">
+              <Text className="text-sm text-gray-700 mb-2 font-medium">Client</Text>
+              <View className="mb-4">
+                <TouchableOpacity
+                  onPress={() => setClientPickerOpen((previous) => !previous)}
+                  className="border border-gray-300 rounded-lg px-4 py-3 bg-white flex-row items-center justify-between"
+                >
+                  <Text className="text-gray-900 text-base font-medium">
+                    {(clients.find((client) => client.id === selectedClientId)?.name) || 'Select client'}
+                  </Text>
+                  <Text className="text-gray-500 text-lg">{clientPickerOpen ? '▲' : '▼'}</Text>
+                </TouchableOpacity>
+
+                {clientPickerOpen && (
+                  <View className="mt-2 border border-gray-200 rounded-lg overflow-hidden bg-white max-h-72">
+                    <ScrollView>
+                      {(clients || []).length === 0 ? (
+                        <View className="px-3 py-3 bg-white">
+                          <Text className="text-gray-500 text-sm">No clients available</Text>
+                        </View>
+                      ) : (
+                        (clients || []).map((client) => {
+                          const isSelected = selectedClientId === client.id;
+                          return (
+                            <TouchableOpacity
+                              key={client.id}
+                              onPress={() => {
+                                setSelectedClientId(client.id);
+                                refreshAutoNameForClient(client.id);
+                                setClientPickerOpen(false);
+                              }}
+                              className={`px-3 py-3 border-b border-gray-100 ${isSelected ? 'bg-blue-50' : 'bg-white'}`}
+                            >
+                              <Text className={`${isSelected ? 'text-blue-700' : 'text-gray-900'} font-medium`}>
+                                {client.name}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })
+                      )}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+
+              <Text className="text-sm text-gray-700 mb-2 font-medium">Project Name</Text>
+              <TextInput
+                value={manualName}
+                onChangeText={setManualName}
+                placeholder="Auto-generated project name"
+                className="border border-gray-300 rounded-lg px-4 py-3 text-gray-900 mb-2"
+              />
+              <Text className="text-xs text-gray-500 mb-4">
+                Suggested: {generatedName || '—'}
+              </Text>
+            </ScrollView>
+
+            <View className="px-5 py-4 border-t border-gray-200 flex-row gap-2">
+              <TouchableOpacity
+                onPress={closeCreateProjectModal}
+                disabled={creatingProject}
+                className="flex-1 bg-gray-100 rounded-lg py-3"
+              >
+                <Text className="text-center text-gray-700 font-semibold">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleCreateProject}
+                disabled={creatingProject || !selectedClientId}
+                className={`flex-1 rounded-lg py-3 ${creatingProject || !selectedClientId ? 'bg-gray-300' : 'bg-green-600'}`}
+              >
+                {creatingProject ? (
+                  <ActivityIndicator color="#ffffff" />
+                ) : (
+                  <Text className="text-center text-white font-semibold">Create Project</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       {/* Main Content */}
       <View className={`flex-1 ${isCompact ? 'p-3' : 'p-4'}`}>
         <View className={`${isPortraitStack ? 'flex-col gap-y-3' : (isCompact ? 'flex-row gap-x-3' : 'flex-row gap-x-4')} flex-1`}>
           {/* Left Column - Select File */}
           <View className="flex-1 bg-white rounded-lg shadow-sm">
             <View className={`bg-primary-500 ${isCompact ? 'px-3 py-2' : 'px-4 py-3'} rounded-t-lg`}>
-              <Text className={`${isCompact ? 'text-sm' : 'text-base'} text-white font-semibold`}>
-                Select File
-              </Text>
+              <View className="flex-row items-center justify-between">
+                <Text className={`${isCompact ? 'text-sm' : 'text-base'} text-white font-semibold`}>
+                  Select File
+                </Text>
+                <View className="flex-row gap-1">
+                  {(['standard', 'maintenance', 'survey'] as const).map((type) => {
+                    const isActive = projectTypeFilter === type;
+                    return (
+                      <TouchableOpacity
+                        key={type}
+                        onPress={() => setProjectTypeFilter(type)}
+                        className={`px-2 py-1 rounded ${isActive ? 'bg-primary-700' : 'bg-primary-400'}`}
+                      >
+                        <Text className="text-white text-[11px] font-semibold">
+                          {type === 'standard' ? 'Standard' : type === 'maintenance' ? 'Maintenance' : 'Survey'}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
             </View>
+
+            {projectTypeFilter !== 'standard' && (
+              <View className={`${isCompact ? 'px-3 py-2' : 'px-4 py-3'} border-b border-blue-100 bg-blue-50 flex-row items-center justify-between`}>
+                <View className="flex-row gap-2">
+                  <TouchableOpacity
+                    onPress={() => setMaintViewMode('view')}
+                    className={`px-3 py-2 rounded ${maintViewMode === 'view' ? 'bg-blue-600' : 'bg-white border border-blue-200'}`}
+                  >
+                    <Text className={`${maintViewMode === 'view' ? 'text-white' : 'text-blue-700'} text-xs font-semibold`}>
+                      View Existing
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setMaintViewMode('create')}
+                    className={`px-3 py-2 rounded ${maintViewMode === 'create' ? 'bg-green-600' : 'bg-white border border-green-200'}`}
+                  >
+                    <Text className={`${maintViewMode === 'create' ? 'text-white' : 'text-green-700'} text-xs font-semibold`}>
+                      Create New
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
             
             <ScrollView className={`flex-1 ${isCompact ? 'p-3' : 'p-4'}`}>
-{availableOrders.length === 0 ? (
+{isCreateModeActive ? (
+                <View className="p-3 rounded-lg border border-green-200 bg-green-50">
+                  <Text className="text-green-800 font-semibold mb-2">
+                    Create New {projectTypeFilter === 'maintenance' ? 'Maintenance' : 'Survey'} Project
+                  </Text>
+                  <Text className="text-green-700 text-xs mb-3">
+                    Generate a new project with package #1 and pending maintenance task flow.
+                  </Text>
+                  <TouchableOpacity
+                    onPress={openCreateProjectModal}
+                    className="bg-green-600 rounded-lg px-4 py-3"
+                  >
+                    <Text className="text-white text-center font-semibold">+ Create New Project</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : visibleOrders.length === 0 ? (
                 <Text className="text-gray-500 text-center py-6">
                   No projects available
                 </Text>
               ) : (
-                availableOrders.map((order) => {
+                visibleOrders.map((order) => {
                   const hasActiveSession = !!session?.order_id;
                   const isUsersActiveOrder = hasActiveSession && session?.order_id === order.id;
                   const isLockedBySession = hasActiveSession && !isUsersActiveOrder; // user already working on another order

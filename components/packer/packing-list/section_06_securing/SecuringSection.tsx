@@ -3,6 +3,8 @@ import AccessoriesSection from '../section_09_accessories/AccessoriesSection';
 
 interface SecuringSectionProps {
   orderPackageId: string;
+  hideUseButton?: boolean;
+  hideRemoveButton?: boolean;
   editable?: boolean;
 }
 

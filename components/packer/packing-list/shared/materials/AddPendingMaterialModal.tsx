@@ -3,10 +3,17 @@ import { View, Text, Modal, TouchableOpacity, TextInput, ScrollView, Alert } fro
 import { X, Plus, Minus, Tag, ChevronDown } from 'lucide-react-native';
 import { db } from '../../../../../utils/api/supabase';
 
+export interface PendingVariantSelectionPayload {
+  id: string;
+  isPending: true;
+  label: string;
+  unitId: string | null;
+}
+
 interface AddPendingMaterialModalProps {
   visible: boolean;
   onClose: () => void;
-  onSuccess: (createdVariantId: string) => void;
+  onSuccess: (payload: PendingVariantSelectionPayload) => void;
   orderPackageId: string;
   autoTag?: string; // e.g., 'Accessories', 'Securing', 'Gas Packing', 'Vacuum Packing'
   materialType?: string; // The material_type for order_package_materials
@@ -172,46 +179,53 @@ export const AddPendingMaterialModal: React.FC<AddPendingMaterialModalProps> = (
         }
         return acc;
       }, {} as Record<string, string>);
+
+      if (selectedTags.length > 0) {
+        const selectedTagNames = availableTags
+          .filter((tag) => selectedTags.includes(tag.id))
+          .map((tag) => tag.name)
+          .filter(Boolean);
+        (attributesObj as any).__request_tag_ids = selectedTags;
+        (attributesObj as any).__request_tag_names = selectedTagNames;
+      }
       
-      // Use existing material or create new one
-      let materialData: any;
-      
+      const { data: userData, error: userError } = await db.auth.getUser();
+      if (userError) throw userError;
+      const requestedBy = userData?.user?.id;
+      if (!requestedBy) throw new Error('Unable to identify current user. Please log in again.');
+
+      const requestedAt = new Date().toISOString();
+
+      // Use existing material request chain or create a material request first
+      let materialIdForVariant: string | null = null;
+      let materialRequestIdForVariant: string | null = null;
+
       if (mode === 'existing_material' && selectedMaterialId) {
-        // Use existing material
-        const { data, error } = await db.query
-          .from('materials')
-          .select('*')
-          .eq('id', selectedMaterialId)
-          .single();
-        
-        if (error) throw error;
-        materialData = data;
+        materialIdForVariant = selectedMaterialId;
       } else {
-        // Create new material
-        const { data, error: materialError } = await db.query
-          .from('materials')
+        const { data: materialReqData, error: materialReqError } = await db.query
+          .from('material_requests')
           .insert({
             name: materialName.trim(),
             description: materialDescription.trim() || null,
             unit_id: selectedUnit,
-            pending_approval: true,
-            approval_status: 'pending',
-            requested_by: (await db.auth.getUser()).data.user?.id,
-            requested_at: new Date().toISOString(),
+            requested_by: requestedBy,
+            requested_at: requestedAt,
             order_package_context: orderPackageId,
           })
           .select()
           .single();
-        
-        if (materialError) throw materialError;
-        materialData = data;
+
+        if (materialReqError) throw materialReqError;
+        materialRequestIdForVariant = materialReqData.id;
       }
-      
-      // Create the variant
-      const { data: variantData, error: variantError } = await db.query
-        .from('material_variants')
+
+      // Create pending variant request
+      const { data: variantRequestData, error: variantRequestError } = await db.query
+        .from('material_variant_requests')
         .insert({
-          material_id: materialData.id,
+          material_id: materialIdForVariant,
+          material_request_id: materialRequestIdForVariant,
           variant_name: variantName.trim(),
           description: variantDescription.trim() || null,
           attributes: Object.keys(attributesObj).length > 0 ? attributesObj : null,
@@ -220,43 +234,28 @@ export const AddPendingMaterialModal: React.FC<AddPendingMaterialModalProps> = (
           width: width ? parseFloat(width) : null,
           thickness: thickness ? parseFloat(thickness) : null,
           weight_per_unit: weightPerUnit ? parseFloat(weightPerUnit) : null,
-          pending_approval: true,
-          approval_status: 'pending',
-          requested_by: (await db.auth.getUser()).data.user?.id,
-          requested_at: new Date().toISOString(),
+          requested_by: requestedBy,
+          requested_at: requestedAt,
           order_package_context: orderPackageId,
         })
         .select()
         .single();
-      
-      if (variantError) throw variantError;
-      
-      // Add tags
-      if (selectedTags.length > 0) {
-        const tagInserts = selectedTags.map(tagId => ({
-          material_variant_id: variantData.id,
-          tag_id: tagId,
-        }));
-        
-        await db.query
-          .from('material_variant_tags')
-          .insert(tagInserts);
-      }
-      
-      // Add supplier pricing
+
+      if (variantRequestError) throw variantRequestError;
+
+      // Create pending supplier pricing request linked to pending variant
       const { error: pricingError } = await db.query
-        .from('supplier_pricing')
+        .from('supplier_pricing_requests')
         .insert({
-          material_variant_id: variantData.id,
+          material_variant_id: null,
+          variant_request_id: variantRequestData.id,
           supplier_id: selectedSupplier,
           price: parseFloat(price),
           price_per_unit: pricePerUnit ? parseFloat(pricePerUnit) : parseFloat(price),
           supplier_quantity: supplierQuantity ? parseFloat(supplierQuantity) : 1,
           suppliers_reference: suppliersReference.trim() || null,
-          pending_approval: true,
-          approval_status: 'pending',
-          requested_by: (await db.auth.getUser()).data.user?.id,
-          requested_at: new Date().toISOString(),
+          requested_by: requestedBy,
+          requested_at: requestedAt,
           order_package_context: orderPackageId,
         });
       
@@ -264,12 +263,17 @@ export const AddPendingMaterialModal: React.FC<AddPendingMaterialModalProps> = (
       
       Alert.alert(
         'Success', 
-        'Material added successfully! It will appear in the dropdown and can be used immediately. An admin will review it later.',
+        'Material request submitted. You can use it right away — an admin will review and approve it in the catalogue later.',
         [
           {
             text: 'OK',
             onPress: () => {
-              onSuccess(variantData.id);
+              onSuccess({
+                id: variantRequestData.id,
+                isPending: true,
+                label: variantRequestData.variant_name || variantName.trim(),
+                unitId: variantRequestData.unit_id || selectedUnit,
+              });
               resetForm();
               onClose();
             }

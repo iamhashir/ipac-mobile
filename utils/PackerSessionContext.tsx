@@ -37,6 +37,13 @@ interface PackerSessionContextType {
   // Validation helpers
   canAccessAttendance: () => boolean;
   canAccessPackaging: () => boolean;
+
+  // Retrospective Mode
+  isRetrospectiveMode: boolean;
+  retrospectiveDate: Date | null;
+  setRetrospectiveMode: (enabled: boolean) => void;
+  setRetrospectiveDate: (date: Date | null) => void;
+  getRetrospectiveTimestamp: () => string;
 }
 
 const PackerSessionContext = createContext<PackerSessionContextType | undefined>(undefined);
@@ -58,6 +65,23 @@ export const PackerSessionProvider: React.FC<PackerSessionProviderProps> = ({ ch
   const [session, setSession] = useState<PackerSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [shouldLoadSession, setShouldLoadSession] = useState(false);
+
+  // Retrospective Mode
+  const [isRetrospectiveMode, setRetrospectiveMode] = useState<boolean>(false);
+  const [retrospectiveDate, setRetrospectiveDate] = useState<Date | null>(null);
+
+  const getRetrospectiveTimestamp = () => {
+    if (!isRetrospectiveMode || !retrospectiveDate) {
+      return new Date().toISOString();
+    }
+    
+    // Increment the retrospective date by 1 minute on each call so things happen chronologically
+    const current = new Date(retrospectiveDate);
+    const next = new Date(current.getTime() + 60000); // add 1 minute
+    setRetrospectiveDate(next);
+    
+    return current.toISOString();
+  };
 
   // Only load session for packer role users
   useEffect(() => {
@@ -254,7 +278,12 @@ export const PackerSessionProvider: React.FC<PackerSessionProviderProps> = ({ ch
     markAttendanceCompleted,
     markPackagingStarted,
     canAccessAttendance,
-    canAccessPackaging
+    canAccessPackaging,
+    isRetrospectiveMode,
+    retrospectiveDate,
+    setRetrospectiveMode,
+    setRetrospectiveDate,
+    getRetrospectiveTimestamp
   };
 
   return (

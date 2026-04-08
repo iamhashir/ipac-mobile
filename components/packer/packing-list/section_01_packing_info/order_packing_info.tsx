@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Alert } from 'react-native';
+import { View, Alert, useWindowDimensions, DimensionValue } from 'react-native';
 import TwoTierEditableCard from '../common/TwoTierEditableCard';
 import { db } from '../../../../utils/api/supabase';
 import { PackageInfoChangeEvent } from './types';
@@ -26,13 +26,31 @@ export interface OrderPackingInfoProps {
   finalPackingTypeId?: string | null;
   editTarget?: 'original' | 'final';
   editable?: boolean;
+  useSeiFlow?: boolean;
+  requiresOriginalFirst?: boolean;
   onChange?: (change: PackageInfoChangeEvent) => void; // Callback when data changes
 }
 
-const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, originalInfoId, finalInfoId, orderPackageId, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, editTarget = 'final', editable = true, onChange }) => {
+const hasValue = (value: unknown) => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  return true;
+};
+
+const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, originalInfoId, finalInfoId, orderPackageId, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, editTarget = 'final', editable = true, useSeiFlow = false, requiresOriginalFirst = false, onChange }) => {
   const [boxTypes, setBoxTypes] = useState<{ label: string; value: string }[]>([]);
   const [packTypes, setPackTypes] = useState<{ label: string; value: string; labelShort?: string; tooltip?: string }[]>([]);
   const [finalId, setFinalId] = useState<string | null>(finalInfoId || null);
+  const [seiCategoryOptions, setSeiCategoryOptions] = useState<{ label: string; value: string; tooltip?: string }[]>([]);
+  const [seiProtectionOptions, setSeiProtectionOptions] = useState<{ label: string; value: string; tooltip?: string }[]>([]);
+  const [originalSeiCategoryId, setOriginalSeiCategoryId] = useState<string | null>(null);
+  const [finalSeiCategoryId, setFinalSeiCategoryId] = useState<string | null>(null);
+  const [originalSeiProtectionId, setOriginalSeiProtectionId] = useState<string | null>(null);
+  const [finalSeiProtectionId, setFinalSeiProtectionId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setFinalId(finalInfoId || null);
+  }, [finalInfoId, orderPackageId]);
 
   useEffect(() => {
     const load = async () => {
@@ -40,9 +58,59 @@ const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, or
       setBoxTypes((boxes || []).map((m: any) => ({ label: m.name, value: m.id })));
       const { data: pts } = await db.getAllPackingTypes();
       setPackTypes((pts || []).map((t: any) => ({ label: `${t.code} - ${t.name}`, labelShort: t.code, tooltip: t.name, value: t.id })));
+
+      if (useSeiFlow) {
+        const [{ data: categories }, { data: protections }] = await Promise.all([
+          db.getSeiCategories(),
+          db.getSeiProtections(),
+        ]);
+
+        setSeiCategoryOptions(
+          (categories || []).map((row: any) => ({
+            value: String(row.id),
+            label: row.code === null || row.code === undefined ? row.name : `${row.code} - ${row.name}`,
+            tooltip: row.description || undefined,
+          }))
+        );
+
+        setSeiProtectionOptions(
+          (protections || []).map((row: any) => ({
+            value: String(row.id),
+            label: `${row.code} - ${row.name}`,
+            tooltip: row.description || undefined,
+          }))
+        );
+      }
     };
     load();
-  }, []);
+  }, [useSeiFlow]);
+
+  useEffect(() => {
+    if (!useSeiFlow) return;
+
+    const infoIds = [originalInfoId, finalInfoId].filter(Boolean) as string[];
+    if (infoIds.length === 0) return;
+
+    const loadSei = async () => {
+      const { data, error } = await db.getPackageInfosByIds(infoIds as any);
+      if (error) {
+        console.log('➡️ OrderPackingInfo: failed loading package_info SEI fields', error);
+        return;
+      }
+
+      const rows = data || [];
+      const lookup = new Map((rows as any[]).map((row: any) => [row.id, row]));
+      const originalRow = originalInfoId ? lookup.get(originalInfoId) : null;
+      const finalRow = finalInfoId ? lookup.get(finalInfoId) : null;
+
+      setOriginalSeiCategoryId(originalRow?.sei_category !== null && originalRow?.sei_category !== undefined ? String(originalRow.sei_category) : null);
+      setFinalSeiCategoryId(finalRow?.sei_category !== null && finalRow?.sei_category !== undefined ? String(finalRow.sei_category) : null);
+      setOriginalSeiProtectionId(originalRow?.sei_protection !== null && originalRow?.sei_protection !== undefined ? String(originalRow.sei_protection) : null);
+      setFinalSeiProtectionId(finalRow?.sei_protection !== null && finalRow?.sei_protection !== undefined ? String(finalRow.sei_protection) : null);
+    };
+
+    loadSei();
+  }, [useSeiFlow, originalInfoId, finalInfoId]);
 
   const ensureFinal = async (): Promise<string | null> => {
     if (finalId) return finalId;
@@ -61,9 +129,9 @@ const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, or
     return data?.id || null;
   };
 
-  const save = async (fields: any) => {
+  const save = async (fields: any, targetTier: 'original' | 'final' = editTarget) => {
     let targetId: string | null | undefined = null;
-    if (editTarget === 'final') {
+    if (targetTier === 'final') {
       targetId = await ensureFinal();
     } else {
       targetId = originalInfoId || null;
@@ -84,22 +152,115 @@ const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, or
       infoId: targetId,
       fields,
       orderPackageId,
-      isFinal: editTarget === 'final',
-      updatedFinalInfoId: editTarget === 'final' ? targetId : undefined,
+      isFinal: targetTier === 'final',
+      updatedFinalInfoId: targetTier === 'final' ? targetId : undefined,
       source: 'info'
     });
   };
 
+  const getSelectLabel = (value: string | null, options: { label: string; value: string }[]) => {
+    if (!value) return null;
+    return options.find((option) => option.value === value)?.label || null;
+  };
+
+  const { width } = useWindowDimensions();
+  const isMobile = width < 768;
+
+  const rowStyle = isMobile ? { flexWrap: 'wrap' as const, flexDirection: 'row' as const, marginHorizontal: -4 } : { flexWrap: 'nowrap' as const, flexDirection: 'row' as const };
+  const cardStyle = isMobile ? { width: '25%' as DimensionValue, paddingHorizontal: 2, marginBottom: 8 } : undefined;
+
+  const resolveTier = (originalValue: unknown) => {
+    if (!requiresOriginalFirst) return editTarget;
+    return hasValue(originalValue) ? 'final' : 'original';
+  };
+
+  const quantityTier = resolveTier(original?.quantity ?? null);
+  const seiTier = resolveTier(originalPackingTypeId || null);
+  const boxTypeTier = resolveTier(originalBoxTypeId || null);
+  const tareTier = resolveTier(original?.tare ?? null);
+  const netTier = resolveTier(original?.netWeight ?? null);
+  const grossTier = resolveTier(original?.grossWeight ?? null);
+  const cogTier = resolveTier(original?.centerOfGravity ?? null);
+  const seiCategoryTier = resolveTier(originalSeiCategoryId || null);
+  const seiProtectionTier = resolveTier(originalSeiProtectionId || null);
+
   return (
-    <View className="flex-row" style={{ flexWrap: 'nowrap' }}>
+    <View style={rowStyle}>
       {/* Use flex to ensure all 7 cards stay on one line and fill parent width */}
-      <TwoTierEditableCard editTarget={editTarget} editable={editable} label="Quantity" original={original?.quantity ?? null} final={final?.quantity ?? null} type="number" onChange={(v) => save({ quantity: v })} flex={1} />
-  <TwoTierEditableCard highlightChanges={false} editTarget={editTarget} editable={editable} label="S.E.I" original={original?.sei ?? null} final={final?.sei ?? null} type="select" selectItems={packTypes} onChange={(v) => save({ packing_type_id: v })} flex={1} finalSelectValue={finalPackingTypeId || null} defaultSelectValue={originalPackingTypeId || null} />
-  <TwoTierEditableCard highlightChanges={false} editTarget={editTarget} editable={editable} label="Box Type" original={original?.boxType ?? null} final={final?.boxType ?? null} type="select" selectItems={boxTypes} onChange={(v) => save({ box_type_id: v })} flex={1.3} finalSelectValue={finalBoxTypeId || null} defaultSelectValue={originalBoxTypeId || null} />
-      <TwoTierEditableCard editTarget={editTarget} editable={editable} label="Tare" original={original?.tare ?? null} final={final?.tare ?? null} type="number" onChange={(v) => save({ tare: v })} flex={1.2} />
-      <TwoTierEditableCard editTarget={editTarget} editable={editable} label="Net Weight" original={original?.netWeight ?? null} final={final?.netWeight ?? null} type="number" onChange={(v) => save({ net_weight: v })} flex={1.3} />
-      <TwoTierEditableCard editTarget={editTarget} editable={editable} label="Gross Weight" original={original?.grossWeight ?? null} final={final?.grossWeight ?? null} type="number" onChange={(v) => save({ gross_weight: v })} flex={1.3} />
-      <TwoTierEditableCard editTarget={editTarget} editable={editable} label="Center of Gravity" original={original?.centerOfGravity ?? null} final={final?.centerOfGravity ?? null} type="switch" onChange={(v) => save({ center_of_gravity: !!v })} flex={1} />
+      <View style={cardStyle} className={!isMobile ? "flex-1" : ""}>
+        <TwoTierEditableCard editTarget={quantityTier} editable={editable} label="Quantity" original={original?.quantity ?? null} final={final?.quantity ?? null} type="number" onChange={(v, tier) => save({ quantity: v }, tier || quantityTier)} />
+      </View>
+      {useSeiFlow ? (
+        <>
+          <View style={cardStyle} className={!isMobile ? "flex-1" : ""}>
+             <TwoTierEditableCard
+               highlightChanges={false}
+               editTarget={seiCategoryTier}
+               editable={editable}
+               label="SEI Category"
+               original={getSelectLabel(originalSeiCategoryId, seiCategoryOptions) || '—'}
+               final={getSelectLabel(finalSeiCategoryId, seiCategoryOptions) || '—'}
+               type="select"
+               selectItems={seiCategoryOptions}
+               onChange={(value, tier) => {
+                 const resolvedTier = tier || seiCategoryTier;
+                 const cast = value ? Number(value) : null;
+                 if (resolvedTier === 'final') {
+                   setFinalSeiCategoryId(value || null);
+                 } else {
+                   setOriginalSeiCategoryId(value || null);
+                 }
+                 save({ sei_category: Number.isFinite(cast as number) ? cast : null }, resolvedTier);
+               }}
+               finalSelectValue={finalSeiCategoryId}
+               defaultSelectValue={originalSeiCategoryId}
+             />
+          </View>
+          <View style={cardStyle} className={!isMobile ? "flex-1" : ""}>
+            <TwoTierEditableCard
+              highlightChanges={false}
+              editTarget={seiProtectionTier}
+              editable={editable}
+              label="SEI Protection"
+              original={getSelectLabel(originalSeiProtectionId, seiProtectionOptions) || '—'}
+              final={getSelectLabel(finalSeiProtectionId, seiProtectionOptions) || '—'}
+              type="select"
+              selectItems={seiProtectionOptions}
+              onChange={(value, tier) => {
+                const resolvedTier = tier || seiProtectionTier;
+                const cast = value ? Number(value) : null;
+                if (resolvedTier === 'final') {
+                  setFinalSeiProtectionId(value || null);
+                } else {
+                  setOriginalSeiProtectionId(value || null);
+                }
+                save({ sei_protection: Number.isFinite(cast as number) ? cast : null }, resolvedTier);
+              }}
+              finalSelectValue={finalSeiProtectionId}
+              defaultSelectValue={originalSeiProtectionId}
+            />
+          </View>
+        </>
+      ) : (
+        <View style={cardStyle} className={!isMobile ? "flex-1" : ""}>
+          <TwoTierEditableCard highlightChanges={false} editTarget={seiTier} editable={editable} label="S.E.I" original={original?.sei ?? null} final={final?.sei ?? null} type="select" selectItems={packTypes} onChange={(v, tier) => save({ packing_type_id: v }, tier || seiTier)} finalSelectValue={finalPackingTypeId || null} defaultSelectValue={originalPackingTypeId || null} />
+        </View>
+      )}
+      <View style={cardStyle} className={!isMobile ? "flex-1" : ""}>
+        <TwoTierEditableCard highlightChanges={false} editTarget={boxTypeTier} editable={editable} label="Box Type" original={original?.boxType ?? null} final={final?.boxType ?? null} type="select" selectItems={boxTypes} onChange={(v, tier) => save({ box_type_id: v }, tier || boxTypeTier)} finalSelectValue={finalBoxTypeId || null} defaultSelectValue={originalBoxTypeId || null} />
+      </View>
+      <View style={cardStyle} className={!isMobile ? "flex-1" : ""}>
+        <TwoTierEditableCard editTarget={tareTier} editable={editable} label="Tare" original={original?.tare ?? null} final={final?.tare ?? null} type="number" onChange={(v, tier) => save({ tare: v }, tier || tareTier)} />
+      </View>
+      <View style={cardStyle} className={!isMobile ? "flex-1" : ""}>
+        <TwoTierEditableCard editTarget={netTier} editable={editable} label="Net Weight" original={original?.netWeight ?? null} final={final?.netWeight ?? null} type="number" onChange={(v, tier) => save({ net_weight: v }, tier || netTier)} />
+      </View>
+      <View style={cardStyle} className={!isMobile ? "flex-1" : ""}>
+        <TwoTierEditableCard editTarget={grossTier} editable={editable} label="Gross Weight" original={original?.grossWeight ?? null} final={final?.grossWeight ?? null} type="number" onChange={(v, tier) => save({ gross_weight: v }, tier || grossTier)} />
+      </View>
+      <View style={cardStyle} className={!isMobile ? "flex-1" : ""}>
+        <TwoTierEditableCard editTarget={cogTier} editable={editable} label="Center of Gravity" original={original?.centerOfGravity ?? null} final={final?.centerOfGravity ?? null} type="switch" onChange={(v, tier) => save({ center_of_gravity: !!v }, tier || cogTier)} />
+      </View>
     </View>
   );
 };
