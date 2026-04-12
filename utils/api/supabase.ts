@@ -673,9 +673,10 @@ const baseDb = {
         description,
         project_type,
         production_status,
-        commercial_status,
+        client_id,
         clients (
-          name
+          name,
+          portal_settings_id
         ),
         project_lead:profiles!project_lead_id (
           full_name
@@ -686,7 +687,7 @@ const baseDb = {
     
     // Transform the data to match expected format
     if (data) {
-      const client = unwrapSingleRelation<{ name?: string }>(data.clients);
+      const client = unwrapSingleRelation<{ name?: string, portal_settings_id?: string | null }>(data.clients);
       const projectLead = unwrapSingleRelation<{ full_name?: string }>(data.project_lead);
       return {
         data: {
@@ -696,8 +697,12 @@ const baseDb = {
           project_type: (data as any).project_type || 'standard',
           production_status: data.production_status || null,
           commercial_status: data.commercial_status || null,
+          client_id: (data as any).client_id,
           client_name: client?.name || 'Unknown Client',
-          project_lead_name: projectLead?.full_name || ''
+          project_lead_name: projectLead?.full_name || '',
+          client: {
+            portal_settings_id: client?.portal_settings_id || null
+          }
         },
         error
       };
@@ -1552,6 +1557,240 @@ const baseDb = {
       .select('id, code, name, includes_gas_protection, includes_vacuum_protection')
       .order('code');
     return { data, error };
+  },
+
+  // ===== Maintenance Portal & QR Code Methods =====
+
+  getMaintenanceItemsForPackages: async (opIds: UUID[], clientId?: UUID) => {
+    const { data, error } = await supabase
+      .from('maintenance_package_items')
+      .select(`
+        id,
+        quantity,
+        created_at,
+        order_package_id,
+        maintenance_db_id,
+        maintenance_items:maintenance_db!inner(
+          id,
+          client_id,
+          reference,
+          ipac_comments,
+          expected_qty,
+          packed_qty,
+          item_num,
+          description,
+          length,
+          width,
+          height,
+          net_weight,
+          maintenance_package_categories(label)
+        )
+      `)
+      .in('order_package_id', opIds);
+    return { data, error };
+  },
+
+  getUnassignedCatalogItems: async (clientId: UUID, search?: string) => {
+    let query = supabase
+      .from('maintenance_db')
+      .select(`
+        id,
+        client_id,
+        category_id,
+        reference,
+        expected_qty,
+        packed_qty,
+        ipac_comments,
+        item_num,
+        description,
+        length,
+        width,
+        height,
+        net_weight,
+        maintenance_package_categories(label)
+      `)
+      .eq('client_id', clientId)
+      .order('item_num', { ascending: true });
+
+    if (search && search.trim() !== '') {
+      // NOTE: Supabase OR with foreign tables requires filtering carefully or using an RPC.
+      // We will do a generic text search on the main table for reference if needed, 
+      // but typically we'd just fetch and filter client-side if it's not massive, 
+      // or we'll filter on the joined item_num/description.
+      // For now we'll fetch all unassigned for the client, then filter client-side to keep it robust.
+    }
+    
+    return await query;
+  },
+
+  getMaintenanceCatalogItemsByItemNumber: async (clientId: UUID, itemNumber: string) => {
+    const normalizedItemNumber = String(itemNumber || '').trim();
+    if (!normalizedItemNumber) {
+      return {
+        data: [],
+        error: { message: 'Item number is required' },
+      };
+    }
+
+    const asNumber = Number(normalizedItemNumber);
+    const filterValue = Number.isFinite(asNumber) && /^\d+$/.test(normalizedItemNumber)
+      ? asNumber
+      : normalizedItemNumber;
+
+    const { data, error } = await supabase
+      .from('maintenance_db')
+      .select(`
+        id,
+        client_id,
+        category_id,
+        reference,
+        expected_qty,
+        packed_qty,
+        ipac_comments,
+        item_num,
+        description,
+        length,
+        width,
+        height,
+        net_weight,
+        maintenance_package_categories(label)
+      `)
+      .eq('client_id', clientId)
+      .eq('item_num', filterValue)
+      .order('reference', { ascending: true });
+
+    return { data: data || [], error };
+  },
+
+  getMaintenanceCatalogItemByItemNumber: async (clientId: UUID, itemNumber: string) => {
+    const normalizedItemNumber = String(itemNumber || '').trim();
+    if (!normalizedItemNumber) {
+      return {
+        data: null,
+        error: { message: 'Item number is required' },
+      };
+    }
+
+    const asNumber = Number(normalizedItemNumber);
+    const filterValue = Number.isFinite(asNumber) && /^\d+$/.test(normalizedItemNumber)
+      ? asNumber
+      : normalizedItemNumber;
+
+    const { data, error } = await supabase
+      .from('maintenance_db')
+      .select(`
+        id,
+        client_id,
+        category_id,
+        reference,
+        expected_qty,
+        packed_qty,
+        ipac_comments,
+        item_num,
+        description,
+        length,
+        width,
+        height,
+        net_weight,
+        maintenance_package_categories(label)
+      `)
+      .eq('client_id', clientId)
+      .eq('item_num', filterValue)
+      .order('reference', { ascending: true })
+      .limit(1);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    return { data: data?.[0] || null, error: null };
+  },
+
+  assignItemToPackage: async (maintenanceDbId: UUID, orderPackageId: UUID, quantity: number = 1) => {
+    const parsedQty = Number(quantity);
+    if (!Number.isFinite(parsedQty) || parsedQty <= 0) {
+      return {
+        data: null,
+        error: { message: 'Quantity must be greater than 0' },
+      };
+    }
+
+    const { data: existing, error: existingError } = await supabase
+      .from('maintenance_package_items')
+      .select('id, quantity')
+      .eq('maintenance_db_id', maintenanceDbId)
+      .eq('order_package_id', orderPackageId)
+      .maybeSingle();
+
+    if (existingError) {
+      return { data: null, error: existingError };
+    }
+
+    if (existing?.id) {
+      const nextQty = Number(existing.quantity || 0) + parsedQty;
+      const { data, error } = await supabase
+        .from('maintenance_package_items')
+        .update({ quantity: nextQty })
+        .eq('id', existing.id)
+        .select()
+        .single();
+
+      return { data, error };
+    }
+
+    const { data, error } = await supabase
+      .from('maintenance_package_items')
+      .insert({
+        maintenance_db_id: maintenanceDbId,
+        order_package_id: orderPackageId,
+        quantity: parsedQty,
+      })
+      .select()
+      .single();
+
+    return { data, error };
+  },
+
+  unassignItemFromPackage: async (maintenancePackageItemId: UUID) => {
+    const { error } = await supabase
+      .from('maintenance_package_items')
+      .delete()
+      .eq('id', maintenancePackageItemId);
+
+    return { data: null, error };
+  },
+
+  getOrCreateQrToken: async (entityType: 'package' | 'item', entityId: UUID) => {
+    // 1. Try to find an existing active token
+    const { data: existing, error: findError } = await supabase
+      .from('qr_codes')
+      .select('token')
+      .eq('entity_type', entityType)
+      .eq('entity_id', entityId)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (existing) {
+      return { data: existing.token, error: null };
+    }
+
+    // 2. If no token found, insert a new one
+    // The table handles generating the unique token on DEFAULT
+    const { data: inserted, error: insertError } = await supabase
+      .from('qr_codes')
+      .insert({
+        entity_type: entityType,
+        entity_id: entityId,
+        is_active: true
+      })
+      .select('token')
+      .single();
+
+    if (insertError) {
+      return { data: null, error: insertError };
+    }
+
+    return { data: inserted?.token || null, error: null };
   },
 };
 

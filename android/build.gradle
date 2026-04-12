@@ -22,3 +22,11 @@ allprojects {
 
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"
+
+// Some Windows setups deny writes under node_modules/**/build during Gradle tasks.
+// Redirect build outputs for affected modules to a writable folder inside android/.
+subprojects { subproject ->
+  if (subproject.name == 'expo-constants') {
+    subproject.buildDir = "${rootProject.projectDir}/.gradle-build/${subproject.name}"
+  }
+}

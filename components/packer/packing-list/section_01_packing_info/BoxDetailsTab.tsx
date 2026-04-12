@@ -6,6 +6,8 @@ import OrderPackingInfo, { BoxInfoDetails } from './order_packing_info';
 import OrderPackingDimensions from './order_packing_dimensions';
 import { DimensionsTriple } from '../common/DimensionsBox';
 import OrderPackingItems from '../section_02_packing_items/order_packing_items';
+import MaintenanceItemsSection from './maintenance/MaintenanceItemsSection';
+import QRGeneratorSection from './maintenance/QRGeneratorSection';
 import TwoTierEditableCard from '../common/TwoTierEditableCard';
 import { PackageInfoChangeEvent } from './types';
 
@@ -39,8 +41,10 @@ interface BoxDetailsTabProps {
   projectType?: 'standard' | 'maintenance' | 'survey' | null;
   onStatusChange?: () => void;
   onReferenceChange?: (value: string | null) => Promise<void> | void;
-  onDataChange?: (change: PackageInfoChangeEvent) => void; // Callback when any data changes
+  onDataChange?: (change: PackageInfoChangeEvent) => void;
   hidePackingItems?: boolean;
+  hasPortal?: boolean;
+  clientId?: string | null;
 }
 
 const hasAnyValue = (value: unknown): boolean => {
@@ -54,7 +58,7 @@ const normalizeReferenceValue = (value: unknown): string | null => {
   return normalized.length > 0 ? normalized : null;
 };
 
-const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, useSeiFlow = false, reference = null, status, isOrderCompleted, projectType = 'standard', onStatusChange, onReferenceChange, onDataChange, hidePackingItems = false }) => {
+const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, useSeiFlow = false, reference = null, status, isOrderCompleted, projectType = 'standard', onStatusChange, onReferenceChange, onDataChange, hidePackingItems = false, hasPortal = false, clientId = null }) => {
   const isEditable = status !== 'packed' && !isOrderCompleted;
   const requiresOriginalFirst = projectType === 'maintenance' || projectType === 'survey';
   const referenceEditTarget: 'original' | 'final' = requiresOriginalFirst
@@ -256,12 +260,32 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
         />
       </View>
 
-      {!hidePackingItems && (
+      {!hidePackingItems && !hasPortal && (
         <View className="mt-4">
           <OrderPackingItems 
             orderPackageId={orderPackageId} 
             onAttachPics={onAttachPics} 
             editable={isEditable}
+          />
+        </View>
+      )}
+
+      {hasPortal && clientId && (
+        <View className="mt-4">
+          <MaintenanceItemsSection 
+            orderPackageId={orderPackageId} 
+            clientId={clientId}
+            editable={isEditable}
+          />
+        </View>
+      )}
+
+      {hasPortal && (
+        <View className="mt-4">
+          <QRGeneratorSection 
+            entityType="package"
+            entityId={orderPackageId}
+            label={`Box #${packageNumber ?? '—'}`}
           />
         </View>
       )}

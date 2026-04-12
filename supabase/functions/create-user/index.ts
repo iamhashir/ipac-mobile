@@ -75,7 +75,7 @@ serve(async (req) => {
     }
 
     // Parse the request body
-    const { email, password, full_name, username, phone_number, role_name } = await req.json()
+    const { email, password, full_name, username, phone_number, role_name, client_id } = await req.json()
 
     // Validate required fields
     if (!email || !password || !full_name || !role_name) {
@@ -123,6 +123,7 @@ serve(async (req) => {
         phone_number,
         role_id: role.id,
         status: 'active',
+        client_id: client_id || null,
         packer_status: role_name === 'packer' ? 'available' : null
       })
       .select()

@@ -311,16 +311,29 @@ export default function PackingListPage() {
       // Load package_items and aggregate names
       const opIds = sorted.map((p) => p.id);
       if (opIds.length) {
-        const { data: items } = await db.getPackageItemsByOrderPackageIds(
-          opIds
-        );
+        // Evaluate if this order is using the new portal flow
+        const hasPortal = !!(orderData?.client as any)?.portal_settings_id;
+        
         const em: Record<string, string> = {};
-        (items || []).forEach((it: any) => {
-          const key = it.order_package_id;
-          const label = it.designation || "";
-          if (!em[key]) em[key] = label;
-          else if (label) em[key] = `${em[key]}, ${label}`;
-        });
+        
+        if (hasPortal && orderData?.client_id) {
+          const { data: maintItems } = await db.getMaintenanceItemsForPackages(opIds, orderData.client_id);
+          (maintItems || []).forEach((it: any) => {
+            const key = it.order_package_id;
+            // Use description, or item_num, or reference as the label
+            const label = it.maintenance_items?.description || it.maintenance_items?.item_num || it.maintenance_items?.reference || "";
+            if (!em[key]) em[key] = label;
+            else if (label) em[key] = `${em[key]}, ${label}`;
+          });
+        } else {
+          const { data: items } = await db.getPackageItemsByOrderPackageIds(opIds);
+          (items || []).forEach((it: any) => {
+            const key = it.order_package_id;
+            const label = it.designation || "";
+            if (!em[key]) em[key] = label;
+            else if (label) em[key] = `${em[key]}, ${label}`;
+          });
+        }
         setEquipmentMap(em);
 
         // Check which boxes have started tasks (any task_packages entries)
@@ -657,6 +670,8 @@ export default function PackingListPage() {
                 handleOrderPackageReferenceChange(p.id, nextReference)
               }
               onDataChange={handlePackageInfoChange}
+              hasPortal={!!(order?.client as any)?.portal_settings_id}
+              clientId={order?.client_id}
             />
 
             {/* Comments section */}
