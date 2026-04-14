@@ -134,6 +134,53 @@ export default function PackerDashboard() {
     loadOrderTeamLeads();
   }, [selectedOrder, profile?.id]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSelectedOrderAssignments = async () => {
+      if (!selectedOrder) {
+        setIsAddRemoveMode(false);
+        return;
+      }
+
+      try {
+        const { data: orderPackers, error } = await db.getOrderPackers(selectedOrder);
+        if (error) {
+          console.error('Error loading selected order packers:', error);
+          return;
+        }
+
+        if (cancelled) return;
+
+        const normalizedPackers = normalizeOrderPackers(orderPackers);
+        const assignedIds = collectPackerIds(normalizedPackers);
+
+        if (assignedIds.length > 0) {
+          setSelectedPackers(assignedIds);
+        } else if (profile?.id) {
+          const currentUser = allPackers.find((packer) => packer.id === profile.id);
+          if (currentUser?.is_available) {
+            setSelectedPackers([profile.id]);
+          } else {
+            setSelectedPackers([]);
+          }
+        } else {
+          setSelectedPackers([]);
+        }
+
+        setIsAddRemoveMode(false);
+      } catch (error) {
+        console.error('Error syncing selected order assignments:', error);
+      }
+    };
+
+    void loadSelectedOrderAssignments();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedOrder]);
+
   const restoreSessionState = async () => {
     if (!session || !session.order_id) return;
     
@@ -1202,10 +1249,12 @@ export default function PackerDashboard() {
                   // In add/remove mode for active sessions
                   const showAddButton = isAddRemoveMode && isActiveSession && !isSelected && packer.is_available;
                   const showRemoveButton = isAddRemoveMode && isActiveSession && isSelected;
+                  const showQuickRemoveButton = !isAddRemoveMode && !isActiveSession && isSelected;
                   
-                  // Allow packer selection when: 1) No active session (first time selecting), OR 2) In add/remove mode for active sessions
+                  // Allow packer selection when not in an active session.
+                  // Keep selected rows clickable so assigned busy packers can be removed.
                   const isNewProjectSelection = selectedOrder && !isActiveSession;
-                  const canClickToSelect = isNewProjectSelection && packer.is_available;
+                  const canClickToSelect = Boolean(isNewProjectSelection && (packer.is_available || isSelected));
 
                   const cardCls = `${isCompact ? 'p-2' : 'p-3'} mb-2 rounded-lg border flex-row items-center justify-between ${
                     isSelected
@@ -1301,6 +1350,20 @@ export default function PackerDashboard() {
                             <Text className={`text-xs font-semibold ${isProjectLead ? 'text-white' : 'text-gray-600'}`}>
                               {isProjectLead ? '★ Lead' : 'Make Lead'}
                             </Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+
+                      {showQuickRemoveButton && (
+                        <View className="flex-row items-center gap-2">
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              togglePackerSelection(packer.id);
+                            }}
+                            className="px-3 py-1.5 bg-red-500 rounded-lg"
+                          >
+                            <Text className="text-white text-xs font-semibold">Remove</Text>
                           </TouchableOpacity>
                         </View>
                       )}

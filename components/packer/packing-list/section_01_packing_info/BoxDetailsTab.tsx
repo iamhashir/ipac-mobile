@@ -1,7 +1,7 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, Alert } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, TouchableOpacity, Alert, Platform, ActivityIndicator } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { Camera } from 'lucide-react-native';
+import { Camera, Printer } from 'lucide-react-native';
 import OrderPackingInfo, { BoxInfoDetails } from './order_packing_info';
 import OrderPackingDimensions from './order_packing_dimensions';
 import { DimensionsTriple } from '../common/DimensionsBox';
@@ -59,6 +59,7 @@ const normalizeReferenceValue = (value: unknown): string | null => {
 };
 
 const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, useSeiFlow = false, reference = null, status, isOrderCompleted, projectType = 'standard', onStatusChange, onReferenceChange, onDataChange, hidePackingItems = false, hasPortal = false, clientId = null }) => {
+  const [printingIpacTest, setPrintingIpacTest] = useState(false);
   const isEditable = status !== 'packed' && !isOrderCompleted;
   const requiresOriginalFirst = projectType === 'maintenance' || projectType === 'survey';
   const referenceEditTarget: 'original' | 'final' = requiresOriginalFirst
@@ -168,12 +169,68 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
     }
   };
 
+  const handlePrintIpacTest = async () => {
+    if (Platform.OS === 'web') {
+      Alert.alert('Unavailable', 'Direct BLE printing is not available on web.');
+      return;
+    }
+
+    try {
+      setPrintingIpacTest(true);
+      const { printM220TextLabelDirect } = await import('../../../../utils/printing/m220DirectPrint');
+
+      await printM220TextLabelDirect('IPAC', {
+        density: 6,
+        feedDots: 48,
+        protocolOverride: 'm-series',
+        dataWriteMode: 'withoutResponse',
+        postPrintDelayMs: 3000,
+        onStatus: (statusText) => console.log(`[M220 IPAC Test] ${statusText}`),
+      });
+
+      Alert.alert('Direct Print Sent', 'Test label text "IPAC" was sent to the printer.');
+    } catch (e: any) {
+      console.error('Error printing IPAC test label:', e);
+      const message = String(e?.message || 'Unable to print IPAC test label.');
+
+      if (message.toLowerCase().includes('expo go')) {
+        Alert.alert(
+          'Dev Build Required',
+          'Direct BLE printing cannot run in Expo Go. Build/install a Development Client and run with expo start --dev-client.'
+        );
+      } else {
+        Alert.alert('Direct Print Failed', message);
+      }
+    } finally {
+      setPrintingIpacTest(false);
+    }
+  };
+
   return (
     <View className="bg-white rounded-b-lg p-4">
       <View className="flex-row items-center justify-between">
         <Text className="text-lg font-semibold text-gray-800">Box #{packageNumber ?? '—'}</Text>
-        {!isOrderCompleted && (
-          <View className="flex-row gap-2">
+        {(hasPortal || !isOrderCompleted) && (
+          <View className="flex-row gap-2 items-center">
+            {hasPortal && (
+              <TouchableOpacity
+                onPress={handlePrintIpacTest}
+                disabled={printingIpacTest}
+                className="px-3 py-1 rounded border border-teal-700 bg-teal-100 justify-center items-center"
+              >
+                {printingIpacTest ? (
+                  <ActivityIndicator size="small" color="#0f766e" />
+                ) : (
+                  <View className="flex-row items-center">
+                    <Printer size={16} color="#0f766e" />
+                    <Text className="text-teal-800 text-sm font-semibold ml-1">Test IPAC</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
+
+            {!isOrderCompleted && (
+              <>
             <TouchableOpacity 
               onPress={askSource} 
               accessibilityLabel="Attach images"
@@ -200,6 +257,8 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
                   Box Packed
                 </Text>
               </TouchableOpacity>
+            )}
+              </>
             )}
           </View>
         )}

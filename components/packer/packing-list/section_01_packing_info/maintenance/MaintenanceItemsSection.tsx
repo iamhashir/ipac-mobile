@@ -146,8 +146,6 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
         labelWidthMm: selectedPreset.labelWidthMm,
         moduleScale: selectedPreset.moduleScale,
         marginModules: selectedPreset.marginModules,
-        protocolOverride: 'm110',
-        m110MediaType: 10,
         dataWriteMode: 'withoutResponse',
         postPrintDelayMs: 3000,
         onStatus: (status) => console.log(`[M220 Item Print] ${status}`),

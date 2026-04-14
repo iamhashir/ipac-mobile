@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { View, Text, TouchableOpacity, Modal } from 'react-native';
+import { View, Text, TouchableOpacity } from 'react-native';
 
 export type AlertType = 'success' | 'error' | 'warning' | 'info';
 
@@ -58,29 +58,23 @@ export const Alert: React.FC<AlertProps> = ({
 
   if (floating) {
     return (
-      <Modal 
-        visible={visible} 
-        animationType="fade" 
-        transparent 
-        statusBarTranslucent
-      >
-        <View className="flex-1" pointerEvents="box-none">
-          <View className={floatWrap} pointerEvents="box-none">
-            <View className={`border ${c.border} ${c.bg} rounded-lg p-3 flex-row items-start shadow-lg`}>
-              <Text className={`mr-2 ${c.text}`}>{c.icon}</Text>
-              <View className="flex-1">
-                {title ? <Text className={`font-semibold ${c.text}`}>{title}</Text> : null}
-                {message ? <Text className={`${c.text}`}>{message}</Text> : null}
-              </View>
-              {dismissible && (
-                <TouchableOpacity onPress={onClose} className="ml-2 px-2">
-                  <Text className={`${c.text}`}>×</Text>
-                </TouchableOpacity>
-              )}
-            </View>
+      <View className={floatWrap} pointerEvents="box-none">
+        <View
+          className={`border ${c.border} ${c.bg} rounded-lg p-3 flex-row items-start shadow-lg`}
+          pointerEvents="auto"
+        >
+          <Text className={`mr-2 ${c.text}`}>{c.icon}</Text>
+          <View className="flex-1">
+            {title ? <Text className={`font-semibold ${c.text}`}>{title}</Text> : null}
+            {message ? <Text className={`${c.text}`}>{message}</Text> : null}
           </View>
+          {dismissible && (
+            <TouchableOpacity onPress={onClose} className="ml-2 px-2">
+              <Text className={`${c.text}`}>×</Text>
+            </TouchableOpacity>
+          )}
         </View>
-      </Modal>
+      </View>
     );
   }
 

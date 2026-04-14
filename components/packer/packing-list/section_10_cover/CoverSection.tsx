@@ -1,6 +1,5 @@
 import React from "react";
 import { View } from "react-native";
-import CollapsibleCard from "../common/CollapsibleCard";
 import OrderPackageMaterialsSection from "../shared/materials/OrderPackageMaterialsSection";
 
 interface CoverSectionProps {
@@ -18,30 +17,24 @@ const CoverSection: React.FC<CoverSectionProps> = ({
 }) => {
   return (
     <View className="mt-4">
-      <CollapsibleCard
+      <OrderPackageMaterialsSection
+        orderPackageId={orderPackageId}
         title="Cover"
-        containerClassName="border-gray-500 bg-amber-50 mx-4"
-        titleClassName=" text-xl font-bold"
-        defaultOpen
-      >
-        <OrderPackageMaterialsSection
-          orderPackageId={orderPackageId}
-          title="Cover Materials"
-          materialType="Cover"
-          variantSources={[
-            { type: "material", value: "Defensor" },
-            { type: "material", value: "Tarpaulin" },
-            { type: "material", value: "Tarpulin" },
-            { type: "material", value: "Heatshrink" },
-          ]}
-          quantityLabel="Qty"
-          mediaDesignation="cover"
-          editable={editable}
-          hideUseButton={hideUseButton}
-          hideRemoveButton={hideRemoveButton}
-          addPendingConfig={{ autoTag: "Cover", materialType: "Cover" }}
-        />
-      </CollapsibleCard>
+        materialType="Cover"
+        variantSources={[
+          { type: "material", value: "Defensor" },
+          { type: "material", value: "Tarpaulin" },
+          { type: "material", value: "Tarpulin" },
+          { type: "material", value: "Heatshrink" },
+        ]}
+        quantityLabel="Qty"
+        mediaDesignation="cover"
+        editable={editable}
+        hideUseButton={hideUseButton}
+        hideRemoveButton={hideRemoveButton}
+        addPendingConfig={{ autoTag: "Cover", materialType: "Cover" }}
+        hideInnerSectionTitle
+      />
     </View>
   );
 };

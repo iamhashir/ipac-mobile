@@ -4,10 +4,11 @@ import Constants from 'expo-constants';
 import qrcode from 'qrcode-generator';
 
 const BLE_SCAN_TIMEOUT_MS = 12000;
-const BLE_CHUNK_SIZE = 128;
-const BLE_CHUNK_DELAY_MS = 20;
+const BLE_CHUNK_SIZE = 64;
+const BLE_CHUNK_DELAY_MS = 40;
 const DEFAULT_POST_PRINT_DELAY_MS = 1800;
 const DEFAULT_MAX_RASTER_LINES_PER_BLOCK = 1200;
+let hasLoggedWriteFallbackWarning = false;
 const BLE_SERVICE_UUID_CANDIDATES = [
   '0000ff00-0000-1000-8000-00805f9b34fb',
   '0000ffe0-0000-1000-8000-00805f9b34fb',
@@ -15,6 +16,7 @@ const BLE_SERVICE_UUID_CANDIDATES = [
   '49535343-fe7d-4ae5-8fa9-9fafd205e455',
 ];
 const WRITE_CHARACTERISTIC_SUFFIX = 'ff02';
+const NOTIFY_CHARACTERISTIC_SUFFIX = 'ff01';
 
 const M220_WIDTH_BYTES = 72; // 576px @ 203 DPI
 const DEFAULT_LABEL_WIDTH_MM = 40;
@@ -131,6 +133,55 @@ interface RasterResult {
   heightLines: number;
 }
 
+const TEXT_GLYPH_WIDTH = 5;
+const TEXT_GLYPH_HEIGHT = 7;
+const TEXT_GLYPH_SPACING = 1;
+
+const TEXT_GLYPHS_5X7: Record<string, string[]> = {
+  ' ': ['00000', '00000', '00000', '00000', '00000', '00000', '00000'],
+  '?': ['01110', '10001', '00010', '00100', '00100', '00000', '00100'],
+  A: ['01110', '10001', '10001', '11111', '10001', '10001', '10001'],
+  B: ['11110', '10001', '10001', '11110', '10001', '10001', '11110'],
+  C: ['01111', '10000', '10000', '10000', '10000', '10000', '01111'],
+  D: ['11110', '10001', '10001', '10001', '10001', '10001', '11110'],
+  E: ['11111', '10000', '10000', '11110', '10000', '10000', '11111'],
+  F: ['11111', '10000', '10000', '11110', '10000', '10000', '10000'],
+  G: ['01111', '10000', '10000', '10111', '10001', '10001', '01110'],
+  H: ['10001', '10001', '10001', '11111', '10001', '10001', '10001'],
+  I: ['11111', '00100', '00100', '00100', '00100', '00100', '11111'],
+  J: ['00001', '00001', '00001', '00001', '10001', '10001', '01110'],
+  K: ['10001', '10010', '10100', '11000', '10100', '10010', '10001'],
+  L: ['10000', '10000', '10000', '10000', '10000', '10000', '11111'],
+  M: ['10001', '11011', '10101', '10101', '10001', '10001', '10001'],
+  N: ['10001', '11001', '10101', '10011', '10001', '10001', '10001'],
+  O: ['01110', '10001', '10001', '10001', '10001', '10001', '01110'],
+  P: ['11110', '10001', '10001', '11110', '10000', '10000', '10000'],
+  Q: ['01110', '10001', '10001', '10001', '10101', '10010', '01101'],
+  R: ['11110', '10001', '10001', '11110', '10100', '10010', '10001'],
+  S: ['01111', '10000', '10000', '01110', '00001', '00001', '11110'],
+  T: ['11111', '00100', '00100', '00100', '00100', '00100', '00100'],
+  U: ['10001', '10001', '10001', '10001', '10001', '10001', '01110'],
+  V: ['10001', '10001', '10001', '10001', '10001', '01010', '00100'],
+  W: ['10001', '10001', '10001', '10101', '10101', '10101', '01010'],
+  X: ['10001', '10001', '01010', '00100', '01010', '10001', '10001'],
+  Y: ['10001', '10001', '01010', '00100', '00100', '00100', '00100'],
+  Z: ['11111', '00001', '00010', '00100', '01000', '10000', '11111'],
+  '0': ['01110', '10001', '10011', '10101', '11001', '10001', '01110'],
+  '1': ['00100', '01100', '00100', '00100', '00100', '00100', '01110'],
+  '2': ['01110', '10001', '00001', '00010', '00100', '01000', '11111'],
+  '3': ['11110', '00001', '00001', '01110', '00001', '00001', '11110'],
+  '4': ['00010', '00110', '01010', '10010', '11111', '00010', '00010'],
+  '5': ['11111', '10000', '10000', '11110', '00001', '00001', '11110'],
+  '6': ['01110', '10000', '10000', '11110', '10001', '10001', '01110'],
+  '7': ['11111', '00001', '00010', '00100', '01000', '01000', '01000'],
+  '8': ['01110', '10001', '10001', '01110', '10001', '10001', '01110'],
+  '9': ['01110', '10001', '10001', '01111', '00001', '00010', '11100'],
+  '-': ['00000', '00000', '00000', '11111', '00000', '00000', '00000'],
+  '.': ['00000', '00000', '00000', '00000', '00000', '00110', '00110'],
+  '/': ['00001', '00010', '00100', '01000', '10000', '00000', '00000'],
+  ':': ['00000', '00110', '00110', '00000', '00110', '00110', '00000'],
+};
+
 const buildQrRaster = (
   value: string,
   widthBytes: number,
@@ -184,6 +235,89 @@ const buildQrRaster = (
       }
     }
   }
+
+  return { data: raster, widthBytes, heightLines };
+};
+
+const buildTextRaster = (
+  value: string,
+  widthBytes: number,
+  preferredScale = 6,
+  horizontalMarginDots = 12,
+  verticalMarginDots = 14,
+  alignment: RasterAlignment = 'center'
+): RasterResult => {
+  const lines = String(value)
+    .toUpperCase()
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd());
+
+  const safeLines = lines.length > 0 ? lines : ['?'];
+  const widthPixels = widthBytes * 8;
+  const safeHorizontalMargin = clamp(Math.round(horizontalMarginDots), 0, Math.floor(widthPixels / 3));
+  const safeVerticalMargin = clamp(Math.round(verticalMarginDots), 0, 120);
+
+  const getLineUnits = (line: string): number => {
+    const printableLine = line.length > 0 ? line : ' ';
+    return printableLine.length * TEXT_GLYPH_WIDTH + Math.max(0, printableLine.length - 1) * TEXT_GLYPH_SPACING;
+  };
+
+  const maxLineUnits = Math.max(1, ...safeLines.map(getLineUnits));
+  const maxTextWidthPixels = Math.max(8, widthPixels - safeHorizontalMargin * 2);
+  const maxScale = Math.max(1, Math.floor(maxTextWidthPixels / maxLineUnits));
+  const scale = clamp(Math.round(preferredScale), 1, maxScale);
+  const lineGapPixels = Math.max(1, Math.floor(scale / 2));
+
+  const textHeightPixels =
+    safeLines.length * TEXT_GLYPH_HEIGHT * scale + Math.max(0, safeLines.length - 1) * lineGapPixels;
+  const heightLines = Math.max(1, textHeightPixels + safeVerticalMargin * 2);
+
+  const raster = new Uint8Array(widthBytes * heightLines);
+
+  const setBlackPixel = (x: number, y: number) => {
+    if (x < 0 || x >= widthPixels || y < 0 || y >= heightLines) return;
+
+    const byteIndex = y * widthBytes + Math.floor(x / 8);
+    const bitMask = 1 << (7 - (x % 8));
+    raster[byteIndex] |= bitMask;
+  };
+
+  safeLines.forEach((line, lineIndex) => {
+    const printableLine = line.length > 0 ? line : ' ';
+    const lineWidthUnits = getLineUnits(printableLine);
+    const lineWidthPixels = lineWidthUnits * scale;
+
+    const startX =
+      alignment === 'left'
+        ? safeHorizontalMargin
+        : alignment === 'right'
+          ? Math.max(0, widthPixels - safeHorizontalMargin - lineWidthPixels)
+          : Math.max(0, Math.floor((widthPixels - lineWidthPixels) / 2));
+
+    const startY = safeVerticalMargin + lineIndex * (TEXT_GLYPH_HEIGHT * scale + lineGapPixels);
+
+    for (let charIndex = 0; charIndex < printableLine.length; charIndex += 1) {
+      const char = printableLine[charIndex];
+      const glyph = TEXT_GLYPHS_5X7[char] ?? TEXT_GLYPHS_5X7['?'];
+      const charX = startX + charIndex * (TEXT_GLYPH_WIDTH + TEXT_GLYPH_SPACING) * scale;
+
+      for (let row = 0; row < TEXT_GLYPH_HEIGHT; row += 1) {
+        const rowPattern = glyph[row] ?? '00000';
+        for (let col = 0; col < TEXT_GLYPH_WIDTH; col += 1) {
+          if (rowPattern[col] !== '1') continue;
+
+          const pixelXStart = charX + col * scale;
+          const pixelYStart = startY + row * scale;
+
+          for (let dy = 0; dy < scale; dy += 1) {
+            for (let dx = 0; dx < scale; dx += 1) {
+              setBlackPixel(pixelXStart + dx, pixelYStart + dy);
+            }
+          }
+        }
+      }
+    }
+  });
 
   return { data: raster, widthBytes, heightLines };
 };
@@ -310,6 +444,7 @@ interface ConnectedPrinter {
   device: Device;
   serviceUUID: string;
   writeCharacteristic: Characteristic;
+  notifyCharacteristic: Characteristic | null;
 }
 
 const resolvePrintProtocol = (device: Device, protocolOverride?: 'auto' | PrintProtocol): PrintProtocol => {
@@ -319,8 +454,13 @@ const resolvePrintProtocol = (device: Device, protocolOverride?: 'auto' | PrintP
 
   const upperName = `${device.name ?? ''} ${device.localName ?? ''}`.toUpperCase();
 
-  // Q-prefix devices are commonly M110S-family in field deployments.
-  if (upperName.startsWith('Q') || upperName.includes('M110') || upperName.includes('M120')) {
+  // M220 devices frequently broadcast as Q-prefixed serial strings and require
+  // the M110 command set, including the footer, to flush buffered print jobs.
+  if (upperName.startsWith('Q') || upperName.startsWith('M220') || upperName.includes('M220')) {
+    return 'm110';
+  }
+
+  if (upperName.includes('M110') || upperName.includes('M120')) {
     return 'm110';
   }
 
@@ -330,12 +470,13 @@ const resolvePrintProtocol = (device: Device, protocolOverride?: 'auto' | PrintP
 const resolvePrinterHeadWidthBytes = (device: Device, protocol: PrintProtocol): number => {
   const upperName = `${device.name ?? ''} ${device.localName ?? ''}`.toUpperCase();
 
-  if (upperName.startsWith('Q')) return 48;
+  // M220 family keeps a 72-byte head even when using M110 command framing.
+  if (upperName.startsWith('Q') || upperName.includes('M220') || upperName.includes('M221')) return 72;
+  if (upperName.includes('M250') || upperName.includes('M260')) return 72;
+  if (upperName.includes('M200')) return 76;
   if (protocol === 'm110' || upperName.includes('M110') || upperName.includes('M120')) return 48;
   if (upperName.includes('M02') || upperName.includes('T02')) return 48;
   if (upperName.includes('M03') || upperName.includes('M04')) return 54;
-  if (upperName.includes('M200')) return 76;
-  if (upperName.includes('M250') || upperName.includes('M260') || upperName.includes('M220') || upperName.includes('M221')) return 72;
 
   // Unknown M-series devices default to 72 bytes, matching myphomemo's default profile.
   return M220_WIDTH_BYTES;
@@ -369,14 +510,29 @@ const findWritableCharacteristic = async (device: Device): Promise<ConnectedPrin
       (char) => uuidEndsWith(char.uuid, WRITE_CHARACTERISTIC_SUFFIX) && (char.isWritableWithoutResponse || char.isWritableWithResponse)
     );
 
-    if (preferred) {
-      return { device: ready, serviceUUID: service.uuid, writeCharacteristic: preferred };
+    const writeChar = preferred ?? chars.find((char) => char.isWritableWithoutResponse || char.isWritableWithResponse);
+    if (!writeChar) continue;
+
+    // Subscribe to the notify characteristic (ff01) so the BLE bridge forwards
+    // data to the print head. Some Phomemo bridges hold the UART in reset until
+    // the host enables notifications (CCCD = 0x0001).
+    const notifyChar = chars.find((char) => uuidEndsWith(char.uuid, NOTIFY_CHARACTERISTIC_SUFFIX) && char.isNotifiable) ?? null;
+    if (notifyChar) {
+      try {
+        // monitorCharacteristicForService is synchronous (returns Subscription).
+        // Calling it writes the CCCD descriptor, enabling BLE notifications on the
+        // printer's ff01 characteristic so the UART bridge forwards data to the print head.
+        ready.monitorCharacteristicForService(
+          service.uuid,
+          notifyChar.uuid,
+          () => { /* status notifications — ignored */ }
+        );
+      } catch (_) {
+        // Non-fatal: proceed even if notifications can't be enabled.
+      }
     }
 
-    const fallback = chars.find((char) => char.isWritableWithoutResponse || char.isWritableWithResponse);
-    if (fallback) {
-      return { device: ready, serviceUUID: service.uuid, writeCharacteristic: fallback };
-    }
+    return { device: ready, serviceUUID: service.uuid, writeCharacteristic: writeChar, notifyCharacteristic: notifyChar };
   }
 
   throw new Error('Connected to printer, but no writable characteristic was found.');
@@ -392,12 +548,35 @@ const writePacket = async (printer: ConnectedPrinter, data: Uint8Array, mode: Wr
 
   if (mode === 'withResponse') {
     if (canWriteWithResponse) {
-      await printer.device.writeCharacteristicWithResponseForService(
-        printer.serviceUUID,
-        printer.writeCharacteristic.uuid,
-        payloadBase64
-      );
-      return;
+      try {
+        await printer.device.writeCharacteristicWithResponseForService(
+          printer.serviceUUID,
+          printer.writeCharacteristic.uuid,
+          payloadBase64
+        );
+        return;
+      } catch (writeWithResponseError: any) {
+        if (!canWriteWithoutResponse) {
+          throw writeWithResponseError;
+        }
+
+        // Some M220 firmwares advertise WR but reject it at runtime on ff02.
+        // Fall back to WNR for this packet so the print job can continue.
+        if (!hasLoggedWriteFallbackWarning) {
+          hasLoggedWriteFallbackWarning = true;
+          console.warn(
+            '[M220 Direct Print] write-with-response failed, falling back to write-without-response.',
+            writeWithResponseError?.message || writeWithResponseError
+          );
+        }
+        await delay(25);
+        await printer.device.writeCharacteristicWithoutResponseForService(
+          printer.serviceUUID,
+          printer.writeCharacteristic.uuid,
+          payloadBase64
+        );
+        return;
+      }
     }
 
     if (canWriteWithoutResponse) {
@@ -408,6 +587,8 @@ const writePacket = async (printer: ConnectedPrinter, data: Uint8Array, mode: Wr
       );
       return;
     }
+
+    throw new Error('Connected to printer, but write characteristic does not allow write-with-response or write-without-response.');
   }
 
   if (mode === 'withoutResponse') {
@@ -465,7 +646,9 @@ const writeRasterInBlocks = async (
     );
   }
 
-  await writePacket(printer, cmdRasterHeader(raster.widthBytes, raster.heightLines), 'withResponse');
+  // Send header with the SAME mode as data so there is no mode-switch gap
+  // mid-stream that could cause the BLE bridge to flush its UART buffer.
+  await writePacket(printer, cmdRasterHeader(raster.widthBytes, raster.heightLines), dataWriteMode);
   await delay(20);
 
   onStatus?.(`Streaming ${raster.data.length} raster bytes in one GS v 0 job...`);
@@ -491,6 +674,134 @@ export interface M220DirectPrintOptions {
   dataWriteMode?: WriteMode;
   maxRasterLinesPerBlock?: number;
   onStatus?: (status: string) => void;
+}
+
+export async function printM220TextLabelDirect(
+  textValue: string,
+  options: M220DirectPrintOptions = {}
+): Promise<void> {
+  const text = String(textValue || '').trim();
+  if (!text) {
+    throw new Error('Text value is empty.');
+  }
+
+  if (Platform.OS === 'web') {
+    throw new Error('Direct BLE printing is not available on web.');
+  }
+
+  if (isExpoGoRuntime()) {
+    throw new Error(
+      'Direct BLE printing is not supported in Expo Go. Use a Development Build (Dev Client) and run with `expo start --dev-client`.'
+    );
+  }
+
+  await ensureBluetoothPermissions();
+
+  const manager = new BleManager();
+  let printer: ConnectedPrinter | null = null;
+
+  try {
+    options.onStatus?.('Checking Bluetooth state...');
+    await waitForPoweredOn(manager);
+
+    const device = await scanForBestPrinter(manager, options.scanTimeoutMs ?? BLE_SCAN_TIMEOUT_MS, options.onStatus);
+    options.onStatus?.(`Connecting to ${device.name || device.localName || 'printer'}...`);
+    printer = await findWritableCharacteristic(device);
+    options.onStatus?.(`Using characteristic ${printer.writeCharacteristic.uuid.toLowerCase()} (${printer.writeCharacteristic.isWritableWithResponse ? 'WR' : ''}${printer.writeCharacteristic.isWritableWithoutResponse ? '/WNR' : ''})`);
+
+    options.onStatus?.('Pinging printer bridge (battery query)...');
+    try {
+      await writePacket(printer, new Uint8Array([0x1f, 0x11, 0x08]), 'withResponse');
+    } catch (_) {
+      // Non-fatal — printer may not respond; proceed anyway.
+    }
+    await delay(200);
+
+    const protocol = resolvePrintProtocol(device, options.protocolOverride);
+    options.onStatus?.(`Using ${protocol === 'm110' ? 'M110-style' : 'M-series'} print protocol...`);
+
+    const printerHeadWidthBytes = resolvePrinterHeadWidthBytes(device, protocol);
+    const rasterAlignment = resolveRasterAlignment(device);
+    const maxRasterLinesPerBlock = options.maxRasterLinesPerBlock ?? DEFAULT_MAX_RASTER_LINES_PER_BLOCK;
+
+    const textRaster = buildTextRaster(
+      text,
+      printerHeadWidthBytes,
+      options.moduleScale ?? 6,
+      (options.marginModules ?? 2) * 8,
+      14,
+      rasterAlignment
+    );
+
+    options.onStatus?.(`Prepared text raster ${textRaster.widthBytes}x${textRaster.heightLines} lines.`);
+
+    const density = clamp(Math.round(options.density ?? 6), 1, 8);
+    const feedDots = clamp(Math.round(options.feedDots ?? 48), 0, 255);
+    const postPrintDelayMs = clamp(Math.round(options.postPrintDelayMs ?? DEFAULT_POST_PRINT_DELAY_MS), 200, 4000);
+    const requestedWriteMode: WriteMode = options.dataWriteMode ?? 'withResponse';
+    const dataWriteMode: WriteMode = 'withResponse';
+
+    if (requestedWriteMode !== 'withResponse') {
+      options.onStatus?.('Forcing write-with-response for raster text reliability.');
+    }
+
+    options.onStatus?.('Sending text print initialization...');
+    if (protocol === 'm110') {
+      const m110Density = densityToM110Level(density);
+      await writePacket(printer, cmdM110Speed(5), 'withResponse');
+      await delay(30);
+
+      await writePacket(printer, cmdM110Density(m110Density), 'withResponse');
+      await delay(30);
+
+      await writePacket(printer, cmdM110MediaType(options.m110MediaType ?? 10), 'withResponse');
+      await delay(30);
+    } else {
+      await writePacket(printer, cmdInit(), 'withResponse');
+      await delay(100);
+
+      await writePacket(printer, cmdHeatSettings(density), 'withResponse');
+      await delay(30);
+
+      await writePacket(printer, cmdDensity(density), 'withResponse');
+      await delay(40);
+
+      await writePacket(printer, cmdLineSpacing(0), 'withResponse');
+      await delay(20);
+    }
+
+    options.onStatus?.(`Sending text as raster image: ${text}`);
+    await writeRasterInBlocks(printer, textRaster, dataWriteMode, maxRasterLinesPerBlock, options.onStatus);
+
+    if (protocol === 'm110') {
+      await delay(300);
+      await writePacket(printer, cmdM110Footer(), 'withResponse');
+      await delay(postPrintDelayMs);
+    } else {
+      await delay(300);
+      await writePacket(printer, cmdFeed(feedDots), 'withResponse');
+      await delay(postPrintDelayMs);
+    }
+
+    options.onStatus?.('Text print command sent.');
+  } finally {
+    if (printer?.device) {
+      try {
+        const connected = await printer.device.isConnected();
+        if (connected) {
+          await printer.device.cancelConnection();
+        }
+      } catch (_) {
+        // Ignore disconnect errors.
+      }
+    }
+
+    try {
+      manager.destroy();
+    } catch (_) {
+      // Ignore manager cleanup errors.
+    }
+  }
 }
 
 export async function printM220QrLabelDirect(
@@ -525,6 +836,16 @@ export async function printM220QrLabelDirect(
     printer = await findWritableCharacteristic(device);
     options.onStatus?.(`Using characteristic ${printer.writeCharacteristic.uuid.toLowerCase()} (${printer.writeCharacteristic.isWritableWithResponse ? 'WR' : ''}${printer.writeCharacteristic.isWritableWithoutResponse ? '/WNR' : ''})`);
 
+    // Send a status query to wake the BLE UART bridge before any print commands.
+    // Some Phomemo bridges silently discard writes until the host has interacted
+    // with them at least once after the notify subscription.
+    options.onStatus?.('Pinging printer bridge (battery query)...');
+    try {
+      await writePacket(printer, new Uint8Array([0x1f, 0x11, 0x08]), 'withResponse');
+    } catch (_) {
+      // Non-fatal — printer may not respond; proceed anyway.
+    }
+    await delay(200);
     const protocol = resolvePrintProtocol(device, options.protocolOverride);
     options.onStatus?.(`Using ${protocol === 'm110' ? 'M110-style' : 'M-series'} print protocol...`);
 
@@ -548,10 +869,15 @@ export async function printM220QrLabelDirect(
     const density = clamp(Math.round(options.density ?? 6), 1, 8);
     const feedDots = clamp(Math.round(options.feedDots ?? 32), 0, 255);
     const postPrintDelayMs = clamp(Math.round(options.postPrintDelayMs ?? DEFAULT_POST_PRINT_DELAY_MS), 200, 4000);
-    const dataWriteMode: WriteMode = options.dataWriteMode ?? 'withResponse';
+    const requestedWriteMode: WriteMode = options.dataWriteMode ?? 'withResponse';
+    const dataWriteMode: WriteMode = 'withResponse';
     const maxRasterLinesPerBlock = options.maxRasterLinesPerBlock ?? DEFAULT_MAX_RASTER_LINES_PER_BLOCK;
 
-    options.onStatus?.(`Sending data with ${dataWriteMode === 'withResponse' ? 'write-with-response' : dataWriteMode === 'withoutResponse' ? 'write-without-response' : 'auto-write'} mode...`);
+    if (requestedWriteMode !== 'withResponse') {
+      options.onStatus?.('Ignoring non-acknowledged write mode. Forcing write-with-response for raster reliability.');
+    }
+
+    options.onStatus?.('Sending data with write-with-response mode...');
 
     if (protocol === 'm110') {
       const m110Density = densityToM110Level(density);

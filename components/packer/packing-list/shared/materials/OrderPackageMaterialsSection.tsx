@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -14,6 +14,10 @@ import CollapsibleCard from "../../common/CollapsibleCard";
 import { db } from "../../../../../utils/api/supabase";
 import { Check, X, ChevronDown, Camera } from "lucide-react-native";
 import { AddPendingMaterialModal } from "./AddPendingMaterialModal";
+import AnchoredSearchDropdown, {
+  AnchoredDropdownOption,
+  DropdownAnchorRect,
+} from "./AnchoredSearchDropdown";
 
 export type VariantSourceType = "tag" | "material" | "variantTag";
 
@@ -77,6 +81,7 @@ interface OrderPackageMaterialsSectionProps {
   hideRemoveButton?: boolean;
   additionalFields?: AdditionalFieldConfig[];
   editable?: boolean;
+  hideInnerSectionTitle?: boolean;
 }
 
 const normalizeVariant = (raw: any): VariantOption | null => {
@@ -135,6 +140,7 @@ const OrderPackageMaterialsSection: React.FC<
   hideRemoveButton = false,
   additionalFields = EMPTY_ADDITIONAL_FIELDS,
   editable = true,
+  hideInnerSectionTitle = false,
 }) => {
   const isEditable = editable !== false;
   const resolvedModalTitle =
@@ -152,6 +158,8 @@ const OrderPackageMaterialsSection: React.FC<
   const [addOpen, setAddOpen] = useState(false);
   const [variantPickerOpen, setVariantPickerOpen] = useState(false);
   const [unitPickerOpen, setUnitPickerOpen] = useState(false);
+  const [variantAnchor, setVariantAnchor] = useState<DropdownAnchorRect | null>(null);
+  const [unitAnchor, setUnitAnchor] = useState<DropdownAnchorRect | null>(null);
   const [variantSearchQuery, setVariantSearchQuery] = useState("");
   const [unitSearchQuery, setUnitSearchQuery] = useState("");
   const [errors, setErrors] = useState<Record<string, string | undefined>>({});
@@ -163,11 +171,16 @@ const OrderPackageMaterialsSection: React.FC<
     title: "",
   });
 
+  const variantTriggerRef = useRef<any>(null);
+  const unitTriggerRef = useRef<any>(null);
+
   useEffect(() => {
     if (!isEditable) {
       setAddOpen(false);
       setVariantPickerOpen(false);
       setUnitPickerOpen(false);
+      setVariantAnchor(null);
+      setUnitAnchor(null);
       setShowAddMaterialModal(false);
     }
   }, [isEditable]);
@@ -345,12 +358,83 @@ const OrderPackageMaterialsSection: React.FC<
     setFormComment("");
     setVariantPickerOpen(false);
     setUnitPickerOpen(false);
+    setVariantAnchor(null);
+    setUnitAnchor(null);
     setVariantSearchQuery("");
     setUnitSearchQuery("");
     setAdditionalValues(additionalDefaults);
     setErrors({});
     setIsSaving(false);
   };
+
+  const openDropdownFromTrigger = (
+    triggerRef: React.RefObject<any>,
+    setAnchor: React.Dispatch<React.SetStateAction<DropdownAnchorRect | null>>,
+    setOpen: React.Dispatch<React.SetStateAction<boolean>>
+  ) => {
+    requestAnimationFrame(() => {
+      const node = triggerRef.current;
+      if (node && typeof node.measureInWindow === "function") {
+        node.measureInWindow((x: number, y: number, width: number, height: number) => {
+          const nextAnchor: DropdownAnchorRect = {
+            x: Number.isFinite(x) ? x : 8,
+            y: Number.isFinite(y) ? y : 120,
+            width: Number.isFinite(width) ? width : 280,
+            height: Number.isFinite(height) ? height : 40,
+          };
+          setAnchor(nextAnchor);
+          setOpen(true);
+        });
+      } else {
+        setOpen(true);
+      }
+    });
+  };
+
+  const toggleVariantPicker = () => {
+    if (variantPickerOpen) {
+      setVariantPickerOpen(false);
+      return;
+    }
+
+    setUnitPickerOpen(false);
+    openDropdownFromTrigger(variantTriggerRef, setVariantAnchor, setVariantPickerOpen);
+  };
+
+  const toggleUnitPicker = () => {
+    if (unitPickerOpen) {
+      setUnitPickerOpen(false);
+      return;
+    }
+
+    setVariantPickerOpen(false);
+    openDropdownFromTrigger(unitTriggerRef, setUnitAnchor, setUnitPickerOpen);
+  };
+
+  const filteredVariantOptions: AnchoredDropdownOption[] = useMemo(() => {
+    return (variants || [])
+      .filter((opt) => {
+        if (!variantSearchQuery.trim()) return true;
+        return opt.label.toLowerCase().includes(variantSearchQuery.toLowerCase());
+      })
+      .map((opt) => ({
+        key: opt.value,
+        label: opt.label,
+        badge: opt.unit_id ? unitsMap[opt.unit_id as string] || "—" : undefined,
+      }));
+  }, [variants, variantSearchQuery, unitsMap]);
+
+  const filteredUnitOptions: AnchoredDropdownOption[] = useMemo(() => {
+    return (units || [])
+      .filter((opt) => {
+        if (!unitSearchQuery.trim()) return true;
+        return opt.label.toLowerCase().includes(unitSearchQuery.toLowerCase());
+      })
+      .map((opt) => ({
+        key: opt.value,
+        label: opt.label,
+      }));
+  }, [units, unitSearchQuery]);
 
   const validate = () => {
     const qtyNum = formQuantity ? Number(formQuantity) : NaN;
@@ -785,8 +869,14 @@ const OrderPackageMaterialsSection: React.FC<
         defaultOpen
       >
         <View className="w-full rounded p-3 bg-gray-50 border border-gray-200">
-          <View className="flex-row justify-between items-center mb-2">
-            <Text className="text-gray-800 font-semibold">{title}</Text>
+          <View
+            className={`flex-row items-center mb-2 ${
+              hideInnerSectionTitle ? "justify-end" : "justify-between"
+            }`}
+          >
+            {!hideInnerSectionTitle && (
+              <Text className="text-gray-800 font-semibold">{title}</Text>
+            )}
             <View className="flex-row items-center gap-2">
               {!isEditable && (
                 <Text className="text-xs text-gray-500">Editing locked</Text>
@@ -821,10 +911,11 @@ const OrderPackageMaterialsSection: React.FC<
 
           <HeaderRow />
           {isEditable && addOpen && (
-            <View className="flex-row items-center bg-blue-50 border border-blue-300 rounded px-2 py-2 mt-1">
-              <View style={{ flex: FLEX.item }}>
+            <View className="flex-row items-center bg-blue-50 border border-blue-300 rounded px-2 py-2 mt-1 relative z-20">
+              <View style={{ flex: FLEX.item }} className="relative">
                 <TouchableOpacity
-                  onPress={() => setVariantPickerOpen((v) => !v)}
+                  ref={variantTriggerRef}
+                  onPress={toggleVariantPicker}
                   className="border border-gray-300 rounded p-2 bg-white"
                 >
                   <View className="flex-row items-center justify-between">
@@ -883,9 +974,10 @@ const OrderPackageMaterialsSection: React.FC<
                 );
               })}
 
-              <View style={{ flex: FLEX.unit }} className="px-1">
+              <View style={{ flex: FLEX.unit }} className="px-1 relative">
                 <TouchableOpacity
-                  onPress={() => setUnitPickerOpen((v) => !v)}
+                  ref={unitTriggerRef}
+                  onPress={toggleUnitPicker}
                   className="border border-gray-300 rounded p-2 bg-white"
                 >
                   <View className="flex-row items-center justify-between">
@@ -987,120 +1079,60 @@ const OrderPackageMaterialsSection: React.FC<
         </View>
       </CollapsibleCard>
 
-      {isEditable && addOpen && variantPickerOpen && (
-            <View className="max-h-60 border border-gray-200 rounded mt-2 bg-white">
-              <View className="p-2 border-b border-gray-200">
-                <TextInput
-                  value={variantSearchQuery}
-                  onChangeText={setVariantSearchQuery}
-                  placeholder="Type to search items..."
-                  className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
-                  returnKeyType="done"
-                  blurOnSubmit
-                  onSubmitEditing={() => Keyboard.dismiss()}
-                  autoCorrect={false}
-                />
-              </View>
-              <ScrollView keyboardShouldPersistTaps="always">
-                {variants.length === 0 ? (
-                  <View className="px-3 py-4">
-                    <Text className="text-gray-500 text-sm text-center">
-                      No items found.
-                    </Text>
-                  </View>
-                ) : (
-                  variants
-                    .filter((opt) => {
-                      if (!variantSearchQuery.trim()) return true;
-                      return opt.label
-                        .toLowerCase()
-                        .includes(variantSearchQuery.toLowerCase());
-                    })
-                    .map((opt) => (
-                      <TouchableOpacity
-                        key={opt.value}
-                        onPress={() => {
-                          setFormVariant(opt.value);
-                          setErrors((e) => ({ ...e, variant: undefined }));
-                          const autoUnit = opt.unit_id || null;
-                          setFormUnit(autoUnit);
-                          setErrors((e) => ({ ...e, unit: undefined }));
-                          setVariantPickerOpen(false);
-                          setVariantSearchQuery("");
-                        }}
-                        className="px-3 py-2 border-b border-gray-100"
-                      >
-                        <View className="flex-row justify-between items-center">
-                          <Text className="text-gray-800">{opt.label}</Text>
-                          {opt.unit_id ? (
-                            <View className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
-                              <Text className="text-[10px] text-slate-700">
-                                {unitsMap[opt.unit_id as string] || "—"}
-                              </Text>
-                            </View>
-                          ) : null}
-                        </View>
-                      </TouchableOpacity>
-                    ))
-                )}
-              </ScrollView>
-              {addPendingConfig && (
-                <View className="p-2 border-t border-gray-300">
-                  <TouchableOpacity
-                    onPress={() => {
-                      setVariantPickerOpen(false);
-                      setShowAddMaterialModal(true);
-                    }}
-                    className="bg-blue-50 border border-blue-500 rounded px-3 py-2"
-                  >
-                    <Text className="text-blue-700 text-center font-medium text-sm">
-                      Can't find it? Add new material
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-      )}
+      <AnchoredSearchDropdown
+        visible={isEditable && addOpen && variantPickerOpen}
+        anchorRect={variantAnchor}
+        searchQuery={variantSearchQuery}
+        onSearchQueryChange={setVariantSearchQuery}
+        searchPlaceholder="Type to search items..."
+        options={filteredVariantOptions}
+        emptyText="No items found."
+        onClose={() => setVariantPickerOpen(false)}
+        onSelect={(option) => {
+          const selectedVariant = variants.find((v) => v.value === option.key);
+          if (!selectedVariant) return;
 
-      {isEditable && addOpen && unitPickerOpen && (
-            <View className="max-h-60 border border-gray-200 rounded mt-2 bg-white">
-              <View className="p-2 border-b border-gray-200">
-                <TextInput
-                  value={unitSearchQuery}
-                  onChangeText={setUnitSearchQuery}
-                  placeholder="Type to search units..."
-                  className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
-                  returnKeyType="done"
-                  blurOnSubmit
-                  onSubmitEditing={() => Keyboard.dismiss()}
-                  autoCorrect={false}
-                />
-              </View>
-              <ScrollView keyboardShouldPersistTaps="always">
-                {units
-                  .filter((opt) => {
-                    if (!unitSearchQuery.trim()) return true;
-                    return opt.label
-                      .toLowerCase()
-                      .includes(unitSearchQuery.toLowerCase());
-                  })
-                  .map((opt) => (
-                    <TouchableOpacity
-                      key={opt.value}
-                      onPress={() => {
-                        setFormUnit(opt.value);
-                        setErrors((e) => ({ ...e, unit: undefined }));
-                        setUnitPickerOpen(false);
-                        setUnitSearchQuery("");
-                      }}
-                      className="px-3 py-2 border-b border-gray-100"
-                    >
-                      <Text className="text-gray-800">{opt.label}</Text>
-                    </TouchableOpacity>
-                  ))}
-              </ScrollView>
-            </View>
-      )}
+          setFormVariant(selectedVariant.value);
+          setFormIsPending(false);
+          setPendingFormLabel('');
+          setErrors((e) => ({ ...e, variant: undefined }));
+
+          const autoUnit = selectedVariant.unit_id || null;
+          setFormUnit(autoUnit);
+          setErrors((e) => ({ ...e, unit: undefined }));
+
+          setVariantPickerOpen(false);
+          setVariantSearchQuery("");
+        }}
+        footerAction={
+          addPendingConfig
+            ? {
+                label: "Can't find it? Add new material",
+                onPress: () => {
+                  setVariantPickerOpen(false);
+                  setShowAddMaterialModal(true);
+                },
+              }
+            : undefined
+        }
+      />
+
+      <AnchoredSearchDropdown
+        visible={isEditable && addOpen && unitPickerOpen}
+        anchorRect={unitAnchor}
+        searchQuery={unitSearchQuery}
+        onSearchQueryChange={setUnitSearchQuery}
+        searchPlaceholder="Type to search units..."
+        options={filteredUnitOptions}
+        emptyText="No units found."
+        onClose={() => setUnitPickerOpen(false)}
+        onSelect={(option) => {
+          setFormUnit(option.key);
+          setErrors((e) => ({ ...e, unit: undefined }));
+          setUnitPickerOpen(false);
+          setUnitSearchQuery("");
+        }}
+      />
 
       <Modal
         visible={commentPreview.visible}
