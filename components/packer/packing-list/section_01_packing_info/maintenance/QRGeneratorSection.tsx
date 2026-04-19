@@ -102,7 +102,7 @@ const QRGeneratorSection: React.FC<QRGeneratorSectionProps> = ({
     if (!token) return;
 
     if (Platform.OS === 'web') {
-      Alert.alert('Unavailable', 'Direct BLE printing is not available on web.');
+      Alert.alert('Unavailable', 'Brother printing is not available on web.');
       return;
     }
 
@@ -113,27 +113,30 @@ const QRGeneratorSection: React.FC<QRGeneratorSectionProps> = ({
       if (!selectedPreset) return;
 
       setDirectPrinting(true);
-      const { printM220QrLabelDirect } = await import('../../../../../utils/printing/m220DirectPrint');
+      const { printBrotherQrLabelDirect } = await import('../../../../../utils/printing/brotherDirectPrint');
 
-      await printM220QrLabelDirect(qrValue, {
-        density: 6,
-        feedDots: selectedPreset.feedDots,
+      await printBrotherQrLabelDirect(qrValue, {
         labelWidthMm: selectedPreset.labelWidthMm,
         moduleScale: selectedPreset.moduleScale,
         marginModules: selectedPreset.marginModules,
-        dataWriteMode: 'withoutResponse',
+        caption: label,
         postPrintDelayMs: 3000,
-        onStatus: (status) => console.log(`[M220 QR Section] ${status}`),
+        onStatus: (status) => console.log(`[Brother QR Section] ${status}`),
       });
 
-      Alert.alert('Direct Print Sent', `QR label (${selectedPreset.label}) was sent to the printer.`);
+      Alert.alert('Direct Print Sent', `QR label (${selectedPreset.label}) was sent to the Brother printer.`);
     } catch (e: any) {
-      console.error('Error direct-printing QR code:', e);
-      const message = e?.message || 'Direct BLE printing failed. Use Share PNG as fallback.';
-      if (String(message).toLowerCase().includes('expo go')) {
+      console.error('Error direct-printing QR code with Brother SDK:', e);
+      const message = e?.message || 'Brother direct printing failed. Use Download as fallback.';
+      const normalized = String(message).toLowerCase();
+      if (
+        normalized.includes('expo go') ||
+        normalized.includes('development build') ||
+        normalized.includes('native module')
+      ) {
         Alert.alert(
           'Dev Build Required',
-          'Direct BLE printing cannot run in Expo Go. Build/install a Development Client and run with expo start --dev-client.'
+          'Brother printing requires a Development Build. Build/install a Dev Client and run with expo start --dev-client.'
         );
       } else {
         Alert.alert('Direct Print Failed', message);
@@ -218,7 +221,7 @@ const QRGeneratorSection: React.FC<QRGeneratorSectionProps> = ({
           ) : (
             <>
               <Printer size={18} color="#0f766e" className="mr-2" />
-              <Text className="text-teal-700 font-medium">Direct BLE</Text>
+              <Text className="text-teal-700 font-medium">Direct Print</Text>
             </>
           )}
         </TouchableOpacity>

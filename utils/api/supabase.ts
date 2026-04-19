@@ -62,6 +62,32 @@ const unwrapSingleRelation = <T>(relation: T | T[] | null | undefined): T | null
   return relation ?? null;
 };
 
+const getMappedCategoryIdsForOrder = async (orderId?: UUID | null) => {
+  if (!orderId) {
+    return { data: [] as string[], error: null };
+  }
+
+  const { data, error } = await supabase
+    .from('category_order_map')
+    .select('category_id')
+    .eq('order_id', orderId)
+    .not('category_id', 'is', null);
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const categoryIds = Array.from(
+    new Set(
+      (data || [])
+        .map((row: any) => String(row?.category_id || '').trim())
+        .filter((id) => id.length > 0)
+    )
+  );
+
+  return { data: categoryIds, error: null };
+};
+
 const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl || process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabasePublishableKey = Constants.expoConfig?.extra?.supabasePublishableKey || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -922,9 +948,52 @@ const baseDb = {
         original_pkg_info: origInfo.id,
         final_pkg_info: finInfo.id,
       })
-      .select('id, order_id, package_number')
+      .select('id, order_id, package_number, status, description')
       .single();
     if (pkgErr || !orderPkg) return { data: null, error: pkgErr || new Error('Failed to create order package') };
+
+    const normalizedInstanceStatus =
+      orderPkg.status === 'packed'
+        ? 'packed'
+        : orderPkg.status === 'in_production'
+        ? 'in_production'
+        : orderPkg.status === 'design'
+        ? 'design'
+        : 'approved';
+
+    const { data: overviewRow, error: overviewErr } = await supabase
+      .from('order_pkg_overview')
+      .insert({
+        order_id: orderRow.id,
+        pkg_number: orderPkg.package_number,
+        status: normalizedInstanceStatus,
+        quantity: 1,
+        quantity_packed: normalizedInstanceStatus === 'packed' ? 1 : 0,
+        description: orderPkg.description || null,
+      })
+      .select('id')
+      .single();
+
+    if (overviewErr || !overviewRow?.id) {
+      return {
+        data: null,
+        error: overviewErr || new Error('Failed to create order package overview'),
+      };
+    }
+
+    const { error: instanceErr } = await supabase
+      .from('order_pkg_instance')
+      .insert({
+        order_pkg_overview_id: overviewRow.id,
+        order_package_id: orderPkg.id,
+        instance_number: 1,
+        status: normalizedInstanceStatus,
+        packed_at: normalizedInstanceStatus === 'packed' ? new Date().toISOString() : null,
+      });
+
+    if (instanceErr) {
+      return { data: null, error: instanceErr };
+    }
 
     return {
       data: {
@@ -1561,16 +1630,111 @@ const baseDb = {
 
   // ===== Maintenance Portal & QR Code Methods =====
 
-  getMaintenanceItemsForPackages: async (opIds: UUID[], clientId?: UUID) => {
+  getMaintenanceItemsForPackages: async (
+    opIds: UUID[],
+    clientId?: UUID,
+    pkgInstanceIds?: UUID[]
+  ) => {
+    const packageIds = Array.from(new Set((opIds || []).filter(Boolean)));
+    const requestedInstanceIds = Array.from(new Set((pkgInstanceIds || []).filter(Boolean)));
+
+    if (packageIds.length === 0 && requestedInstanceIds.length === 0) {
+      return { data: [], error: null };
+    }
+
+    const loadLegacyPackageItems = async () => {
+      const { data: legacyRows, error: legacyError } = await supabase
+        .from('package_items')
+        .select('id, order_package_id, quantity, designation, reference, length, width, height, net_weight')
+        .in('order_package_id', packageIds);
+
+      if (legacyError) {
+        return { data: null, error: legacyError };
+      }
+
+      const mapped = (legacyRows || []).map((row: any) => ({
+        id: String(row.id),
+        quantity: row.quantity,
+        created_at: null,
+        pkg_instance_id: null,
+        maintenance_db_id: null,
+        order_package_id: row.order_package_id,
+        is_legacy_package_item: true,
+        maintenance_items: {
+          id: null,
+          client_id: clientId || null,
+          reference: row.reference || null,
+          ipac_comments: null,
+          expected_qty: row.quantity ?? null,
+          packed_qty: null,
+          item_num: null,
+          description: row.designation || row.reference || 'Legacy Item',
+          length: row.length ?? null,
+          width: row.width ?? null,
+          height: row.height ?? null,
+          net_weight: row.net_weight ?? null,
+          warehouse_location: null,
+          maintenance_package_categories: null,
+        },
+      }));
+
+      return { data: mapped, error: null };
+    };
+
+    let instanceIds: UUID[] = requestedInstanceIds;
+    let packageIdByInstanceId = new Map<string, string>();
+
+    if (instanceIds.length === 0) {
+      // pkd_item now targets instances, so first resolve instances for the requested template packages.
+      const { data: instanceRowsRaw, error: instanceError } = await supabase
+        .from('order_pkg_instance')
+        .select('id, order_package_id')
+        .in('order_package_id', packageIds);
+
+      if (instanceError) {
+        return { data: null, error: instanceError };
+      }
+
+      const instanceRows = (instanceRowsRaw || []).filter((row: any) => !!row?.id);
+      if (instanceRows.length === 0) {
+        return await loadLegacyPackageItems();
+      }
+
+      instanceIds = instanceRows.map((row: any) => row.id as UUID);
+      packageIdByInstanceId = new Map<string, string>(
+        instanceRows.map((row: any) => [String(row.id), String(row.order_package_id || '')])
+      );
+    } else {
+      const { data: instanceRowsRaw, error: instanceError } = await supabase
+        .from('order_pkg_instance')
+        .select('id, order_package_id')
+        .in('id', instanceIds);
+
+      if (instanceError) {
+        return { data: null, error: instanceError };
+      }
+
+      packageIdByInstanceId = new Map<string, string>(
+        (instanceRowsRaw || []).map((row: any) => [String(row.id), String(row.order_package_id || '')])
+      );
+    }
+
     const { data, error } = await supabase
-      .from('maintenance_package_items')
+      .from('pkd_item')
       .select(`
         id,
         quantity,
         created_at,
-        order_package_id,
+        pkg_instance_id,
         maintenance_db_id,
-        maintenance_items:maintenance_db!inner(
+        pkg_instance:order_pkg_instance(
+          id,
+          order_package_id,
+          order_pkg_overview_id,
+          instance_number,
+          status
+        ),
+        maintenance_items:items_db!inner(
           id,
           client_id,
           reference,
@@ -1583,16 +1747,53 @@ const baseDb = {
           width,
           height,
           net_weight,
-          maintenance_package_categories(label)
+          warehouse_location,
+          maintenance_package_categories:pkg_category(
+            id,
+            label,
+            category_tag_map(
+              tag:project_tags(id, name)
+            )
+          )
         )
       `)
-      .in('order_package_id', opIds);
-    return { data, error };
+      .in('pkg_instance_id', instanceIds);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    let normalized = (data || []).map((row: any) => ({
+      ...row,
+      order_package_id:
+        row?.pkg_instance?.order_package_id ||
+        packageIdByInstanceId.get(String(row?.pkg_instance_id || '')) ||
+        null,
+    }));
+
+    if (clientId) {
+      normalized = normalized.filter(
+        (row: any) => String(row?.maintenance_items?.client_id || '') === String(clientId)
+      );
+    }
+
+    if (normalized.length === 0 && requestedInstanceIds.length === 0) {
+      return await loadLegacyPackageItems();
+    }
+
+    return { data: normalized, error: null };
   },
 
-  getUnassignedCatalogItems: async (clientId: UUID, search?: string) => {
+  getUnassignedCatalogItems: async (clientId: UUID, orderId?: UUID | null, search?: string) => {
+    const { data: mappedCategoryIds, error: categoryMapError } =
+      await getMappedCategoryIdsForOrder(orderId);
+
+    if (categoryMapError) {
+      return { data: null, error: categoryMapError };
+    }
+
     let query = supabase
-      .from('maintenance_db')
+      .from('items_db')
       .select(`
         id,
         client_id,
@@ -1607,10 +1808,21 @@ const baseDb = {
         width,
         height,
         net_weight,
-        maintenance_package_categories(label)
+        warehouse_location,
+        maintenance_package_categories:pkg_category(
+          id,
+          label,
+          category_tag_map(
+            tag:project_tags(id, name)
+          )
+        )
       `)
       .eq('client_id', clientId)
       .order('item_num', { ascending: true });
+
+    if ((mappedCategoryIds || []).length > 0) {
+      query = query.in('category_id', mappedCategoryIds || []);
+    }
 
     if (search && search.trim() !== '') {
       // NOTE: Supabase OR with foreign tables requires filtering carefully or using an RPC.
@@ -1623,7 +1835,11 @@ const baseDb = {
     return await query;
   },
 
-  getMaintenanceCatalogItemsByItemNumber: async (clientId: UUID, itemNumber: string) => {
+  getMaintenanceCatalogItemsByItemNumber: async (
+    clientId: UUID,
+    itemNumber: string,
+    orderId?: UUID | null
+  ) => {
     const normalizedItemNumber = String(itemNumber || '').trim();
     if (!normalizedItemNumber) {
       return {
@@ -1632,13 +1848,19 @@ const baseDb = {
       };
     }
 
+    const { data: mappedCategoryIds, error: categoryMapError } =
+      await getMappedCategoryIdsForOrder(orderId);
+    if (categoryMapError) {
+      return { data: [], error: categoryMapError };
+    }
+
     const asNumber = Number(normalizedItemNumber);
     const filterValue = Number.isFinite(asNumber) && /^\d+$/.test(normalizedItemNumber)
       ? asNumber
       : normalizedItemNumber;
 
-    const { data, error } = await supabase
-      .from('maintenance_db')
+    let query = supabase
+      .from('items_db')
       .select(`
         id,
         client_id,
@@ -1653,16 +1875,156 @@ const baseDb = {
         width,
         height,
         net_weight,
-        maintenance_package_categories(label)
+        warehouse_location,
+        maintenance_package_categories:pkg_category(
+          id,
+          label,
+          category_tag_map(
+            tag:project_tags(id, name)
+          )
+        )
       `)
       .eq('client_id', clientId)
       .eq('item_num', filterValue)
       .order('reference', { ascending: true });
 
+    if ((mappedCategoryIds || []).length > 0) {
+      query = query.in('category_id', mappedCategoryIds || []);
+    }
+
+    const { data, error } = await query;
+
     return { data: data || [], error };
   },
 
-  getMaintenanceCatalogItemByItemNumber: async (clientId: UUID, itemNumber: string) => {
+  getMaintenanceCatalogItemsByDefaultBin: async (
+    clientId: UUID,
+    defaultBin: string,
+    orderId?: UUID | null
+  ) => {
+    const normalizedDefaultBin = String(defaultBin || '').trim();
+    if (!normalizedDefaultBin) {
+      return {
+        data: [],
+        error: { message: 'Default bin is required' },
+        matchedColumn: null,
+      };
+    }
+
+    const { data: mappedCategoryIds, error: categoryMapError } =
+      await getMappedCategoryIdsForOrder(orderId);
+    if (categoryMapError) {
+      return {
+        data: [],
+        error: categoryMapError,
+        matchedColumn: null,
+      };
+    }
+
+    const asNumber = Number(normalizedDefaultBin);
+    const filterValues = Number.isFinite(asNumber) && /^\d+$/.test(normalizedDefaultBin)
+      ? [asNumber, normalizedDefaultBin]
+      : [normalizedDefaultBin];
+
+    // Some environments use different names for default-bin columns.
+    const candidateColumns = [
+      'default_bin',
+      'default_bin_code',
+      'default_bin_location',
+      'default_bin_name',
+      'default_location',
+      'warehouse_location',
+      'storage_bin',
+      'bin',
+      'bin_code',
+      'bin_location',
+      'bin_number',
+    ];
+
+    const selectClause = `
+      id,
+      client_id,
+      category_id,
+      reference,
+      expected_qty,
+      packed_qty,
+      ipac_comments,
+      item_num,
+      description,
+      length,
+      width,
+      height,
+      net_weight,
+      warehouse_location,
+      maintenance_package_categories:pkg_category(
+        id,
+        label,
+        category_tag_map(
+          tag:project_tags(id, name)
+        )
+      )
+    `;
+
+    let fallbackError: any = null;
+
+    for (const columnName of candidateColumns) {
+      let tryNextColumn = false;
+
+      for (const filterValue of filterValues) {
+        let query = supabase
+          .from('items_db')
+          .select(selectClause)
+          .eq('client_id', clientId)
+          .eq(columnName as any, filterValue as any)
+          .order('reference', { ascending: true });
+
+        if ((mappedCategoryIds || []).length > 0) {
+          query = query.in('category_id', mappedCategoryIds || []);
+        }
+
+        const { data, error } = await query;
+
+        if (error) {
+          const message = String(error.message || '').toLowerCase();
+          if (
+            message.includes('column') ||
+            message.includes('schema cache') ||
+            message.includes('does not exist')
+          ) {
+            tryNextColumn = true;
+            break;
+          }
+
+          fallbackError = error;
+          continue;
+        }
+
+        if ((data || []).length > 0) {
+          return { data: data || [], error: null, matchedColumn: columnName };
+        }
+      }
+
+      if (fallbackError) {
+        break;
+      }
+
+      if (tryNextColumn) {
+        continue;
+      }
+    }
+
+    if (fallbackError) {
+      return { data: [], error: fallbackError, matchedColumn: null };
+    }
+
+    return { data: [], error: null, matchedColumn: null };
+  },
+
+  getMaintenanceCatalogItemByItemNumber: async (
+    clientId: UUID,
+    itemNumber: string,
+    orderId?: UUID | null
+  ) => {
     const normalizedItemNumber = String(itemNumber || '').trim();
     if (!normalizedItemNumber) {
       return {
@@ -1671,13 +2033,19 @@ const baseDb = {
       };
     }
 
+    const { data: mappedCategoryIds, error: categoryMapError } =
+      await getMappedCategoryIdsForOrder(orderId);
+    if (categoryMapError) {
+      return { data: null, error: categoryMapError };
+    }
+
     const asNumber = Number(normalizedItemNumber);
     const filterValue = Number.isFinite(asNumber) && /^\d+$/.test(normalizedItemNumber)
       ? asNumber
       : normalizedItemNumber;
 
-    const { data, error } = await supabase
-      .from('maintenance_db')
+    let query = supabase
+      .from('items_db')
       .select(`
         id,
         client_id,
@@ -1692,12 +2060,25 @@ const baseDb = {
         width,
         height,
         net_weight,
-        maintenance_package_categories(label)
+        warehouse_location,
+        maintenance_package_categories:pkg_category(
+          id,
+          label,
+          category_tag_map(
+            tag:project_tags(id, name)
+          )
+        )
       `)
       .eq('client_id', clientId)
       .eq('item_num', filterValue)
       .order('reference', { ascending: true })
       .limit(1);
+
+    if ((mappedCategoryIds || []).length > 0) {
+      query = query.in('category_id', mappedCategoryIds || []);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       return { data: null, error };
@@ -1706,7 +2087,12 @@ const baseDb = {
     return { data: data?.[0] || null, error: null };
   },
 
-  assignItemToPackage: async (maintenanceDbId: UUID, orderPackageId: UUID, quantity: number = 1) => {
+  assignItemToPackage: async (
+    maintenanceDbId: UUID,
+    orderPackageId: UUID,
+    quantity: number = 1,
+    pkgInstanceId?: UUID | null
+  ) => {
     const parsedQty = Number(quantity);
     if (!Number.isFinite(parsedQty) || parsedQty <= 0) {
       return {
@@ -1715,11 +2101,236 @@ const baseDb = {
       };
     }
 
+    const { data: catalogItem, error: catalogError } = await supabase
+      .from('items_db')
+      .select('id, expected_qty, packed_qty, item_num, reference, description')
+      .eq('id', maintenanceDbId)
+      .maybeSingle();
+
+    if (catalogError) {
+      return { data: null, error: catalogError };
+    }
+
+    if (!catalogItem?.id) {
+      return {
+        data: null,
+        error: { message: 'Selected maintenance item was not found.' },
+      };
+    }
+
+    const expectedQty = Number(catalogItem.expected_qty);
+    const packedQty = Number(catalogItem.packed_qty);
+    if (Number.isFinite(expectedQty) && expectedQty > 0) {
+      const safePackedQty = Number.isFinite(packedQty) ? packedQty : 0;
+      const remainingQty = Math.max(0, expectedQty - safePackedQty);
+      const itemLabel =
+        catalogItem.item_num ||
+        catalogItem.reference ||
+        catalogItem.description ||
+        'Selected item';
+
+      if (remainingQty <= 0) {
+        return {
+          data: null,
+          error: { message: `${itemLabel} is already fully packed and cannot be assigned again.` },
+        };
+      }
+
+      if (parsedQty > remainingQty) {
+        return {
+          data: null,
+          error: { message: `Only ${remainingQty} remaining for ${itemLabel}. Reduce quantity to continue.` },
+        };
+      }
+    }
+
+    const normalizeInstanceStatus = (
+      statusValue: unknown
+    ): 'design' | 'approved' | 'in_production' | 'packed' => {
+      const normalized = String(statusValue || '').trim().toLowerCase();
+      if (normalized === 'design') return 'design';
+      if (normalized === 'approved') return 'approved';
+      if (normalized === 'in_production') return 'in_production';
+      if (normalized === 'packed') return 'packed';
+      if (normalized === 'delivered') return 'packed';
+      return 'approved';
+    };
+
+    let targetInstanceId: UUID | null = pkgInstanceId || null;
+
+    if (targetInstanceId) {
+      const { data: providedInstance, error: providedInstanceError } = await supabase
+        .from('order_pkg_instance')
+        .select('id, order_package_id')
+        .eq('id', targetInstanceId)
+        .maybeSingle();
+
+      if (providedInstanceError) {
+        return { data: null, error: providedInstanceError };
+      }
+
+      if (!providedInstance?.id) {
+        return {
+          data: null,
+          error: { message: 'Selected package instance was not found.' },
+        };
+      }
+
+      if (String(providedInstance.order_package_id || '') !== String(orderPackageId)) {
+        return {
+          data: null,
+          error: { message: 'Selected instance does not belong to the target package.' },
+        };
+      }
+    }
+
+    if (!targetInstanceId) {
+      const { data: existingInstance, error: existingInstanceError } = await supabase
+        .from('order_pkg_instance')
+        .select('id, order_pkg_overview_id, instance_number')
+        .eq('order_package_id', orderPackageId)
+        .order('instance_number', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (existingInstanceError) {
+        return { data: null, error: existingInstanceError };
+      }
+
+      if (existingInstance?.id) {
+        targetInstanceId = existingInstance.id;
+      }
+    }
+
+    if (!targetInstanceId) {
+      const { data: packageRow, error: packageError } = await supabase
+        .from('order_packages')
+        .select('id, order_id, package_number, status, description')
+        .eq('id', orderPackageId)
+        .maybeSingle();
+
+      if (packageError) {
+        return { data: null, error: packageError };
+      }
+
+      if (!packageRow?.id || !packageRow?.order_id) {
+        return {
+          data: null,
+          error: { message: 'Selected package template was not found.' },
+        };
+      }
+
+      const packageNumber = Number(packageRow.package_number);
+      if (!Number.isFinite(packageNumber) || packageNumber <= 0) {
+        return {
+          data: null,
+          error: { message: 'Package number is invalid for this template.' },
+        };
+      }
+
+      const normalizedStatus = normalizeInstanceStatus(packageRow.status);
+
+      let overviewId: UUID | null = null;
+      let existingOverviewQty = 0;
+
+      const { data: overviewRow, error: overviewError } = await supabase
+        .from('order_pkg_overview')
+        .select('id, quantity')
+        .eq('order_id', packageRow.order_id)
+        .eq('pkg_number', packageNumber)
+        .maybeSingle();
+
+      if (overviewError) {
+        return { data: null, error: overviewError };
+      }
+
+      if (overviewRow?.id) {
+        overviewId = overviewRow.id;
+        existingOverviewQty = Number(overviewRow.quantity || 0);
+      } else {
+        const { data: createdOverview, error: createdOverviewError } = await supabase
+          .from('order_pkg_overview')
+          .insert({
+            order_id: packageRow.order_id,
+            pkg_number: packageNumber,
+            status: normalizedStatus,
+            quantity: 1,
+            quantity_packed: 0,
+            description: packageRow.description || null,
+          })
+          .select('id, quantity')
+          .single();
+
+        if (createdOverviewError || !createdOverview?.id) {
+          return {
+            data: null,
+            error: createdOverviewError || { message: 'Failed to create package overview.' },
+          };
+        }
+
+        overviewId = createdOverview.id;
+        existingOverviewQty = Number(createdOverview.quantity || 1);
+      }
+
+      const { data: lastInstanceRow, error: lastInstanceError } = await supabase
+        .from('order_pkg_instance')
+        .select('instance_number')
+        .eq('order_pkg_overview_id', overviewId)
+        .order('instance_number', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (lastInstanceError) {
+        return { data: null, error: lastInstanceError };
+      }
+
+      const nextInstanceNumber = Math.max(1, Number(lastInstanceRow?.instance_number || 0) + 1);
+
+      const { data: createdInstance, error: createdInstanceError } = await supabase
+        .from('order_pkg_instance')
+        .insert({
+          order_pkg_overview_id: overviewId,
+          order_package_id: orderPackageId,
+          instance_number: nextInstanceNumber,
+          status: normalizedStatus,
+          packed_at: normalizedStatus === 'packed' ? new Date().toISOString() : null,
+        })
+        .select('id')
+        .single();
+
+      if (createdInstanceError || !createdInstance?.id) {
+        return {
+          data: null,
+          error: createdInstanceError || { message: 'Failed to create package instance.' },
+        };
+      }
+
+      targetInstanceId = createdInstance.id;
+
+      if (!Number.isFinite(existingOverviewQty) || existingOverviewQty < nextInstanceNumber) {
+        const { error: qtySyncError } = await supabase
+          .from('order_pkg_overview')
+          .update({ quantity: nextInstanceNumber })
+          .eq('id', overviewId);
+
+        if (qtySyncError) {
+          console.warn('Unable to sync overview quantity after instance creation:', qtySyncError);
+        }
+      }
+    }
+
+    if (!targetInstanceId) {
+      return {
+        data: null,
+        error: { message: 'Unable to resolve package instance for assignment.' },
+      };
+    }
+
     const { data: existing, error: existingError } = await supabase
-      .from('maintenance_package_items')
+      .from('pkd_item')
       .select('id, quantity')
       .eq('maintenance_db_id', maintenanceDbId)
-      .eq('order_package_id', orderPackageId)
+      .eq('pkg_instance_id', targetInstanceId)
       .maybeSingle();
 
     if (existingError) {
@@ -1729,7 +2340,7 @@ const baseDb = {
     if (existing?.id) {
       const nextQty = Number(existing.quantity || 0) + parsedQty;
       const { data, error } = await supabase
-        .from('maintenance_package_items')
+        .from('pkd_item')
         .update({ quantity: nextQty })
         .eq('id', existing.id)
         .select()
@@ -1739,10 +2350,10 @@ const baseDb = {
     }
 
     const { data, error } = await supabase
-      .from('maintenance_package_items')
+      .from('pkd_item')
       .insert({
         maintenance_db_id: maintenanceDbId,
-        order_package_id: orderPackageId,
+        pkg_instance_id: targetInstanceId,
         quantity: parsedQty,
       })
       .select()
@@ -1753,7 +2364,7 @@ const baseDb = {
 
   unassignItemFromPackage: async (maintenancePackageItemId: UUID) => {
     const { error } = await supabase
-      .from('maintenance_package_items')
+      .from('pkd_item')
       .delete()
       .eq('id', maintenancePackageItemId);
 

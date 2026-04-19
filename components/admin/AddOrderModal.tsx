@@ -18,12 +18,21 @@ interface AddOrderModalProps {
   onOrderAdded: () => void;
 }
 
+type ProjectType = 'standard' | 'maintenance' | 'survey';
+
+const PROJECT_TYPE_OPTIONS: Array<{ value: ProjectType; label: string }> = [
+  { value: 'standard', label: 'Standard' },
+  { value: 'maintenance', label: 'Maintenance' },
+  { value: 'survey', label: 'Survey' },
+];
+
 export default function AddOrderModal({ visible, onClose, onOrderAdded }: AddOrderModalProps) {
   const { user } = useAuth();
 
   const [orderName, setOrderName] = useState('');
   const [description, setDescription] = useState('');
   const [estimatedCost, setEstimatedCost] = useState('');
+  const [projectType, setProjectType] = useState<ProjectType>('standard');
   const [selectedClientId, setSelectedClientId] = useState('');
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(false);
@@ -107,7 +116,8 @@ export default function AddOrderModal({ visible, onClose, onOrderAdded }: AddOrd
           client_id: selectedClientId,
           created_by: user?.id,
           commercial_status: 'draft',
-          production_status: 'pending'
+          production_status: 'pending',
+          project_type: projectType,
         })
         .select('id')
         .single();
@@ -131,6 +141,7 @@ export default function AddOrderModal({ visible, onClose, onOrderAdded }: AddOrd
     setOrderName('');
     setDescription('');
     setEstimatedCost('');
+    setProjectType('standard');
     setSelectedClientId('');
     setShowCreateClient(false);
     setClientName('');
@@ -171,6 +182,31 @@ export default function AddOrderModal({ visible, onClose, onOrderAdded }: AddOrd
                     placeholder="Enter order name"
                     className="border border-gray-300 rounded-lg px-4 py-3 text-gray-900"
                   />
+                </View>
+
+                {/* Project Type */}
+                <View className="mb-4">
+                  <Text className="text-sm font-medium text-gray-700 mb-2">
+                    Project Type *
+                  </Text>
+                  <View className="flex-row rounded-lg border border-gray-300 bg-white p-1">
+                    {PROJECT_TYPE_OPTIONS.map((option) => {
+                      const selected = projectType === option.value;
+                      return (
+                        <TouchableOpacity
+                          key={option.value}
+                          onPress={() => setProjectType(option.value)}
+                          className={`flex-1 rounded-md px-3 py-2 ${selected ? 'bg-primary-500' : 'bg-white'}`}
+                        >
+                          <Text
+                            className={`text-center text-sm font-medium ${selected ? 'text-white' : 'text-gray-700'}`}
+                          >
+                            {option.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
                 </View>
 
                 {/* Client Selection */}

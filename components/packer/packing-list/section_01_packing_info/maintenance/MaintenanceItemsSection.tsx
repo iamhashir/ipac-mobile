@@ -8,8 +8,10 @@ import CatalogBrowserModal from './CatalogBrowserModal';
 import { chooseQrPrintSizePreset } from './qrPrintPresets';
 
 interface MaintenanceItemsSectionProps {
+  orderId: string;
   orderPackageId: string;
   clientId: string;
+  orderPkgInstanceId?: string | null;
   editable?: boolean;
 }
 
@@ -27,9 +29,42 @@ const parseScannedItemNumber = (rawCode: string): string | null => {
   return cleaned || null;
 };
 
+const parseScannedDefaultBin = (rawCode: string): string | null => {
+  const normalized = String(rawCode || '').trim();
+  if (!normalized) return null;
+
+  const segments = normalized.split('-');
+  if (segments.length < 2) return null;
+
+  const fallbackSegment = segments.slice(1).join('-').trim();
+  const cleaned = fallbackSegment.replace(/\s+/g, '');
+  return cleaned || null;
+};
+
+const toFiniteNumberOrNull = (value: unknown): number | null => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const getRemainingExpectedQty = (catalogItem: any): number | null => {
+  const expectedQty = toFiniteNumberOrNull(catalogItem?.expected_qty);
+  if (expectedQty === null || expectedQty <= 0) return null;
+
+  const packedQty = toFiniteNumberOrNull(catalogItem?.packed_qty) ?? 0;
+  const remaining = Math.max(0, expectedQty - packedQty);
+  return Math.round(remaining * 100) / 100;
+};
+
+const isCatalogItemFullyPacked = (catalogItem: any): boolean => {
+  const remaining = getRemainingExpectedQty(catalogItem);
+  return remaining !== null && remaining <= 0;
+};
+
 const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({ 
+  orderId,
   orderPackageId, 
   clientId, 
+  orderPkgInstanceId = null,
   editable = true 
 }) => {
   const [items, setItems] = useState<any[]>([]);
@@ -49,7 +84,10 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
   const [rowWidths, setRowWidths] = useState<Record<string, number>>({});
 
   const prepareScannedItemForAssignment = useCallback((catalogItem: any) => {
-    const suggestedQty = Number(catalogItem?.expected_qty ?? 1);
+    const remainingQty = getRemainingExpectedQty(catalogItem);
+    const suggestedQty = remainingQty !== null
+      ? remainingQty
+      : Number(catalogItem?.expected_qty ?? 1);
     const safeQty = Number.isFinite(suggestedQty) && suggestedQty > 0 ? suggestedQty : 1;
     setScannedCatalogItem(catalogItem);
     setScanQuantityInput(String(safeQty));
@@ -66,7 +104,11 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
     if (!orderPackageId) return;
     try {
       setLoading(true);
-      const { data, error } = await db.getMaintenanceItemsForPackages([orderPackageId], clientId);
+      const { data, error } = await db.getMaintenanceItemsForPackages(
+        [orderPackageId],
+        clientId,
+        orderPkgInstanceId ? [orderPkgInstanceId] : undefined
+      );
       
       if (error) {
         console.error('Error fetching maintenance items:', error);
@@ -80,7 +122,7 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [orderPackageId, clientId]);
+  }, [orderPackageId, clientId, orderPkgInstanceId]);
 
   useEffect(() => {
     loadItems();
@@ -128,7 +170,7 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
     }
 
     if (Platform.OS === 'web') {
-      Alert.alert('Unavailable', 'Direct BLE printing is not available on web.');
+      Alert.alert('Unavailable', 'Brother printing is not available on web.');
       return;
     }
 
@@ -139,26 +181,29 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
       setPrintingItemId(rowId);
       const qrData = await resolveItemQrData(maintenanceItem);
 
-      const { printM220QrLabelDirect } = await import('../../../../../utils/printing/m220DirectPrint');
-      await printM220QrLabelDirect(qrData.qrUrl, {
-        density: 6,
-        feedDots: selectedPreset.feedDots,
+      const { printBrotherQrLabelDirect } = await import('../../../../../utils/printing/brotherDirectPrint');
+      await printBrotherQrLabelDirect(qrData.qrUrl, {
         labelWidthMm: selectedPreset.labelWidthMm,
         moduleScale: selectedPreset.moduleScale,
         marginModules: selectedPreset.marginModules,
-        dataWriteMode: 'withoutResponse',
+        caption: qrData.itemLabel,
         postPrintDelayMs: 3000,
-        onStatus: (status) => console.log(`[M220 Item Print] ${status}`),
+        onStatus: (status) => console.log(`[Brother Item Print] ${status}`),
       });
 
-      Alert.alert('Direct Print Sent', `Item QR label (${selectedPreset.label}) sent for ${qrData.itemLabel}.`);
+      Alert.alert('Direct Print Sent', `Item QR label (${selectedPreset.label}) sent to Brother printer for ${qrData.itemLabel}.`);
     } catch (e: any) {
-      console.error('Error printing item QR:', e);
+      console.error('Error printing item QR with Brother SDK:', e);
       const message = String(e?.message || 'Unable to print item QR label.');
-      if (message.toLowerCase().includes('expo go')) {
+      const normalized = message.toLowerCase();
+      if (
+        normalized.includes('expo go') ||
+        normalized.includes('development build') ||
+        normalized.includes('native module')
+      ) {
         Alert.alert(
           'Dev Build Required',
-          'Direct BLE printing cannot run in Expo Go. Build/install a Development Client and run with expo start --dev-client.'
+          'Brother printing requires a Development Build. Build/install a Dev Client and run with expo start --dev-client.'
         );
       } else {
         Alert.alert('Direct Print Failed', message);
@@ -188,6 +233,7 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
 
   const handleScannedCode = async (rawCode: string) => {
     const itemNumber = parseScannedItemNumber(rawCode);
+    const defaultBin = parseScannedDefaultBin(rawCode);
     if (!itemNumber) {
       Alert.alert('Invalid QR Format', 'Expected format: itemNo-batchNo. Please scan again.');
       return;
@@ -195,25 +241,70 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
 
     setLastScannedItemNumber(itemNumber);
 
-    const { data: catalogItems, error } = await db.getMaintenanceCatalogItemsByItemNumber(clientId, itemNumber);
+    const { data: catalogItems, error } = await db.getMaintenanceCatalogItemsByItemNumber(
+      clientId,
+      itemNumber,
+      orderId
+    );
     if (error) {
       throw new Error(error.message || 'Failed to search catalog by scanned item number.');
     }
 
     const matches = catalogItems || [];
-    if (matches.length === 0) {
-      Alert.alert('Item Not Found', `No catalog record found for item number ${itemNumber}.`);
+    const availableMatches = matches.filter((candidate) => !isCatalogItemFullyPacked(candidate));
+
+    if (availableMatches.length > 0) {
+      setScannerVisible(false);
+
+      if (availableMatches.length === 1) {
+        prepareScannedItemForAssignment(availableMatches[0]);
+        return;
+      }
+
+      setScannedCatalogCandidates(availableMatches);
       return;
     }
 
-    setScannerVisible(false);
-
-    if (matches.length === 1) {
-      prepareScannedItemForAssignment(matches[0]);
+    if (matches.length > 0) {
+      Alert.alert('All Packed', `Item number ${itemNumber} is fully packed and cannot be assigned again.`);
       return;
     }
 
-    setScannedCatalogCandidates(matches);
+    if (defaultBin) {
+      const { data: fallbackMatchesRaw, error: fallbackError } = await db.getMaintenanceCatalogItemsByDefaultBin(
+        clientId,
+        defaultBin,
+        orderId
+      );
+      if (fallbackError) {
+        throw new Error(fallbackError.message || 'Failed to search catalog by default bin.');
+      }
+
+      const fallbackMatches = fallbackMatchesRaw || [];
+      const availableFallbackMatches = fallbackMatches.filter((candidate) => !isCatalogItemFullyPacked(candidate));
+
+      if (availableFallbackMatches.length > 0) {
+        setScannerVisible(false);
+
+        if (availableFallbackMatches.length === 1) {
+          prepareScannedItemForAssignment(availableFallbackMatches[0]);
+          return;
+        }
+
+        setScannedCatalogCandidates(availableFallbackMatches);
+        return;
+      }
+
+      if (fallbackMatches.length > 0) {
+        Alert.alert('All Packed', `Default bin ${defaultBin} only has fully packed items and cannot be assigned.`);
+        return;
+      }
+
+      Alert.alert('Item Not Found', `No catalog record found for item number ${itemNumber} or default bin ${defaultBin}.`);
+      return;
+    }
+
+    Alert.alert('Item Not Found', `No catalog record found for item number ${itemNumber}.`);
   };
 
   const onBarcodeScanned = async ({ data }: { data: string }) => {
@@ -239,9 +330,25 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
       return;
     }
 
+    if (isCatalogItemFullyPacked(scannedCatalogItem)) {
+      Alert.alert('All Packed', 'This item is already fully packed and cannot be assigned again.');
+      return;
+    }
+
+    const remainingQty = getRemainingExpectedQty(scannedCatalogItem);
+    if (remainingQty !== null && qty > remainingQty) {
+      Alert.alert('Validation', `Only ${remainingQty} remaining for this item. Reduce quantity to continue.`);
+      return;
+    }
+
     try {
       setAssigningFromScan(true);
-      const { error } = await db.assignItemToPackage(scannedCatalogItem.id, orderPackageId, qty);
+      const { error } = await db.assignItemToPackage(
+        scannedCatalogItem.id,
+        orderPackageId,
+        qty,
+        orderPkgInstanceId || undefined
+      );
       if (error) {
         throw new Error(error.message || 'Unable to assign scanned item to this box.');
       }
@@ -260,8 +367,16 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
     }
   };
 
-  const handleRemoveItem = async (maintenancePackageItemId: string) => {
+  const handleRemoveItem = async (maintenancePackageItemId: string, isLegacyItem: boolean = false) => {
     if (!editable) return;
+
+    if (isLegacyItem) {
+      Alert.alert(
+        'Legacy Item',
+        'This item comes from the legacy package_items table and cannot be removed from this screen.'
+      );
+      return;
+    }
     
     Alert.alert(
       "Remove Item",
@@ -323,6 +438,8 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
             const maintenanceItem = item.maintenance_items;
             const categoryLabel = maintenanceItem?.maintenance_package_categories?.label;
             const itemName = maintenanceItem?.description || 'Unknown Item';
+            const isLegacyItem = !!item?.is_legacy_package_item;
+            const canPrintOrPreview = !!maintenanceItem?.id;
             const stackActions = shouldStackRowActions(item.id, itemName);
             
             return (
@@ -352,6 +469,11 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
                           <Text className="text-blue-800 text-[10px] font-medium">{categoryLabel}</Text>
                         </View>
                       )}
+                      {isLegacyItem && (
+                        <View className="ml-2 bg-amber-100 px-1.5 py-0.5 rounded">
+                          <Text className="text-amber-800 text-[10px] font-medium">Legacy</Text>
+                        </View>
+                      )}
                     </View>
                     <Text className="text-xs text-gray-500">
                       Ref: {maintenanceItem?.reference || "N/A"} • Item #: {maintenanceItem?.item_num || "N/A"} • Qty: {item.quantity}
@@ -371,33 +493,37 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
                         : { flexShrink: 0 }
                     }
                   >
-                    <TouchableOpacity
-                      onPress={() => handlePreviewItemQr(maintenanceItem, item.id)}
-                      className="p-2 rounded-full bg-slate-100 mr-2"
-                      disabled={previewingItemId === item.id || printingItemId === item.id}
-                    >
-                      {previewingItemId === item.id ? (
-                        <ActivityIndicator size="small" color="#475569" />
-                      ) : (
-                        <Eye size={16} color="#475569" />
-                      )}
-                    </TouchableOpacity>
+                    {canPrintOrPreview && (
+                      <TouchableOpacity
+                        onPress={() => handlePreviewItemQr(maintenanceItem, item.id)}
+                        className="p-2 rounded-full bg-slate-100 mr-2"
+                        disabled={previewingItemId === item.id || printingItemId === item.id}
+                      >
+                        {previewingItemId === item.id ? (
+                          <ActivityIndicator size="small" color="#475569" />
+                        ) : (
+                          <Eye size={16} color="#475569" />
+                        )}
+                      </TouchableOpacity>
+                    )}
 
-                    <TouchableOpacity
-                      onPress={() => handleDirectPrintItemQr(maintenanceItem, item.id)}
-                      className="p-2 rounded-full bg-teal-50 mr-2"
-                      disabled={printingItemId === item.id || previewingItemId === item.id}
-                    >
-                      {printingItemId === item.id ? (
-                        <ActivityIndicator size="small" color="#0f766e" />
-                      ) : (
-                        <Printer size={16} color="#0f766e" />
-                      )}
-                    </TouchableOpacity>
+                    {canPrintOrPreview && (
+                      <TouchableOpacity
+                        onPress={() => handleDirectPrintItemQr(maintenanceItem, item.id)}
+                        className="p-2 rounded-full bg-teal-50 mr-2"
+                        disabled={printingItemId === item.id || previewingItemId === item.id}
+                      >
+                        {printingItemId === item.id ? (
+                          <ActivityIndicator size="small" color="#0f766e" />
+                        ) : (
+                          <Printer size={16} color="#0f766e" />
+                        )}
+                      </TouchableOpacity>
+                    )}
 
-                    {editable && (
+                    {editable && !isLegacyItem && (
                       <TouchableOpacity 
-                        onPress={() => handleRemoveItem(item.id)}
+                        onPress={() => handleRemoveItem(item.id, isLegacyItem)}
                         className="p-2 rounded-full bg-red-50"
                       >
                         <Trash2 size={16} color="#ef4444" />
@@ -435,7 +561,9 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
         visible={isModalVisible}
         onClose={() => setModalVisible(false)}
         clientId={clientId}
+        orderId={orderId}
         orderPackageId={orderPackageId}
+        orderPkgInstanceId={orderPkgInstanceId}
         onAssigned={loadItems}
       />
 
@@ -530,7 +658,7 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
                     {candidate?.description || candidate?.reference || 'Catalog Item'}
                   </Text>
                   <Text className="text-xs text-gray-600 mt-1">
-                    Ref: {candidate?.reference || 'N/A'} • Item #: {candidate?.item_num || 'N/A'} • Expected Qty: {candidate?.expected_qty ?? 'N/A'}
+                    Ref: {candidate?.reference || 'N/A'} • Item #: {candidate?.item_num || 'N/A'} • Expected Qty: {candidate?.expected_qty ?? 'N/A'} • Packed: {candidate?.packed_qty ?? 0}{getRemainingExpectedQty(candidate) !== null ? ` • Remaining: ${getRemainingExpectedQty(candidate)}` : ''}
                   </Text>
                   {candidate?.ipac_comments && (
                     <Text className="text-xs text-orange-600 mt-1" numberOfLines={2}>
@@ -584,6 +712,11 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
                 placeholderTextColor="#94a3b8"
                 editable={!assigningFromScan}
               />
+              {getRemainingExpectedQty(scannedCatalogItem) !== null && (
+                <Text className="text-xs text-gray-500 mt-1">
+                  Remaining available: {getRemainingExpectedQty(scannedCatalogItem)}
+                </Text>
+              )}
             </View>
 
             <View className="mt-4 flex-row justify-end">

@@ -31,12 +31,6 @@ export interface OrderPackingInfoProps {
   onChange?: (change: PackageInfoChangeEvent) => void; // Callback when data changes
 }
 
-const hasValue = (value: unknown) => {
-  if (value === null || value === undefined) return false;
-  if (typeof value === 'string') return value.trim().length > 0;
-  return true;
-};
-
 const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, originalInfoId, finalInfoId, orderPackageId, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, editTarget = 'final', editable = true, useSeiFlow = false, requiresOriginalFirst = false, onChange }) => {
   const [boxTypes, setBoxTypes] = useState<{ label: string; value: string }[]>([]);
   const [packTypes, setPackTypes] = useState<{ label: string; value: string; labelShort?: string; tooltip?: string }[]>([]);
@@ -169,20 +163,19 @@ const OrderPackingInfo: React.FC<OrderPackingInfoProps> = ({ original, final, or
   const rowStyle = isMobile ? { flexWrap: 'wrap' as const, flexDirection: 'row' as const, marginHorizontal: -4 } : { flexWrap: 'nowrap' as const, flexDirection: 'row' as const };
   const cardStyle = isMobile ? { width: '25%' as DimensionValue, paddingHorizontal: 2, marginBottom: 8 } : undefined;
 
-  const resolveTier = (originalValue: unknown) => {
-    if (!requiresOriginalFirst) return editTarget;
-    return hasValue(originalValue) ? 'final' : 'original';
+  const resolveTier = () => {
+    return editTarget;
   };
 
-  const quantityTier = resolveTier(original?.quantity ?? null);
-  const seiTier = resolveTier(originalPackingTypeId || null);
-  const boxTypeTier = resolveTier(originalBoxTypeId || null);
-  const tareTier = resolveTier(original?.tare ?? null);
-  const netTier = resolveTier(original?.netWeight ?? null);
-  const grossTier = resolveTier(original?.grossWeight ?? null);
-  const cogTier = resolveTier(original?.centerOfGravity ?? null);
-  const seiCategoryTier = resolveTier(originalSeiCategoryId || null);
-  const seiProtectionTier = resolveTier(originalSeiProtectionId || null);
+  const quantityTier = resolveTier();
+  const seiTier = resolveTier();
+  const boxTypeTier = resolveTier();
+  const tareTier = resolveTier();
+  const netTier = resolveTier();
+  const grossTier = resolveTier();
+  const cogTier = resolveTier();
+  const seiCategoryTier = resolveTier();
+  const seiProtectionTier = resolveTier();
 
   return (
     <View style={rowStyle}>

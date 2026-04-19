@@ -7,15 +7,38 @@ interface CatalogBrowserModalProps {
   visible: boolean;
   onClose: () => void;
   clientId: string;
+  orderId: string;
   orderPackageId: string;
+  orderPkgInstanceId?: string | null;
   onAssigned: () => void;
 }
+
+const toFiniteNumberOrNull = (value: unknown): number | null => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const getRemainingExpectedQty = (catalogItem: any): number | null => {
+  const expectedQty = toFiniteNumberOrNull(catalogItem?.expected_qty);
+  if (expectedQty === null || expectedQty <= 0) return null;
+
+  const packedQty = toFiniteNumberOrNull(catalogItem?.packed_qty) ?? 0;
+  const remaining = Math.max(0, expectedQty - packedQty);
+  return Math.round(remaining * 100) / 100;
+};
+
+const isCatalogItemFullyPacked = (catalogItem: any): boolean => {
+  const remaining = getRemainingExpectedQty(catalogItem);
+  return remaining !== null && remaining <= 0;
+};
 
 const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
   visible,
   onClose,
   clientId,
+  orderId,
   orderPackageId,
+  orderPkgInstanceId = null,
   onAssigned
 }) => {
   const [items, setItems] = useState<any[]>([]);
@@ -24,25 +47,29 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
   const [assigningId, setAssigningId] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<any | null>(null);
   const [quantityInput, setQuantityInput] = useState('1');
+  const [hiddenPackedCount, setHiddenPackedCount] = useState(0);
 
   const loadItems = useCallback(async () => {
     if (!visible || !clientId) return;
     
     setLoading(true);
     try {
-      const { data, error } = await db.getUnassignedCatalogItems(clientId);
+      const { data, error } = await db.getUnassignedCatalogItems(clientId, orderId);
       if (error) {
         console.error('Error fetching catalog items:', error);
         Alert.alert('Error', 'Failed to load catalog items');
       } else {
-        setItems(data || []);
+        const catalogItems = data || [];
+        const availableItems = catalogItems.filter((item) => !isCatalogItemFullyPacked(item));
+        setItems(availableItems);
+        setHiddenPackedCount(Math.max(0, catalogItems.length - availableItems.length));
       }
     } catch (e) {
       console.error('Unexpected error loading catalog items:', e);
     } finally {
       setLoading(false);
     }
-  }, [visible, clientId]);
+  }, [visible, clientId, orderId]);
 
   useEffect(() => {
     if (visible) {
@@ -69,10 +96,15 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
   const handleAssignItem = async (maintenanceDbId: string, quantity: number) => {
     try {
       setAssigningId(maintenanceDbId);
-      const { error } = await db.assignItemToPackage(maintenanceDbId, orderPackageId, quantity);
+      const { error } = await db.assignItemToPackage(
+        maintenanceDbId,
+        orderPackageId,
+        quantity,
+        orderPkgInstanceId || undefined
+      );
       
       if (error) {
-        Alert.alert('Error', 'Failed to assign item to package');
+        Alert.alert('Error', error.message || 'Failed to assign item to package');
       } else {
         setSelectedItem(null);
         setQuantityInput('1');
@@ -89,18 +121,37 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
   };
 
   const openQuantityModal = (item: any) => {
+    if (isCatalogItemFullyPacked(item)) {
+      Alert.alert('All Packed', 'This item is already fully packed and cannot be assigned again.');
+      return;
+    }
+
     const suggestedQty = Number(item.expected_qty ?? 1);
-    const safeQty = Number.isFinite(suggestedQty) && suggestedQty > 0 ? suggestedQty : 1;
+    const remainingQty = getRemainingExpectedQty(item);
+    const effectiveSuggestedQty = remainingQty !== null ? remainingQty : suggestedQty;
+    const safeQty = Number.isFinite(effectiveSuggestedQty) && effectiveSuggestedQty > 0 ? effectiveSuggestedQty : 1;
     setSelectedItem(item);
     setQuantityInput(String(safeQty));
   };
 
   const confirmAssignSelectedItem = async () => {
     if (!selectedItem) return;
+
+    if (isCatalogItemFullyPacked(selectedItem)) {
+      Alert.alert('All Packed', 'This item is already fully packed and cannot be assigned again.');
+      return;
+    }
+
     const qty = Number(quantityInput);
 
     if (!Number.isFinite(qty) || qty <= 0) {
       Alert.alert('Validation', 'Please enter a quantity greater than 0.');
+      return;
+    }
+
+    const remainingQty = getRemainingExpectedQty(selectedItem);
+    if (remainingQty !== null && qty > remainingQty) {
+      Alert.alert('Validation', `Only ${remainingQty} remaining for this item. Reduce quantity to continue.`);
       return;
     }
 
@@ -111,6 +162,7 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
     const isAssigning = assigningId === item.id;
     const categoryLabel = item.maintenance_package_categories?.label;
     const defaultQty = item.expected_qty ?? 1;
+    const remainingQty = getRemainingExpectedQty(item);
 
     return (
       <TouchableOpacity 
@@ -140,6 +192,11 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
             <Text className="text-sm text-gray-600">
               <Text className="font-medium text-gray-500">Default Qty:</Text> {defaultQty}
             </Text>
+            {remainingQty !== null && (
+              <Text className="text-sm text-gray-600">
+                <Text className="font-medium text-gray-500">Remaining:</Text> {remainingQty}
+              </Text>
+            )}
           </View>
           
           {item.ipac_comments && (
@@ -203,6 +260,11 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
             <Text className="text-xs text-gray-500 mt-2 ml-1">
               Showing {filteredItems.length} catalog items
             </Text>
+            {hiddenPackedCount > 0 && (
+              <Text className="text-xs text-amber-700 mt-1 ml-1">
+                Hidden fully packed items: {hiddenPackedCount}
+              </Text>
+            )}
           </View>
 
           {/* List */}
@@ -266,6 +328,11 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
                 placeholderTextColor="#94a3b8"
                 editable={!assigningId}
               />
+              {getRemainingExpectedQty(selectedItem) !== null && (
+                <Text className="text-xs text-gray-500 mt-1">
+                  Remaining available: {getRemainingExpectedQty(selectedItem)}
+                </Text>
+              )}
             </View>
 
             <View className="mt-4 flex-row justify-end">

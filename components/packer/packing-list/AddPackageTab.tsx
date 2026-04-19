@@ -55,6 +55,18 @@ const toNumberOrNull = (value: unknown): number | null => {
   return null;
 };
 
+const normalizeOverviewStatus = (
+  statusValue: unknown
+): 'design' | 'approved' | 'in_production' | 'packed' => {
+  const normalized = String(statusValue || '').trim().toLowerCase();
+  if (normalized === 'design') return 'design';
+  if (normalized === 'approved') return 'approved';
+  if (normalized === 'in_production') return 'in_production';
+  if (normalized === 'packed') return 'packed';
+  if (normalized === 'delivered') return 'packed';
+  return 'approved';
+};
+
 export default function AddPackageTab({
   orderId,
   nextPackageNumber,
@@ -100,6 +112,25 @@ export default function AddPackageTab({
     try {
       setCreating(true);
 
+      const { data: latestPackageRow, error: latestPackageErr } = await supabase
+        .from('order_packages')
+        .select('package_number')
+        .eq('order_id', orderId)
+        .order('package_number', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latestPackageErr) {
+        throw latestPackageErr;
+      }
+
+      const latestPackageNumber = Number(latestPackageRow?.package_number || 0);
+      const packageNumberToCreate = Math.max(
+        1,
+        Number.isFinite(nextPackageNumber) ? nextPackageNumber : 1,
+        Number.isFinite(latestPackageNumber) ? latestPackageNumber + 1 : 1
+      );
+
       const { data: origInfo, error: origErr } = await supabase
         .from('package_info')
         .insert({})
@@ -124,17 +155,101 @@ export default function AddPackageTab({
         .from('order_packages')
         .insert({
           order_id: orderId,
-          package_number: nextPackageNumber,
+          package_number: packageNumberToCreate,
           description: description.trim() || null,
           status: 'approved',
           original_pkg_info: origInfo.id,
           final_pkg_info: finInfo.id,
         })
-        .select('id')
+        .select('id, status')
         .single();
 
       if (pkgErr || !orderPkg) {
         throw pkgErr || new Error('Failed to create order package');
+      }
+
+      const normalizedInstanceStatus = normalizeOverviewStatus(orderPkg.status);
+
+      let overviewId: string | null = null;
+      let overviewQuantity = 0;
+
+      const { data: existingOverview, error: existingOverviewErr } = await supabase
+        .from('order_pkg_overview')
+        .select('id, quantity')
+        .eq('order_id', orderId)
+        .eq('pkg_number', packageNumberToCreate)
+        .maybeSingle();
+
+      if (existingOverviewErr) {
+        throw existingOverviewErr;
+      }
+
+      if (existingOverview?.id) {
+        overviewId = existingOverview.id;
+        overviewQuantity = Number(existingOverview.quantity || 0);
+      } else {
+        const { data: createdOverview, error: createdOverviewErr } = await supabase
+          .from('order_pkg_overview')
+          .insert({
+            order_id: orderId,
+            pkg_number: packageNumberToCreate,
+            status: normalizedInstanceStatus,
+            quantity: 1,
+            quantity_packed: normalizedInstanceStatus === 'packed' ? 1 : 0,
+            description: description.trim() || null,
+          })
+          .select('id, quantity')
+          .single();
+
+        if (createdOverviewErr || !createdOverview?.id) {
+          throw createdOverviewErr || new Error('Failed to create package overview');
+        }
+
+        overviewId = createdOverview.id;
+        overviewQuantity = Number(createdOverview.quantity || 1);
+      }
+
+      if (!overviewId) {
+        throw new Error('Failed to resolve package overview');
+      }
+
+      const { data: lastInstanceRow, error: lastInstanceErr } = await supabase
+        .from('order_pkg_instance')
+        .select('instance_number')
+        .eq('order_pkg_overview_id', overviewId)
+        .order('instance_number', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (lastInstanceErr) {
+        throw lastInstanceErr;
+      }
+
+      const nextInstanceNumber = Math.max(1, Number(lastInstanceRow?.instance_number || 0) + 1);
+
+      const { error: createInstanceErr } = await supabase
+        .from('order_pkg_instance')
+        .insert({
+          order_pkg_overview_id: overviewId,
+          order_package_id: orderPkg.id,
+          instance_number: nextInstanceNumber,
+          status: normalizedInstanceStatus,
+          packed_at: normalizedInstanceStatus === 'packed' ? new Date().toISOString() : null,
+        });
+
+      if (createInstanceErr) {
+        throw createInstanceErr;
+      }
+
+      if (!Number.isFinite(overviewQuantity) || overviewQuantity < nextInstanceNumber) {
+        const { error: updateOverviewQtyErr } = await supabase
+          .from('order_pkg_overview')
+          .update({ quantity: nextInstanceNumber })
+          .eq('id', overviewId);
+
+        if (updateOverviewQtyErr) {
+          throw updateOverviewQtyErr;
+        }
       }
 
       setOriginalInfoId(origInfo.id);

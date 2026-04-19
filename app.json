@@ -45,7 +45,7 @@
       "expo-router",
       "expo-dev-client",
       "expo-camera",
-      "react-native-ble-plx"
+      "expo-brother-printer-sdk"
     ],
     "experiments": {
       "typedRoutes": true

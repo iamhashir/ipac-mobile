@@ -38,6 +38,8 @@ interface Order {
   id: string;
   order_name: string;
   client_name: string;
+  client_id?: string | null;
+  client?: { portal_settings_id?: string | null } | null;
   production_status?: string;
   project_type?: 'standard' | 'maintenance' | 'survey' | null;
 }
@@ -53,6 +55,24 @@ interface OrderPackage {
   boxes_completed: number | null;
   original_pkg_info: string | null;
   final_pkg_info: string | null;
+}
+
+interface OrderPackageOverview {
+  id: string;
+  order_id: string;
+  pkg_number: number | null;
+  status: string;
+  quantity: number | null;
+  quantity_packed: number | null;
+  description: string | null;
+}
+
+interface OrderPackageInstance {
+  id: string;
+  order_pkg_overview_id: string;
+  order_package_id: string;
+  instance_number: number | null;
+  status: string;
 }
 
 interface PackageInfo {
@@ -127,6 +147,9 @@ export default function PackingListPage() {
   };
 
   const [orderPackages, setOrderPackages] = useState<OrderPackage[]>([]);
+  const [orderPackageOverviews, setOrderPackageOverviews] = useState<OrderPackageOverview[]>([]);
+  const [overviewInstancesMap, setOverviewInstancesMap] = useState<Record<string, OrderPackageInstance[]>>({});
+  const [selectedInstanceByOverview, setSelectedInstanceByOverview] = useState<Record<string, string>>({});
   const [pkgInfoMap, setPkgInfoMap] = useState<Record<string, PackageInfo>>({});
   const [boxTypes, setBoxTypes] = useState<Record<string, string>>({});
   const [packingTypes, setPackingTypes] = useState<Record<string, string>>({});
@@ -250,6 +273,70 @@ export default function PackingListPage() {
         (a, b) => (a.package_number || 0) - (b.package_number || 0)
       );
       setOrderPackages(sorted);
+
+      // Load overview/instance model (new pipeline). If missing, UI falls back to legacy package tabs.
+      try {
+        const { data: overviewsRaw, error: overviewsErr } = await supabase
+          .from('order_pkg_overview')
+          .select('id, order_id, pkg_number, status, quantity, quantity_packed, description')
+          .eq('order_id', orderId)
+          .order('pkg_number', { ascending: true });
+
+        if (overviewsErr) {
+          console.warn('Error loading order_pkg_overview:', overviewsErr);
+          setOrderPackageOverviews([]);
+          setOverviewInstancesMap({});
+          setSelectedInstanceByOverview({});
+        } else {
+          const overviews = (overviewsRaw || []) as OrderPackageOverview[];
+          setOrderPackageOverviews(overviews);
+
+          const overviewIds = overviews.map((overview) => overview.id).filter(Boolean);
+          if (overviewIds.length > 0) {
+            const { data: instancesRaw, error: instancesErr } = await supabase
+              .from('order_pkg_instance')
+              .select('id, order_pkg_overview_id, order_package_id, instance_number, status')
+              .in('order_pkg_overview_id', overviewIds)
+              .order('instance_number', { ascending: true });
+
+            if (instancesErr) {
+              console.warn('Error loading order_pkg_instance:', instancesErr);
+              setOverviewInstancesMap({});
+              setSelectedInstanceByOverview({});
+            } else {
+              const groupedInstances: Record<string, OrderPackageInstance[]> = {};
+              (instancesRaw || []).forEach((instance: any) => {
+                const overviewId = String(instance.order_pkg_overview_id || '');
+                if (!overviewId) return;
+                if (!groupedInstances[overviewId]) groupedInstances[overviewId] = [];
+                groupedInstances[overviewId].push(instance as OrderPackageInstance);
+              });
+
+              setOverviewInstancesMap(groupedInstances);
+              setSelectedInstanceByOverview((prev) => {
+                const next: Record<string, string> = {};
+                overviews.forEach((overview) => {
+                  const instances = groupedInstances[overview.id] || [];
+                  if (!instances.length) return;
+
+                  const previousSelection = prev[overview.id];
+                  const hasPreviousSelection = !!previousSelection && instances.some((inst) => inst.id === previousSelection);
+                  next[overview.id] = hasPreviousSelection ? previousSelection : instances[0].id;
+                });
+                return next;
+              });
+            }
+          } else {
+            setOverviewInstancesMap({});
+            setSelectedInstanceByOverview({});
+          }
+        }
+      } catch (overviewLoadError) {
+        console.warn('Unexpected overview/instance load error:', overviewLoadError);
+        setOrderPackageOverviews([]);
+        setOverviewInstancesMap({});
+        setSelectedInstanceByOverview({});
+      }
 
       // Ensure securing rows exist for FINAL for all packages (packers edit final)
       for (const p of sorted) {
@@ -481,13 +568,87 @@ export default function PackingListPage() {
     []
   );
 
+  const overviewBoxes = useMemo(() => {
+    const packageById = new Map(orderPackages.map((pkg) => [pkg.id, pkg]));
+
+    // Legacy fallback: no overviews yet, render one tab per order_package exactly as before.
+    if (!orderPackageOverviews.length) {
+      return orderPackages.map((pkg) => {
+        const legacyOverviewId = `legacy-overview-${pkg.id}`;
+        const legacyInstanceId = `legacy-instance-${pkg.id}`;
+        const legacyInstance: OrderPackageInstance = {
+          id: legacyInstanceId,
+          order_pkg_overview_id: legacyOverviewId,
+          order_package_id: pkg.id,
+          instance_number: 1,
+          status: pkg.status,
+        };
+
+        return {
+          key: pkg.id,
+          overviewId: legacyOverviewId,
+          packageNumber: pkg.package_number ?? null,
+          quantity: pkg.quantity ?? null,
+          quantityPacked: pkg.status === 'packed' ? 1 : 0,
+          status: pkg.status,
+          description: pkg.description ?? null,
+          instances: [legacyInstance],
+          selectedInstanceId: legacyInstanceId,
+          selectedInstance: legacyInstance,
+          orderPackage: pkg,
+        };
+      });
+    }
+
+    return orderPackageOverviews
+      .map((overview) => {
+        const instances = overviewInstancesMap[overview.id] || [];
+        const selectedInstanceIdCandidate = selectedInstanceByOverview[overview.id];
+        const selectedInstance =
+          instances.find((instance) => instance.id === selectedInstanceIdCandidate) ||
+          instances[0] ||
+          null;
+
+        const selectedPackage =
+          (selectedInstance?.order_package_id
+            ? packageById.get(selectedInstance.order_package_id)
+            : null) ||
+          (instances.length > 0
+            ? packageById.get(instances[0].order_package_id)
+            : null) ||
+          null;
+
+        return {
+          key: `overview-${overview.id}`,
+          overviewId: overview.id,
+          packageNumber: overview.pkg_number ?? selectedPackage?.package_number ?? null,
+          quantity: overview.quantity ?? null,
+          quantityPacked: overview.quantity_packed ?? null,
+          status: overview.status || selectedPackage?.status || 'approved',
+          description: overview.description ?? selectedPackage?.description ?? null,
+          instances,
+          selectedInstanceId: selectedInstance?.id || null,
+          selectedInstance,
+          orderPackage: selectedPackage,
+        };
+      })
+      .sort((a, b) => (a.packageNumber || 0) - (b.packageNumber || 0));
+  }, [
+    orderPackages,
+    orderPackageOverviews,
+    overviewInstancesMap,
+    selectedInstanceByOverview,
+  ]);
+
   const rows: PackingRow[] = useMemo(() => {
-    return orderPackages.map((p) => {
+    return overviewBoxes.map((box) => {
+      const p = box.orderPackage;
+
       // Get original and final info
-      const originalInfo = p.original_pkg_info
+      const originalInfo = p?.original_pkg_info
         ? pkgInfoMap[p.original_pkg_info]
         : undefined;
-      const finalInfo = p.final_pkg_info
+      const finalInfo = p?.final_pkg_info
         ? pkgInfoMap[p.final_pkg_info]
         : undefined;
 
@@ -507,7 +668,14 @@ export default function PackingListPage() {
         finalInfo?.center_of_gravity,
         originalInfo?.center_of_gravity
       );
-      const boxQuantity = getValue(finalInfo?.quantity, originalInfo?.quantity);
+      const legacyBoxQuantity = getValue(finalInfo?.quantity, originalInfo?.quantity);
+      const overviewQuantityDefined =
+        box.quantity !== null && box.quantity !== undefined && Number.isFinite(Number(box.quantity));
+      const overviewQuantity = overviewQuantityDefined ? Number(box.quantity) : null;
+      const boxQuantity = {
+        value: overviewQuantityDefined ? overviewQuantity : legacyBoxQuantity.value,
+        isFinal: overviewQuantityDefined ? false : legacyBoxQuantity.isFinal,
+      };
       const boxTypeId = getValue(
         finalInfo?.box_type_id,
         originalInfo?.box_type_id
@@ -525,12 +693,19 @@ export default function PackingListPage() {
         originalInfo?.gross_weight
       );
 
+      const overviewQtyPacked = Number(box.quantityPacked ?? 0);
+      const hasOverviewQuantity =
+        box.quantity !== null && box.quantity !== undefined && Number.isFinite(Number(box.quantity));
+      const isPackedFromOverview = hasOverviewQuantity
+        ? overviewQtyPacked >= Number(box.quantity) && Number(box.quantity) > 0
+        : false;
+
       return {
-        id: p.id,
-        packageNumber: p.package_number ?? null,
-        reference: p.reference ?? null,
-        orderQuantity: p.quantity ?? null,
-        equipmentName: equipmentMap[p.id] || "—",
+        id: box.key,
+        packageNumber: box.packageNumber ?? null,
+        reference: p?.reference ?? null,
+        orderQuantity: box.quantity ?? p?.quantity ?? null,
+        equipmentName: p?.id ? equipmentMap[p.id] || "—" : "—",
         centerOfGravity: centerOfGravity.value,
         centerOfGravityIsFinal: centerOfGravity.isFinal,
         boxQuantity: boxQuantity.value,
@@ -545,12 +720,12 @@ export default function PackingListPage() {
         netWeightIsFinal: netWeight.isFinal,
         grossWeight: grossWeight.value,
         grossWeightIsFinal: grossWeight.isFinal,
-        isPacked: p.status === "packed",
-        isStarted: boxStartedMap[p.id] || false,
+        isPacked: isPackedFromOverview || p?.status === "packed",
+        isStarted: p?.id ? boxStartedMap[p.id] || false : false,
       };
     });
   }, [
-    orderPackages,
+    overviewBoxes,
     pkgInfoMap,
     equipmentMap,
     boxTypes,
@@ -572,11 +747,13 @@ export default function PackingListPage() {
       ),
     };
 
-    const boxTabs: TabDefinition[] = orderPackages.map((p) => {
-      const original = p.original_pkg_info
+    const boxTabs: TabDefinition[] = overviewBoxes.map((box) => {
+      const p = box.orderPackage;
+      const packageId = p?.id || null;
+      const original = p?.original_pkg_info
         ? pkgInfoMap[p.original_pkg_info]
         : undefined;
-      const final = p.final_pkg_info ? pkgInfoMap[p.final_pkg_info] : undefined;
+      const final = p?.final_pkg_info ? pkgInfoMap[p.final_pkg_info] : undefined;
 
       const infoOriginal = {
         quantity: original?.quantity ?? null,
@@ -632,17 +809,75 @@ export default function PackingListPage() {
           }
         : null;
 
+      const isPackedFromOverview =
+        box.quantity !== null && box.quantity !== undefined
+          ? Number(box.quantityPacked ?? 0) >= Number(box.quantity) && Number(box.quantity) > 0
+          : false;
+      const tabIsPacked = isPackedFromOverview || p?.status === 'packed';
+      const tabIsStarted = packageId ? boxStartedMap[packageId] || false : false;
+      const selectedOperationalInstanceId =
+        box.selectedInstanceId && !box.selectedInstanceId.startsWith('legacy-instance-')
+          ? box.selectedInstanceId
+          : null;
+
+      if (!packageId || !p) {
+        return {
+          key: box.key,
+          title: `Box #${box.packageNumber ?? ""}`,
+          isPacked: tabIsPacked,
+          isStarted: false,
+          content: (
+            <View className="mx-4 my-4 p-4 bg-white rounded-lg border border-amber-200">
+              <Text className="text-amber-800 font-medium">
+                No package template is linked to the selected instance yet.
+              </Text>
+            </View>
+          ),
+        } as TabDefinition;
+      }
+
       return {
-        key: p.id,
-        title: `Box #${p.package_number ?? ""}`,
-        isPacked: p.status === "packed",
-        isStarted: boxStartedMap[p.id] || false,
+        key: box.key,
+        title: `Box #${box.packageNumber ?? ""}`,
+        isPacked: tabIsPacked,
+        isStarted: tabIsStarted,
         content: (
           <View>
+            {box.instances.length > 1 && !box.overviewId.startsWith('legacy-overview-') && (
+              <View className="mx-4 mt-3 mb-2 bg-white rounded-lg border border-gray-200 p-3">
+                <Text className="text-xs font-semibold text-gray-600 mb-2">Instance</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  <View className="flex-row">
+                    {box.instances.map((instance) => {
+                      const isSelected = box.selectedInstanceId === instance.id;
+                      return (
+                        <TouchableOpacity
+                          key={instance.id}
+                          className={`px-3 py-1.5 rounded-full mr-2 border ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white border-gray-300'}`}
+                          onPress={() =>
+                            setSelectedInstanceByOverview((prev) => ({
+                              ...prev,
+                              [box.overviewId]: instance.id,
+                            }))
+                          }
+                        >
+                          <Text className={`text-xs font-semibold ${isSelected ? 'text-white' : 'text-gray-700'}`}>
+                            #{instance.instance_number ?? '-'}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </ScrollView>
+              </View>
+            )}
+
             <BoxDetailsTab
-              orderPackageId={p.id}
-              packageNumber={p.package_number ?? null}
-              description={p.description}
+              orderId={orderId}
+              orderPackageId={packageId}
+              orderPkgInstanceId={selectedOperationalInstanceId}
+              packageNumber={box.packageNumber ?? p.package_number ?? null}
+              description={box.description ?? p.description}
               info={{ original: infoOriginal, final: infoFinal }}
               dimensions={{
                 internal: {
@@ -667,7 +902,7 @@ export default function PackingListPage() {
               isOrderCompleted={order?.production_status === 'completed'}
               onStatusChange={() => loadData(false)}
               onReferenceChange={(nextReference) =>
-                handleOrderPackageReferenceChange(p.id, nextReference)
+                handleOrderPackageReferenceChange(packageId, nextReference)
               }
               onDataChange={handlePackageInfoChange}
               hasPortal={!!(order?.client as any)?.portal_settings_id}
@@ -675,9 +910,9 @@ export default function PackingListPage() {
             />
 
             {/* Comments section */}
-            <CommentsSection 
-              orderPackageId={p.id} 
-              editable={p.status !== "packed" && order?.production_status !== 'completed'} 
+            <CommentsSection
+              orderPackageId={packageId}
+              editable={p.status !== "packed" && order?.production_status !== 'completed'}
             />
 
             <View
@@ -697,7 +932,7 @@ export default function PackingListPage() {
                 <OrderTasksManagement
                   orderId={orderId}
                   orderPackages={[
-                    { id: p.id, package_number: p.package_number },
+                    { id: packageId, package_number: box.packageNumber ?? p.package_number },
                   ]}
                   readOnly={p.status === "packed" || order?.production_status === 'completed'}
                   requirePhotoForFinish={isMaintenanceFlow}
@@ -713,7 +948,7 @@ export default function PackingListPage() {
                 }}
               >
                 <ManufacturingSection
-                  orderPackageId={p.id}
+                  orderPackageId={packageId}
                   editTarget={isMaintenanceFlow ? "original" : "final"}
                   requireOriginalBeforeFinal={isMaintenanceFlow}
                   editable={p.status !== "packed" && order?.production_status !== 'completed'}
@@ -728,7 +963,7 @@ export default function PackingListPage() {
                 }}
               >
                 <SecuringSection
-                  orderPackageId={p.id}
+                  orderPackageId={packageId}
                   editable={p.status !== "packed" && order?.production_status !== 'completed'}
                 />
               </View>
@@ -748,7 +983,7 @@ export default function PackingListPage() {
                 return hasGas ? (
                   <View>
                     <GasPackingSection
-                      orderPackageId={p.id}
+                      orderPackageId={packageId}
                       editable={p.status !== "packed" && order?.production_status !== 'completed'}
                     />
                   </View>
@@ -770,7 +1005,7 @@ export default function PackingListPage() {
                 return hasVac ? (
                   <View>
                     <VacuumPackingSection
-                      orderPackageId={p.id}
+                      orderPackageId={packageId}
                       editable={p.status !== "packed" && order?.production_status !== 'completed'}
                     />
                   </View>
@@ -784,13 +1019,13 @@ export default function PackingListPage() {
                 }}
               >
                 <AccessoriesSection
-                  orderPackageId={p.id}
+                  orderPackageId={packageId}
                   editable={p.status !== "packed" && order?.production_status !== 'completed'}
                 />
               </View>
 
               <CoverSection
-                orderPackageId={p.id}
+                orderPackageId={packageId}
                 editable={p.status !== "packed" && order?.production_status !== 'completed'}
               />
             </>
@@ -814,12 +1049,32 @@ export default function PackingListPage() {
           isMaintenanceFlow={isMaintenanceFlow}
           nextPackageNumber={
             orderPackages.length > 0
-              ? Math.max(...orderPackages.map((p) => p.package_number || 0)) + 1
+              ? Math.max(...orderPackages.map((pkg) => pkg.package_number || 0)) + 1
               : 1
           }
-          onSaved={(newId) => {
-            loadData(false);
-            handleTabChange(newId);
+          onSaved={(newPackageId) => {
+            void (async () => {
+              await loadData(false);
+
+              if (!newPackageId) {
+                handleTabChange('list');
+                return;
+              }
+
+              const { data: instanceRow } = await supabase
+                .from('order_pkg_instance')
+                .select('order_pkg_overview_id')
+                .eq('order_package_id', newPackageId)
+                .order('instance_number', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+              if (instanceRow?.order_pkg_overview_id) {
+                handleTabChange(`overview-${instanceRow.order_pkg_overview_id}`);
+              } else {
+                handleTabChange(newPackageId);
+              }
+            })();
           }}
         />
       ),
@@ -828,6 +1083,7 @@ export default function PackingListPage() {
     return [listTab, ...boxTabs, addTab];
   }, [
     rows,
+    overviewBoxes,
     orderPackages,
     orderId,
     order?.project_type,
@@ -839,6 +1095,7 @@ export default function PackingListPage() {
     packTypeHasGas,
     handleOrderPackageReferenceChange,
     handlePackageInfoChange,
+    selectedInstanceByOverview,
   ]);
 
   const handleBack = () => router.back();
@@ -865,30 +1122,51 @@ export default function PackingListPage() {
   const performEndProject = async () => {
     try {
       setLoading(true);
-      if (orderPackages.length === 0) {
+      if (overviewBoxes.length === 0) {
         Alert.alert("Cannot Complete", "There are no boxes in this order.");
         setLoading(false);
         return;
       }
-      
-      const unpackaged = orderPackages.filter(p => p.status !== "packed");
+
+      const unpackaged = overviewBoxes.filter((box) => {
+        const hasOverviewQuantity =
+          box.quantity !== null &&
+          box.quantity !== undefined &&
+          Number.isFinite(Number(box.quantity));
+        if (hasOverviewQuantity) {
+          return Number(box.quantityPacked ?? 0) < Number(box.quantity);
+        }
+        return box.orderPackage?.status !== 'packed';
+      });
+
       if (unpackaged.length > 0) {
-        const boxNums = unpackaged.map(p => p.package_number).join(", ");
+        const boxNums = unpackaged.map((box) => box.packageNumber).join(", ");
         Alert.alert("Incomplete Boxes", `Please mark all boxes as completed before ending the project.\n\nIncomplete boxes: ${boxNums}`);
         setLoading(false);
         return;
       }
 
       // Final validation sweep
-      for (const p of orderPackages) {
-        const { data: validation, error: vErr } = await supabase.rpc('validate_box_completion', { op_id: p.id });
+      const packageIdsForValidation = Array.from(
+        new Set(
+          overviewBoxes
+            .map((box) => box.orderPackage?.id)
+            .filter((id): id is string => !!id)
+        )
+      );
+
+      for (const packageId of packageIdsForValidation) {
+        const packageNumber =
+          overviewBoxes.find((box) => box.orderPackage?.id === packageId)?.packageNumber || '-';
+
+        const { data: validation, error: vErr } = await supabase.rpc('validate_box_completion', { op_id: packageId });
         if (vErr) {
-           Alert.alert("Validation Error", `Could not validate box #${p.package_number}.`);
+           Alert.alert("Validation Error", `Could not validate box #${packageNumber}.`);
            setLoading(false);
            return;
         }
         if (!validation?.valid) {
-          Alert.alert("Incomplete Box", `Box #${p.package_number} has incomplete requirements:\n\n${!validation.materials_valid ? `\u2022 ${validation.materials_message}\n` : ''}${!validation.tasks_valid ? `\u2022 ${validation.tasks_message}\n` : ''}`);
+          Alert.alert("Incomplete Box", `Box #${packageNumber} has incomplete requirements:\n\n${!validation.materials_valid ? `\u2022 ${validation.materials_message}\n` : ''}${!validation.tasks_valid ? `\u2022 ${validation.tasks_message}\n` : ''}`);
           setLoading(false);
           return;
         }

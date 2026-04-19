@@ -181,27 +181,12 @@ const OrderPackingDimensions: React.FC<OrderPackingDimensionsProps> = ({
     });
   };
 
-  const hasCompleteTriple = (triple: DimensionsTriple | null) => {
-    if (!triple) return false;
-    return [triple.length, triple.width, triple.height].every(
-      (value) => value !== null && value !== undefined
-    );
-  };
+  const internalTarget: 'original' | 'final' = editTarget;
 
-  const internalTarget: 'original' | 'final' = requiresOriginalFirst
-    ? hasCompleteTriple(currentOriginal.internal)
-      ? 'final'
-      : 'original'
-    : editTarget;
+  const externalTarget: 'original' | 'final' = editTarget;
 
-  const externalTarget: 'original' | 'final' = requiresOriginalFirst
-    ? hasCompleteTriple(currentOriginal.external)
-      ? 'final'
-      : 'original'
-    : editTarget;
-
-  const internalAllowFinal = allowFinalEdit && (!requiresOriginalFirst || hasCompleteTriple(currentOriginal.internal));
-  const externalAllowFinal = allowFinalEdit && (!requiresOriginalFirst || hasCompleteTriple(currentOriginal.external));
+  const internalAllowFinal = allowFinalEdit;
+  const externalAllowFinal = allowFinalEdit;
 
   return (
     <View className="flex-row" style={{ flexWrap: 'nowrap' }}>

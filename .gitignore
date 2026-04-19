@@ -62,3 +62,6 @@ check-*.sql
 functions/appwrite/
 
 supabase/migrations/*
+
+# Local archive of replaced implementations
+archives/

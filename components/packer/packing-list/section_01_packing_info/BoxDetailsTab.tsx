@@ -7,7 +7,6 @@ import OrderPackingDimensions from './order_packing_dimensions';
 import { DimensionsTriple } from '../common/DimensionsBox';
 import OrderPackingItems from '../section_02_packing_items/order_packing_items';
 import MaintenanceItemsSection from './maintenance/MaintenanceItemsSection';
-import QRGeneratorSection from './maintenance/QRGeneratorSection';
 import TwoTierEditableCard from '../common/TwoTierEditableCard';
 import { PackageInfoChangeEvent } from './types';
 
@@ -19,7 +18,9 @@ interface BoxInfoPair {
 interface DimensionPair { original: DimensionsTriple | null; final: DimensionsTriple | null; }
 
 interface BoxDetailsTabProps {
+  orderId: string;
   orderPackageId: string;
+  orderPkgInstanceId?: string | null;
   packageNumber: number | null;
   description?: string | null;
   info?: BoxInfoPair;
@@ -47,26 +48,16 @@ interface BoxDetailsTabProps {
   clientId?: string | null;
 }
 
-const hasAnyValue = (value: unknown): boolean => {
-  if (value === null || value === undefined) return false;
-  if (typeof value === 'string') return value.trim().length > 0;
-  return true;
-};
-
 const normalizeReferenceValue = (value: unknown): string | null => {
   const normalized = String(value ?? '').trim();
   return normalized.length > 0 ? normalized : null;
 };
 
-const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, useSeiFlow = false, reference = null, status, isOrderCompleted, projectType = 'standard', onStatusChange, onReferenceChange, onDataChange, hidePackingItems = false, hasPortal = false, clientId = null }) => {
+const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, orderPkgInstanceId = null, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, useSeiFlow = false, reference = null, status, isOrderCompleted, projectType = 'standard', onStatusChange, onReferenceChange, onDataChange, hidePackingItems = false, hasPortal = false, clientId = null }) => {
   const [printingIpacTest, setPrintingIpacTest] = useState(false);
   const isEditable = status !== 'packed' && !isOrderCompleted;
   const requiresOriginalFirst = projectType === 'maintenance' || projectType === 'survey';
-  const referenceEditTarget: 'original' | 'final' = requiresOriginalFirst
-    ? hasAnyValue(reference)
-      ? 'final'
-      : 'original'
-    : 'final';
+  const referenceEditTarget: 'original' | 'final' = 'final';
 
   const handleMarkComplete = async () => {
     try {
@@ -171,32 +162,34 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
 
   const handlePrintIpacTest = async () => {
     if (Platform.OS === 'web') {
-      Alert.alert('Unavailable', 'Direct BLE printing is not available on web.');
+      Alert.alert('Unavailable', 'Brother printing is not available on web.');
       return;
     }
 
     try {
       setPrintingIpacTest(true);
-      const { printM220TextLabelDirect } = await import('../../../../utils/printing/m220DirectPrint');
+      const { printBrotherTextLabelDirect } = await import('../../../../utils/printing/brotherDirectPrint');
 
-      await printM220TextLabelDirect('IPAC', {
-        density: 6,
-        feedDots: 48,
-        protocolOverride: 'm-series',
-        dataWriteMode: 'withoutResponse',
+      await printBrotherTextLabelDirect('IPAC', {
+        labelWidthMm: 62,
         postPrintDelayMs: 3000,
-        onStatus: (statusText) => console.log(`[M220 IPAC Test] ${statusText}`),
+        onStatus: (statusText) => console.log(`[Brother IPAC Test] ${statusText}`),
       });
 
-      Alert.alert('Direct Print Sent', 'Test label text "IPAC" was sent to the printer.');
+      Alert.alert('Direct Print Sent', 'Test label text "IPAC" was sent to the Brother printer.');
     } catch (e: any) {
-      console.error('Error printing IPAC test label:', e);
+      console.error('Error printing IPAC test label with Brother SDK:', e);
       const message = String(e?.message || 'Unable to print IPAC test label.');
 
-      if (message.toLowerCase().includes('expo go')) {
+      const normalized = message.toLowerCase();
+      if (
+        normalized.includes('expo go') ||
+        normalized.includes('development build') ||
+        normalized.includes('native module')
+      ) {
         Alert.alert(
           'Dev Build Required',
-          'Direct BLE printing cannot run in Expo Go. Build/install a Development Client and run with expo start --dev-client.'
+          'Brother printing requires a Development Build. Build/install a Dev Client and run with expo start --dev-client.'
         );
       } else {
         Alert.alert('Direct Print Failed', message);
@@ -332,19 +325,11 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderPackageId, packageNu
       {hasPortal && clientId && (
         <View className="mt-4">
           <MaintenanceItemsSection 
+            orderId={orderId}
             orderPackageId={orderPackageId} 
+            orderPkgInstanceId={orderPkgInstanceId}
             clientId={clientId}
             editable={isEditable}
-          />
-        </View>
-      )}
-
-      {hasPortal && (
-        <View className="mt-4">
-          <QRGeneratorSection 
-            entityType="package"
-            entityId={orderPackageId}
-            label={`Box #${packageNumber ?? '—'}`}
           />
         </View>
       )}
