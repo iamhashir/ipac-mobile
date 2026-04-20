@@ -2,7 +2,6 @@
 
 # Git
 .git/
-.gitignore
 .gitattributes
 
 # Dependencies (EAS installs fresh)

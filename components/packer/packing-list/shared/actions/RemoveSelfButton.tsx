@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
-import { TouchableOpacity, Text, Alert, View } from 'react-native';
+import { TouchableOpacity, Text, View } from 'react-native';
 import { db } from '../../../../../utils/api/supabase';
-import { teamLead } from '../../../../../utils/api/teamLead';
 import { useAuth } from '../../../../../utils/AuthContext';
 import { usePackerSession } from '../../../../../utils/PackerSessionContext';
 import { useRouter } from 'expo-router';
@@ -29,8 +28,6 @@ export default function RemoveSelfButton({
   const [errorAlert, setErrorAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
   const [infoAlert, setInfoAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
   const [loading, setLoading] = useState(false);
-  const [needsLeadAssignment, setNeedsLeadAssignment] = useState(false);
-  const [availablePackers, setAvailablePackers] = useState<Array<{id: string, full_name: string}>>([]);
   const [activeTasks, setActiveTasks] = useState<ActiveTaskSummary[]>([]);
 
   const prepareTaskSummary = async () => {
@@ -58,59 +55,11 @@ export default function RemoveSelfButton({
     if (!profile?.id) return;
 
     try {
-      // Get all packers on this order
-      const { data: orderPackers, error } = await db.getOrderPackers(orderId);
-      if (error) {
-        setErrorAlert({visible: true, title: 'Error', message: 'Failed to check removal eligibility'});
-        return;
-      }
-
-      const otherPackersRaw = orderPackers?.filter((p: any) => (p.packer_id || p.id) !== profile.id) || [];
-
-      // Check if user is a lead
-	const currentPacker = orderPackers?.find((p: any) => (p.packer_id || p.id) === profile.id);
-      const isLead = currentPacker?.is_team_lead || currentPacker?.is_project_lead;
-
-      if (isLead) {
-        const otherLeads = otherPackersRaw.filter((p: any) => p.is_team_lead || p.is_project_lead);
-        if (otherPackersRaw.length > 0 && otherLeads.length === 0) {
-          // User is the last lead but other packers remain; require reassignment
-          const otherPackers = otherPackersRaw.map((p: any) => ({
-            id: p.packer_id || p.id,
-            full_name: p.full_name || p.profiles?.full_name || 'Unknown'
-          }));
-          setAvailablePackers(otherPackers);
-          setNeedsLeadAssignment(true);
-          return;
-        }
-      }
-
-      // User can leave, show confirmation
       await prepareTaskSummary();
       setShowConfirm(true);
     } catch (error) {
       console.error('Error checking removal eligibility:', error);
       setErrorAlert({visible: true, title: 'Error', message: 'An unexpected error occurred'});
-    }
-  };
-
-  const handleAssignLeadAndLeave = async (newLeadId: string) => {
-    if (!profile?.id) return;
-    try {
-      // Assign new lead
-      const { error: leadError } = await teamLead.addTeamLead(orderId, newLeadId);
-      if (leadError) {
-        setErrorAlert({visible: true, title: 'Failed', message: 'Failed to assign new team lead'});
-        return;
-      }
-      setNeedsLeadAssignment(false);
-      await prepareTaskSummary();
-      setShowConfirm(true);
-    } catch (error) {
-      console.error('Error assigning lead and leaving:', error);
-      setErrorAlert({visible: true, title: 'Error', message: 'An unexpected error occurred'});
-    } finally {
-      // no-op
     }
   };
 
@@ -128,13 +77,7 @@ export default function RemoveSelfButton({
 
       // Check the response
       if (data && !data.success) {
-        if (data.error === 'last_packer') {
-          setErrorAlert({visible: true, title: 'Cannot Leave', message: data.message});
-        } else if (data.error === 'last_lead') {
-          setErrorAlert({visible: true, title: 'Lead Required', message: data.message});
-        } else {
-          setErrorAlert({visible: true, title: 'Failed', message: data.message || 'Failed to remove yourself'});
-        }
+        setErrorAlert({visible: true, title: 'Failed', message: data.message || 'Failed to remove yourself'});
         return;
       }
 
@@ -201,31 +144,6 @@ export default function RemoveSelfButton({
             </View>
           ))
         )}
-      </ConfirmModal>
-
-      {/* Lead Assignment Modal */}
-      <ConfirmModal
-        visible={needsLeadAssignment}
-        title="Assign New Lead"
-        description={`You are the last team lead. Please select a new lead before leaving ${orderName}.`}
-        confirmText="Cancel"
-        cancelText=""
-        onConfirm={() => setNeedsLeadAssignment(false)}
-        onCancel={() => {}}
-      >
-        <View className="mt-4">
-          <Text className="text-gray-700 font-medium mb-2">Select new team lead:</Text>
-          {availablePackers.map(packer => (
-            <TouchableOpacity
-              key={packer.id}
-              onPress={() => handleAssignLeadAndLeave(packer.id)}
-              disabled={loading}
-              className="p-3 mb-2 bg-blue-50 border border-blue-200 rounded"
-            >
-              <Text className="text-blue-900">{packer.full_name}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
       </ConfirmModal>
 
       {/* Error Alert */}

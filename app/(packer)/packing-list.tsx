@@ -72,6 +72,7 @@ interface OrderPackageInstance {
   order_pkg_overview_id: string;
   order_package_id: string;
   instance_number: number | null;
+  ipac_reference: string | null;
   status: string;
 }
 
@@ -295,7 +296,7 @@ export default function PackingListPage() {
           if (overviewIds.length > 0) {
             const { data: instancesRaw, error: instancesErr } = await supabase
               .from('order_pkg_instance')
-              .select('id, order_pkg_overview_id, order_package_id, instance_number, status')
+              .select('id, order_pkg_overview_id, order_package_id, instance_number, ipac_reference, status')
               .in('order_pkg_overview_id', overviewIds)
               .order('instance_number', { ascending: true });
 
@@ -581,6 +582,7 @@ export default function PackingListPage() {
           order_pkg_overview_id: legacyOverviewId,
           order_package_id: pkg.id,
           instance_number: 1,
+          ipac_reference: null,
           status: pkg.status,
         };
 
@@ -703,7 +705,7 @@ export default function PackingListPage() {
       return {
         id: box.key,
         packageNumber: box.packageNumber ?? null,
-        reference: p?.reference ?? null,
+        reference: box.selectedInstance?.ipac_reference ?? p?.reference ?? null,
         orderQuantity: box.quantity ?? p?.quantity ?? null,
         equipmentName: p?.id ? equipmentMap[p.id] || "—" : "—",
         centerOfGravity: centerOfGravity.value,
@@ -863,6 +865,9 @@ export default function PackingListPage() {
                         >
                           <Text className={`text-xs font-semibold ${isSelected ? 'text-white' : 'text-gray-700'}`}>
                             #{instance.instance_number ?? '-'}
+                            {instance.ipac_reference
+                              ? ` (${instance.ipac_reference})`
+                              : ''}
                           </Text>
                         </TouchableOpacity>
                       );
@@ -898,6 +903,7 @@ export default function PackingListPage() {
               useSeiFlow={isMaintenanceFlow}
               projectType={order?.project_type || 'standard'}
               reference={p.reference ?? null}
+              instanceReference={box.selectedInstance?.ipac_reference ?? null}
               status={p.status}
               isOrderCompleted={order?.production_status === 'completed'}
               onStatusChange={() => loadData(false)}

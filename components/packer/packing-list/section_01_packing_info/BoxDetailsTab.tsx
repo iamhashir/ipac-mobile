@@ -37,6 +37,7 @@ interface BoxDetailsTabProps {
   finalPackingTypeId?: string | null;
   useSeiFlow?: boolean;
   reference?: string | null;
+  instanceReference?: string | null;
   status?: string;
   isOrderCompleted?: boolean;
   projectType?: 'standard' | 'maintenance' | 'survey' | null;
@@ -53,7 +54,7 @@ const normalizeReferenceValue = (value: unknown): string | null => {
   return normalized.length > 0 ? normalized : null;
 };
 
-const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, orderPkgInstanceId = null, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, useSeiFlow = false, reference = null, status, isOrderCompleted, projectType = 'standard', onStatusChange, onReferenceChange, onDataChange, hidePackingItems = false, hasPortal = false, clientId = null }) => {
+const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, orderPkgInstanceId = null, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, useSeiFlow = false, reference = null, instanceReference = null, status, isOrderCompleted, projectType = 'standard', onStatusChange, onReferenceChange, onDataChange, hidePackingItems = false, hasPortal = false, clientId = null }) => {
   const [printingIpacTest, setPrintingIpacTest] = useState(false);
   const isEditable = status !== 'packed' && !isOrderCompleted;
   const requiresOriginalFirst = projectType === 'maintenance' || projectType === 'survey';
@@ -168,7 +169,14 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
 
     try {
       setPrintingIpacTest(true);
-      const { printBrotherTextLabelDirect } = await import('../../../../utils/printing/brotherDirectPrint');
+      const brotherPrintModule = require('../../../../utils/printing/brotherDirectPrint') as {
+        printBrotherTextLabelDirect?: (textValue: string, options?: any) => Promise<void>;
+      };
+      const { printBrotherTextLabelDirect } = brotherPrintModule;
+
+      if (typeof printBrotherTextLabelDirect !== 'function') {
+        throw new Error('Brother print module loaded but printBrotherTextLabelDirect is unavailable. Restart Metro with cache clear.');
+      }
 
       await printBrotherTextLabelDirect('IPAC', {
         labelWidthMm: 62,
@@ -263,6 +271,11 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
       )}
 
       <View className="mt-4" style={{ width: 260 }}>
+        <View className="mb-2 rounded border border-blue-100 bg-blue-50 px-3 py-2">
+          <Text className="text-xs font-semibold text-blue-800">IPAC Instance Reference</Text>
+          <Text className="text-sm text-blue-900">{instanceReference || '—'}</Text>
+        </View>
+
         <TwoTierEditableCard
           label="Reference"
           original={reference}

@@ -20,6 +20,38 @@ const buildPortalScanUrl = (token: string) => `${PORTAL_BASE_URL}/portal/scan/${
 const ACTIONS_INLINE_MIN_ROW_WIDTH = 760;
 const LONG_ITEM_NAME_THRESHOLD = 72;
 
+type DetectedBrotherPrinter = {
+  modelName: string;
+  address: string;
+  serialNumber?: string;
+  connectionType: 'bluetooth' | 'wifi' | 'unknown';
+};
+
+type BrotherPrintModule = {
+  listBrotherPrinters?: (options?: any) => Promise<DetectedBrotherPrinter[]>;
+  detectBrotherPrinter?: (options?: any) => Promise<DetectedBrotherPrinter>;
+  getDetectedBrotherPrinter?: () => DetectedBrotherPrinter | null;
+  printBrotherQrLabelDirect?: (qrValue: string, options?: any) => Promise<void>;
+};
+
+const formatDetectedPrinterLabel = (printer: DetectedBrotherPrinter | null): string => {
+  if (!printer) return 'Not connected';
+  return `${printer.modelName} (${printer.address})`;
+};
+
+const loadBrotherPrintModule = (): BrotherPrintModule | null => {
+  try {
+    const loaded = require('../../../../../utils/printing/brotherDirectPrint') as
+      | BrotherPrintModule
+      | undefined;
+
+    if (!loaded) return null;
+    return loaded;
+  } catch {
+    return null;
+  }
+};
+
 const parseScannedItemNumber = (rawCode: string): string | null => {
   const normalized = String(rawCode || '').trim();
   if (!normalized) return null;
@@ -82,6 +114,11 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
   const [scanQuantityInput, setScanQuantityInput] = useState('1');
   const [assigningFromScan, setAssigningFromScan] = useState(false);
   const [rowWidths, setRowWidths] = useState<Record<string, number>>({});
+  const [detectingPrinter, setDetectingPrinter] = useState(false);
+  const [detectedPrinter, setDetectedPrinter] = useState<DetectedBrotherPrinter | null>(null);
+  const [printerPickerVisible, setPrinterPickerVisible] = useState(false);
+  const [printerCandidates, setPrinterCandidates] = useState<DetectedBrotherPrinter[]>([]);
+  const [connectingPrinterAddress, setConnectingPrinterAddress] = useState<string | null>(null);
 
   const prepareScannedItemForAssignment = useCallback((catalogItem: any) => {
     const remainingQty = getRemainingExpectedQty(catalogItem);
@@ -174,6 +211,14 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
       return;
     }
 
+    if (!detectedPrinter) {
+      Alert.alert(
+        'Connect Printer First',
+        'Tap Connect Printer and select your Brother printer before printing.'
+      );
+      return;
+    }
+
     try {
       const selectedPreset = await chooseQrPrintSizePreset();
       if (!selectedPreset) return;
@@ -181,15 +226,37 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
       setPrintingItemId(rowId);
       const qrData = await resolveItemQrData(maintenanceItem);
 
-      const { printBrotherQrLabelDirect } = await import('../../../../../utils/printing/brotherDirectPrint');
+      const brotherPrintModule = loadBrotherPrintModule();
+      const printBrotherQrLabelDirect = brotherPrintModule?.printBrotherQrLabelDirect;
+
+      if (typeof printBrotherQrLabelDirect !== 'function') {
+        throw new Error(
+          'Brother printer module is unavailable in this build. Install/update the Development Build and restart with expo start --dev-client.'
+        );
+      }
+
       await printBrotherQrLabelDirect(qrData.qrUrl, {
         labelWidthMm: selectedPreset.labelWidthMm,
         moduleScale: selectedPreset.moduleScale,
         marginModules: selectedPreset.marginModules,
+        logoPlacement: selectedPreset.logoPlacement,
+        logoText: 'IPAC',
         caption: qrData.itemLabel,
+        preferredConnection:
+          detectedPrinter?.connectionType === 'wifi'
+            ? 'wifi'
+            : detectedPrinter?.connectionType === 'bluetooth'
+              ? 'bluetooth'
+              : undefined,
+        printerAddressHint: detectedPrinter?.address,
         postPrintDelayMs: 3000,
         onStatus: (status) => console.log(`[Brother Item Print] ${status}`),
       });
+
+      const refreshedDetected = brotherPrintModule?.getDetectedBrotherPrinter?.() || null;
+      if (refreshedDetected) {
+        setDetectedPrinter(refreshedDetected);
+      }
 
       Alert.alert('Direct Print Sent', `Item QR label (${selectedPreset.label}) sent to Brother printer for ${qrData.itemLabel}.`);
     } catch (e: any) {
@@ -210,6 +277,124 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
       }
     } finally {
       setPrintingItemId(null);
+    }
+  };
+
+  const connectPrinter = async () => {
+    if (Platform.OS === 'web') {
+      Alert.alert('Unavailable', 'Brother printing is not available on web.');
+      return;
+    }
+
+    try {
+      setDetectingPrinter(true);
+      const brotherPrintModule = loadBrotherPrintModule();
+      const listBrotherPrinters = brotherPrintModule?.listBrotherPrinters;
+      const detectBrotherPrinter = brotherPrintModule?.detectBrotherPrinter;
+
+      if (typeof detectBrotherPrinter !== 'function') {
+        throw new Error(
+          'Brother printer module is unavailable in this build. Install/update the Development Build and restart with expo start --dev-client.'
+        );
+      }
+
+      let discoveredPrinters: DetectedBrotherPrinter[] = [];
+
+      if (typeof listBrotherPrinters === 'function') {
+        discoveredPrinters = await listBrotherPrinters({
+          onStatus: (status: string) => console.log(`[Brother Items Connect] ${status}`),
+        });
+      } else {
+        const detected = await detectBrotherPrinter({
+          onStatus: (status: string) => console.log(`[Brother Items Connect] ${status}`),
+        });
+        discoveredPrinters = detected ? [detected] : [];
+      }
+
+      if (!discoveredPrinters.length) {
+        Alert.alert(
+          'No Brother Printer Found',
+          'No Brother-compatible printer was discovered. Ensure the printer is on and nearby, then retry.'
+        );
+        return;
+      }
+
+      if (discoveredPrinters.length === 1) {
+        const candidate = discoveredPrinters[0];
+        setConnectingPrinterAddress(candidate.address);
+        const detected = await detectBrotherPrinter({
+          printerAddressHint: candidate.address,
+          preferredConnection:
+            candidate.connectionType === 'wifi'
+              ? 'wifi'
+              : candidate.connectionType === 'bluetooth'
+                ? 'bluetooth'
+                : undefined,
+          onStatus: (status: string) => console.log(`[Brother Items Connect] ${status}`),
+        });
+        setDetectedPrinter(detected);
+        Alert.alert('Printer Connected', `Connected to ${formatDetectedPrinterLabel(detected)}.`);
+        return;
+      }
+
+      setPrinterCandidates(discoveredPrinters);
+      setPrinterPickerVisible(true);
+    } catch (e: any) {
+      console.error('Error connecting to Brother printer:', e);
+      const message = String(e?.message || 'Unable to connect to Brother printer.');
+      const normalized = message.toLowerCase();
+      if (
+        normalized.includes('expo go') ||
+        normalized.includes('development build') ||
+        normalized.includes('native module')
+      ) {
+        Alert.alert(
+          'Dev Build Required',
+          'Brother printing requires a Development Build. Build/install a Dev Client and run with expo start --dev-client.'
+        );
+      } else {
+        Alert.alert('Connection Failed', message);
+      }
+    } finally {
+      setConnectingPrinterAddress(null);
+      setDetectingPrinter(false);
+    }
+  };
+
+  const handleConnectSpecificPrinter = async (candidate: DetectedBrotherPrinter) => {
+    if (Platform.OS === 'web') return;
+
+    try {
+      setConnectingPrinterAddress(candidate.address);
+      const brotherPrintModule = loadBrotherPrintModule();
+      const detectBrotherPrinter = brotherPrintModule?.detectBrotherPrinter;
+
+      if (typeof detectBrotherPrinter !== 'function') {
+        throw new Error(
+          'Brother printer module is unavailable in this build. Install/update the Development Build and restart with expo start --dev-client.'
+        );
+      }
+
+      const detected = await detectBrotherPrinter({
+        printerAddressHint: candidate.address,
+        preferredConnection:
+          candidate.connectionType === 'wifi'
+            ? 'wifi'
+            : candidate.connectionType === 'bluetooth'
+              ? 'bluetooth'
+              : undefined,
+        onStatus: (status: string) => console.log(`[Brother Items Connect] ${status}`),
+      });
+
+      setDetectedPrinter(detected);
+      setPrinterPickerVisible(false);
+      setPrinterCandidates([]);
+      Alert.alert('Printer Connected', `Connected to ${formatDetectedPrinterLabel(detected)}.`);
+    } catch (e: any) {
+      console.error('Error connecting to selected Brother printer:', e);
+      Alert.alert('Connection Failed', String(e?.message || 'Unable to connect to selected printer.'));
+    } finally {
+      setConnectingPrinterAddress(null);
     }
   };
 
@@ -420,10 +605,36 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
             <Text className="text-slate-700 text-xs font-semibold">{items.length}</Text>
           </View>
         </View>
-        <TouchableOpacity onPress={loadItems} disabled={loading} className="p-1 rounded-full bg-gray-200">
-          <RefreshCw size={14} color="#64748b" />
-        </TouchableOpacity>
+        <View className="flex-row items-center">
+          {Platform.OS !== 'web' && (
+            <TouchableOpacity
+              onPress={connectPrinter}
+              disabled={detectingPrinter || loading}
+              className={`mr-2 px-3 py-1.5 rounded-md border ${detectedPrinter ? 'border-emerald-300 bg-emerald-50' : 'border-slate-300 bg-slate-100'}`}
+            >
+              {detectingPrinter ? (
+                <ActivityIndicator size="small" color="#334155" />
+              ) : (
+                <Text className={`text-xs font-semibold ${detectedPrinter ? 'text-emerald-700' : 'text-slate-700'}`}>
+                  {detectedPrinter ? 'Printer Ready' : 'Connect Printer'}
+                </Text>
+              )}
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity onPress={loadItems} disabled={loading} className="p-1 rounded-full bg-gray-200">
+            <RefreshCw size={14} color="#64748b" />
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {Platform.OS !== 'web' && (
+        <View className="mb-3 bg-slate-100 border border-slate-200 rounded-md px-3 py-2">
+          <Text className="text-xs text-slate-600" numberOfLines={1}>
+            Printer: {formatDetectedPrinterLabel(detectedPrinter)}
+          </Text>
+        </View>
+      )}
 
       {items.length === 0 ? (
         <View className="py-6 items-center bg-white rounded-md border border-dashed border-gray-300">
@@ -590,6 +801,62 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
             >
               <Text className="text-white font-medium">Close</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={printerPickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setPrinterPickerVisible(false);
+          setPrinterCandidates([]);
+        }}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.45)', justifyContent: 'center', paddingHorizontal: 24 }}>
+          <View className="bg-white rounded-xl p-4" style={{ maxHeight: '75%' }}>
+            <Text className="text-base font-bold text-slate-900">Select Brother Printer</Text>
+            <Text className="text-sm text-gray-600 mt-2">
+              Choose the exact printer to connect. Non-printer Bluetooth devices are excluded.
+            </Text>
+
+            <ScrollView className="mt-4" contentContainerStyle={{ paddingBottom: 8 }}>
+              {printerCandidates.map((candidate) => {
+                const isConnecting = connectingPrinterAddress === candidate.address;
+                return (
+                  <TouchableOpacity
+                    key={`${candidate.address}-${candidate.modelName}-${candidate.connectionType}`}
+                    onPress={() => handleConnectSpecificPrinter(candidate)}
+                    disabled={!!connectingPrinterAddress}
+                    className="border border-gray-200 rounded-lg p-3 mb-2"
+                  >
+                    <Text className="text-slate-900 font-semibold">{candidate.modelName || 'Brother Printer'}</Text>
+                    <Text className="text-xs text-gray-600 mt-1">
+                      {candidate.address} • {candidate.connectionType.toUpperCase()}
+                    </Text>
+                    {isConnecting && (
+                      <View className="mt-2">
+                        <ActivityIndicator size="small" color="#334155" />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            <View className="mt-2 flex-row justify-end">
+              <TouchableOpacity
+                onPress={() => {
+                  setPrinterPickerVisible(false);
+                  setPrinterCandidates([]);
+                }}
+                disabled={!!connectingPrinterAddress}
+                className="px-4 py-2 rounded-md bg-gray-100"
+              >
+                <Text className="text-gray-700 font-medium">Cancel</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>

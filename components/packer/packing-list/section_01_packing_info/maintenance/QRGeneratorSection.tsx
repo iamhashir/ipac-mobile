@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Platform, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Platform, Modal, ScrollView } from 'react-native';
 import { QrCode, Printer, Download, Eye } from 'lucide-react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { File, Paths } from 'expo-file-system';
@@ -15,6 +15,38 @@ interface QRGeneratorSectionProps {
 const PORTAL_BASE_URL = 'https://ipac-admin.vercel.app';
 const buildPortalScanUrl = (token: string) => `${PORTAL_BASE_URL}/portal/scan/${encodeURIComponent(token)}`;
 
+type DetectedBrotherPrinter = {
+  modelName: string;
+  address: string;
+  serialNumber?: string;
+  connectionType: 'bluetooth' | 'wifi' | 'unknown';
+};
+
+type BrotherPrintModule = {
+  listBrotherPrinters?: (options?: any) => Promise<DetectedBrotherPrinter[]>;
+  detectBrotherPrinter?: (options?: any) => Promise<DetectedBrotherPrinter>;
+  getDetectedBrotherPrinter?: () => DetectedBrotherPrinter | null;
+  printBrotherQrLabelDirect?: (qrValue: string, options?: any) => Promise<void>;
+};
+
+const formatDetectedPrinterLabel = (printer: DetectedBrotherPrinter | null): string => {
+  if (!printer) return 'Not connected';
+  return `${printer.modelName} (${printer.address})`;
+};
+
+const loadBrotherPrintModule = (): BrotherPrintModule | null => {
+  try {
+    const loaded = require('../../../../../utils/printing/brotherDirectPrint') as
+      | BrotherPrintModule
+      | undefined;
+
+    if (!loaded) return null;
+    return loaded;
+  } catch {
+    return null;
+  }
+};
+
 const QRGeneratorSection: React.FC<QRGeneratorSectionProps> = ({
   entityType,
   entityId,
@@ -25,6 +57,11 @@ const QRGeneratorSection: React.FC<QRGeneratorSectionProps> = ({
   const [directPrinting, setDirectPrinting] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
+  const [detectingPrinter, setDetectingPrinter] = useState(false);
+  const [detectedPrinter, setDetectedPrinter] = useState<DetectedBrotherPrinter | null>(null);
+  const [printerPickerVisible, setPrinterPickerVisible] = useState(false);
+  const [printerCandidates, setPrinterCandidates] = useState<DetectedBrotherPrinter[]>([]);
+  const [connectingPrinterAddress, setConnectingPrinterAddress] = useState<string | null>(null);
   const qrRef = useRef<any>(null);
 
   useEffect(() => {
@@ -98,11 +135,137 @@ const QRGeneratorSection: React.FC<QRGeneratorSectionProps> = ({
     }
   };
 
+  const connectPrinter = async () => {
+    if (Platform.OS === 'web') {
+      Alert.alert('Unavailable', 'Brother printing is not available on web.');
+      return;
+    }
+
+    try {
+      setDetectingPrinter(true);
+      const brotherPrintModule = loadBrotherPrintModule();
+      const listBrotherPrinters = brotherPrintModule?.listBrotherPrinters;
+      const detectBrotherPrinter = brotherPrintModule?.detectBrotherPrinter;
+
+      if (typeof detectBrotherPrinter !== 'function') {
+        throw new Error(
+          'Brother printer module is unavailable in this build. Install/update the Development Build and restart with expo start --dev-client.'
+        );
+      }
+
+      let discoveredPrinters: DetectedBrotherPrinter[] = [];
+
+      if (typeof listBrotherPrinters === 'function') {
+        discoveredPrinters = await listBrotherPrinters({
+          onStatus: (status: string) => console.log(`[Brother QR Connect] ${status}`),
+        });
+      } else {
+        const detected = await detectBrotherPrinter({
+          onStatus: (status: string) => console.log(`[Brother QR Connect] ${status}`),
+        });
+        discoveredPrinters = detected ? [detected] : [];
+      }
+
+      if (!discoveredPrinters.length) {
+        Alert.alert(
+          'No Brother Printer Found',
+          'No Brother-compatible printer was discovered. Ensure the printer is on and nearby, then retry.'
+        );
+        return;
+      }
+
+      if (discoveredPrinters.length === 1) {
+        const candidate = discoveredPrinters[0];
+        setConnectingPrinterAddress(candidate.address);
+        const detected = await detectBrotherPrinter({
+          printerAddressHint: candidate.address,
+          preferredConnection:
+            candidate.connectionType === 'wifi'
+              ? 'wifi'
+              : candidate.connectionType === 'bluetooth'
+                ? 'bluetooth'
+                : undefined,
+          onStatus: (status: string) => console.log(`[Brother QR Connect] ${status}`),
+        });
+        setDetectedPrinter(detected);
+        Alert.alert('Printer Connected', `Connected to ${formatDetectedPrinterLabel(detected)}.`);
+        return;
+      }
+
+      setPrinterCandidates(discoveredPrinters);
+      setPrinterPickerVisible(true);
+    } catch (e: any) {
+      console.error('Error connecting to Brother printer:', e);
+      const message = String(e?.message || 'Unable to connect to Brother printer.');
+      const normalized = message.toLowerCase();
+      if (
+        normalized.includes('expo go') ||
+        normalized.includes('development build') ||
+        normalized.includes('native module')
+      ) {
+        Alert.alert(
+          'Dev Build Required',
+          'Brother printing requires a Development Build. Build/install a Dev Client and run with expo start --dev-client.'
+        );
+      } else {
+        Alert.alert('Connection Failed', message);
+      }
+    } finally {
+      setConnectingPrinterAddress(null);
+      setDetectingPrinter(false);
+    }
+  };
+
+  const handleConnectSpecificPrinter = async (candidate: DetectedBrotherPrinter) => {
+    if (Platform.OS === 'web') return;
+
+    try {
+      setConnectingPrinterAddress(candidate.address);
+      const brotherPrintModule = loadBrotherPrintModule();
+      const detectBrotherPrinter = brotherPrintModule?.detectBrotherPrinter;
+
+      if (typeof detectBrotherPrinter !== 'function') {
+        throw new Error(
+          'Brother printer module is unavailable in this build. Install/update the Development Build and restart with expo start --dev-client.'
+        );
+      }
+
+      const detected = await detectBrotherPrinter({
+        printerAddressHint: candidate.address,
+        preferredConnection:
+          candidate.connectionType === 'wifi'
+            ? 'wifi'
+            : candidate.connectionType === 'bluetooth'
+              ? 'bluetooth'
+              : undefined,
+        onStatus: (status: string) => console.log(`[Brother QR Connect] ${status}`),
+      });
+
+      setDetectedPrinter(detected);
+      setPrinterPickerVisible(false);
+      setPrinterCandidates([]);
+      Alert.alert('Printer Connected', `Connected to ${formatDetectedPrinterLabel(detected)}.`);
+    } catch (e: any) {
+      console.error('Error connecting to selected Brother printer:', e);
+      Alert.alert('Connection Failed', String(e?.message || 'Unable to connect to selected printer.'));
+    } finally {
+      setConnectingPrinterAddress(null);
+    }
+  };
+
   const directPrintQRCode = async () => {
     if (!token) return;
 
     if (Platform.OS === 'web') {
       Alert.alert('Unavailable', 'Brother printing is not available on web.');
+      return;
+    }
+
+    if (!detectedPrinter) {
+      Alert.alert(
+        'Connect Printer First',
+        'Tap Connect Printer and select your Brother printer before printing.'
+      );
       return;
     }
 
@@ -113,16 +276,39 @@ const QRGeneratorSection: React.FC<QRGeneratorSectionProps> = ({
       if (!selectedPreset) return;
 
       setDirectPrinting(true);
-      const { printBrotherQrLabelDirect } = await import('../../../../../utils/printing/brotherDirectPrint');
+      const qrImageBase64 = await getQrBase64();
+      const brotherPrintModule = loadBrotherPrintModule();
+      const printBrotherQrLabelDirect = brotherPrintModule?.printBrotherQrLabelDirect;
+
+      if (typeof printBrotherQrLabelDirect !== 'function') {
+        throw new Error(
+          'Brother printer module is unavailable in this build. Install/update the Development Build and restart with expo start --dev-client.'
+        );
+      }
 
       await printBrotherQrLabelDirect(qrValue, {
+        qrImageBase64,
         labelWidthMm: selectedPreset.labelWidthMm,
         moduleScale: selectedPreset.moduleScale,
         marginModules: selectedPreset.marginModules,
+        logoPlacement: selectedPreset.logoPlacement,
+        logoText: 'IPAC',
         caption: label,
+        preferredConnection:
+          detectedPrinter?.connectionType === 'wifi'
+            ? 'wifi'
+            : detectedPrinter?.connectionType === 'bluetooth'
+              ? 'bluetooth'
+              : undefined,
+        printerAddressHint: detectedPrinter?.address,
         postPrintDelayMs: 3000,
         onStatus: (status) => console.log(`[Brother QR Section] ${status}`),
       });
+
+      const refreshedDetected = brotherPrintModule?.getDetectedBrotherPrinter?.() || null;
+      if (refreshedDetected) {
+        setDetectedPrinter(refreshedDetected);
+      }
 
       Alert.alert('Direct Print Sent', `QR label (${selectedPreset.label}) was sent to the Brother printer.`);
     } catch (e: any) {
@@ -202,6 +388,30 @@ const QRGeneratorSection: React.FC<QRGeneratorSectionProps> = ({
         </Text>
       </View>
 
+      {Platform.OS !== 'web' && (
+        <View className="px-4 pb-3 border-t border-gray-200">
+          <View className="bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
+            <Text className="text-xs text-slate-600 mb-2" numberOfLines={1}>
+              Printer: {formatDetectedPrinterLabel(detectedPrinter)}
+            </Text>
+
+            <TouchableOpacity
+              onPress={connectPrinter}
+              disabled={detectingPrinter || directPrinting}
+              className={`rounded-md px-3 py-2 items-center ${detectedPrinter ? 'bg-emerald-600' : 'bg-slate-700'}`}
+            >
+              {detectingPrinter ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <Text className="text-white text-xs font-semibold">
+                  {detectedPrinter ? 'Reconnect Printer' : 'Connect Printer'}
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       <View className="flex-row border-t border-gray-200">
         <TouchableOpacity 
           className="flex-1 py-3 items-center flex-row justify-center border-r border-gray-200"
@@ -241,6 +451,62 @@ const QRGeneratorSection: React.FC<QRGeneratorSectionProps> = ({
           )}
         </TouchableOpacity>
       </View>
+
+      <Modal
+        visible={printerPickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setPrinterPickerVisible(false);
+          setPrinterCandidates([]);
+        }}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.55)', justifyContent: 'center', paddingHorizontal: 24 }}>
+          <View className="bg-white rounded-xl p-4" style={{ maxHeight: '75%' }}>
+            <Text className="text-base font-bold text-slate-900">Select Brother Printer</Text>
+            <Text className="text-sm text-gray-600 mt-2">
+              Choose the exact printer to connect. Non-printer Bluetooth devices are excluded.
+            </Text>
+
+            <ScrollView className="mt-4" contentContainerStyle={{ paddingBottom: 8 }}>
+              {printerCandidates.map((candidate) => {
+                const isConnecting = connectingPrinterAddress === candidate.address;
+                return (
+                  <TouchableOpacity
+                    key={`${candidate.address}-${candidate.modelName}-${candidate.connectionType}`}
+                    onPress={() => handleConnectSpecificPrinter(candidate)}
+                    disabled={!!connectingPrinterAddress}
+                    className="border border-gray-200 rounded-lg p-3 mb-2"
+                  >
+                    <Text className="text-slate-900 font-semibold">{candidate.modelName || 'Brother Printer'}</Text>
+                    <Text className="text-xs text-gray-600 mt-1">
+                      {candidate.address} • {candidate.connectionType.toUpperCase()}
+                    </Text>
+                    {isConnecting && (
+                      <View className="mt-2">
+                        <ActivityIndicator size="small" color="#334155" />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            <View className="mt-2 flex-row justify-end">
+              <TouchableOpacity
+                onPress={() => {
+                  setPrinterPickerVisible(false);
+                  setPrinterCandidates([]);
+                }}
+                disabled={!!connectingPrinterAddress}
+                className="px-4 py-2 rounded-md bg-gray-100"
+              >
+                <Text className="text-gray-700 font-medium">Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={previewVisible}

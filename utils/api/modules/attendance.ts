@@ -30,18 +30,48 @@ export const createAttendanceApi = (supabase: SupabaseClient) => ({
   },
 
   getActivePackerSession: async (packerId: UUID) => {
+    const { data: profileRow, error: profileError } = await supabase
+      .from('profiles')
+      .select('current_order_id')
+      .eq('id', packerId)
+      .maybeSingle();
+
+    if (profileError) {
+      return { data: null, error: profileError };
+    }
+
+    const preferredOrderId = profileRow?.current_order_id || null;
+
+    if (preferredOrderId) {
+      const { data: preferredSession, error: preferredError } = await supabase
+        .from('packer_sessions')
+        .select('*')
+        .eq('packer_id', packerId)
+        .eq('order_id', preferredOrderId)
+        .eq('session_active', true)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (preferredError) {
+        return { data: null, error: preferredError };
+      }
+
+      if (preferredSession) {
+        return { data: preferredSession, error: null };
+      }
+    }
+
     const { data, error } = await supabase
       .from('packer_sessions')
       .select('*')
       .eq('packer_id', packerId)
       .eq('session_active', true)
       .order('created_at', { ascending: false })
-      .limit(1);
+      .limit(1)
+      .maybeSingle();
 
-    return {
-      data: data && data.length > 0 ? data[0] : null,
-      error,
-    };
+    return { data: data || null, error };
   },
 
   updatePackerSession: async (sessionId: UUID, updates: SupabaseUpdatePayload) => {
@@ -133,11 +163,50 @@ export const createAttendanceApi = (supabase: SupabaseClient) => ({
     return { data, error };
   },
 
+  isPackerAssignedToOrder: async (packerId: UUID, orderId: UUID) => {
+    const { data, error } = await supabase
+      .from('order_team_members')
+      .select('id')
+      .eq('packer_id', packerId)
+      .eq('order_id', orderId)
+      .maybeSingle();
+
+    return { data: Boolean(data), error };
+  },
+
+  getLatestPackerMembership: async (packerId: UUID) => {
+    const { data, error } = await supabase
+      .from('order_team_members')
+      .select('order_id, created_at')
+      .eq('packer_id', packerId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    return { data: data || null, error };
+  },
+
   createTeamSessions: async (orderId: UUID, orderData: TeamOrderData, packerIds: UUID[]) => {
     try {
       const sessions: unknown[] = [];
+      const nowIso = new Date().toISOString();
 
       for (const packerId of packerIds) {
+        // Keep one active session per packer to avoid session-order mismatches.
+        const { error: deactivateOtherSessionsError } = await supabase
+          .from('packer_sessions')
+          .update({
+            session_active: false,
+            updated_at: nowIso,
+          })
+          .eq('packer_id', packerId)
+          .eq('session_active', true)
+          .neq('order_id', orderId);
+
+        if (deactivateOtherSessionsError) {
+          console.warn('Failed to deactivate previous active sessions:', deactivateOtherSessionsError);
+        }
+
         const { data: existingSession } = await supabase
           .from('packer_sessions')
           .select('*')
@@ -190,6 +259,8 @@ export const createAttendanceApi = (supabase: SupabaseClient) => ({
 
   removePackerFromOrder: async (orderId: UUID, packerId: UUID) => {
     try {
+      const nowIso = new Date().toISOString();
+
       const { error: memberError } = await supabase
         .from('order_team_members')
         .delete()
@@ -200,22 +271,86 @@ export const createAttendanceApi = (supabase: SupabaseClient) => ({
 
       const { error: sessionError } = await supabase
         .from('packer_sessions')
-        .delete()
-        .eq('packer_id', packerId);
+        .update({
+          session_active: false,
+          updated_at: nowIso,
+        })
+        .eq('packer_id', packerId)
+        .eq('order_id', orderId)
+        .eq('session_active', true);
 
-      if (sessionError) console.warn('Session deletion failed:', sessionError);
+      if (sessionError) console.warn('Session deactivation failed:', sessionError);
+
+      const { data: latestMembership, error: latestMembershipError } = await supabase
+        .from('order_team_members')
+        .select('order_id, created_at')
+        .eq('packer_id', packerId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latestMembershipError) {
+        console.warn('Latest membership lookup failed:', latestMembershipError);
+      }
+
+      const nextOrderId = latestMembership?.order_id || null;
 
       const { error: statusError } = await supabase
         .from('profiles')
-        .update({
-          packer_status: 'available',
-          current_order_id: null,
-        })
+        .update(nextOrderId
+          ? {
+              packer_status: 'busy',
+              current_order_id: nextOrderId,
+            }
+          : {
+              packer_status: 'available',
+              current_order_id: null,
+            })
         .eq('id', packerId);
 
       if (statusError) console.warn('Status update failed:', statusError);
 
-      return { data: { success: true }, error: null };
+      if (!nextOrderId) {
+        const { error: orphanSessionError } = await supabase
+          .from('packer_sessions')
+          .update({
+            session_active: false,
+            updated_at: nowIso,
+          })
+          .eq('packer_id', packerId)
+          .eq('session_active', true);
+
+        if (orphanSessionError) {
+          console.warn('Failed to deactivate remaining sessions for fully released packer:', orphanSessionError);
+        }
+      }
+
+      const { count: remainingOnOrder, error: remainingOrderError } = await supabase
+        .from('order_team_members')
+        .select('id', { count: 'exact', head: true })
+        .eq('order_id', orderId);
+
+      if (remainingOrderError) {
+        console.warn('Remaining team count lookup failed:', remainingOrderError);
+      }
+
+      if ((remainingOnOrder || 0) === 0) {
+        const { error: orderStatusError } = await supabase
+          .from('orders')
+          .update({
+            production_status: 'pending',
+            project_lead_id: null,
+            updated_at: nowIso,
+          })
+          .eq('id', orderId)
+          .neq('production_status', 'completed');
+
+        if (orderStatusError) {
+          console.warn('Order status update failed while removing packer:', orderStatusError);
+        }
+      }
+
+      return { data: { success: true, next_order_id: nextOrderId }, error: null };
     } catch (error) {
       return { data: null, error };
     }
@@ -223,6 +358,8 @@ export const createAttendanceApi = (supabase: SupabaseClient) => ({
 
   addPackerToOrder: async (orderId: UUID, packerId: UUID, orderData: TeamOrderData) => {
     try {
+      const nowIso = new Date().toISOString();
+
       const { error: memberError } = await supabase
         .from('order_team_members')
         .insert({
@@ -232,6 +369,20 @@ export const createAttendanceApi = (supabase: SupabaseClient) => ({
         });
 
       if (memberError) throw memberError;
+
+      const { error: deactivateOtherSessionsError } = await supabase
+        .from('packer_sessions')
+        .update({
+          session_active: false,
+          updated_at: nowIso,
+        })
+        .eq('packer_id', packerId)
+        .eq('session_active', true)
+        .neq('order_id', orderId);
+
+      if (deactivateOtherSessionsError) {
+        console.warn('Failed to deactivate previous active sessions while adding packer:', deactivateOtherSessionsError);
+      }
 
       const sessionData = {
         packer_id: packerId,
@@ -245,9 +396,30 @@ export const createAttendanceApi = (supabase: SupabaseClient) => ({
         session_active: true,
       };
 
-      const { error: sessionError } = await supabase
+      const { data: existingSession, error: existingSessionError } = await supabase
         .from('packer_sessions')
-        .insert(sessionData);
+        .select('id')
+        .eq('packer_id', packerId)
+        .eq('order_id', orderId)
+        .eq('session_active', true)
+        .limit(1)
+        .maybeSingle();
+
+      if (existingSessionError) {
+        console.warn('Failed to check existing active session while adding packer:', existingSessionError);
+      }
+
+      const { error: sessionError } = existingSession
+        ? await supabase
+            .from('packer_sessions')
+            .update({
+              ...sessionData,
+              updated_at: nowIso,
+            })
+            .eq('id', existingSession.id)
+        : await supabase
+            .from('packer_sessions')
+            .insert(sessionData);
 
       if (sessionError) console.warn('Session creation failed:', sessionError);
 

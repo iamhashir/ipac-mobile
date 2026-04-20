@@ -1,35 +1,38 @@
 import { Alert } from 'react-native';
 
 export interface QrPrintSizePreset {
-  id: '39x29' | '49x49';
+  id: 'brother-12' | 'brother-36';
   label: string;
   labelWidthMm: number;
   moduleScale: number;
   marginModules: number;
   feedDots: number;
+  logoPlacement: 'above-qr' | 'inside-qr';
 }
 
 export const QR_PRINT_SIZE_PRESETS: QrPrintSizePreset[] = [
   {
-    id: '39x29',
-    label: '39 x 29 mm',
-    labelWidthMm: 39,
-    moduleScale: 5,
-    marginModules: 2,
-    feedDots: 24,
+    id: 'brother-12',
+    label: '12 mm (Logo + QR + Item #)',
+    labelWidthMm: 12,
+    moduleScale: 2,
+    marginModules: 1,
+    feedDots: 16,
+    logoPlacement: 'above-qr',
   },
   {
-    id: '49x49',
-    label: '49 x 49 mm',
-    labelWidthMm: 49,
-    moduleScale: 7,
+    id: 'brother-36',
+    label: '36 mm (Logo in QR + Item #)',
+    labelWidthMm: 36,
+    moduleScale: 4,
     marginModules: 2,
     feedDots: 32,
+    logoPlacement: 'inside-qr',
   },
 ];
 
-const PRESET_39x29 = QR_PRINT_SIZE_PRESETS[0];
-const PRESET_49x49 = QR_PRINT_SIZE_PRESETS[1];
+const PRESET_BROTHER_12 = QR_PRINT_SIZE_PRESETS[0];
+const PRESET_BROTHER_36 = QR_PRINT_SIZE_PRESETS[1];
 
 export const chooseQrPrintSizePreset = (): Promise<QrPrintSizePreset | null> => {
   return new Promise((resolve) => {
@@ -43,15 +46,15 @@ export const chooseQrPrintSizePreset = (): Promise<QrPrintSizePreset | null> => 
 
     Alert.alert(
       'Choose Label Size',
-      'Pick the QR label size for this print.',
+      'Pick the Brother QR label format for this print.',
       [
         {
-          text: PRESET_39x29.label,
-          onPress: () => finish(PRESET_39x29),
+          text: PRESET_BROTHER_12.label,
+          onPress: () => finish(PRESET_BROTHER_12),
         },
         {
-          text: PRESET_49x49.label,
-          onPress: () => finish(PRESET_49x49),
+          text: PRESET_BROTHER_36.label,
+          onPress: () => finish(PRESET_BROTHER_36),
         },
         {
           text: 'Cancel',

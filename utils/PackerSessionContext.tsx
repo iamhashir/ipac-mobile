@@ -120,6 +120,35 @@ export const PackerSessionProvider: React.FC<PackerSessionProviderProps> = ({ ch
         // Set session to null on error to ensure we're in a clean state
         setSession(null);
       } else if (data) {
+        const sessionOrderId = data.order_id;
+
+        if (!sessionOrderId) {
+          if (data.id) {
+            await db.updatePackerSession(data.id, { session_active: false });
+          }
+          setSession(null);
+          console.log('Discarded malformed session without order_id');
+          return;
+        }
+
+        const { data: isAssigned, error: assignmentError } = await db.isPackerAssignedToOrder(profile.id, sessionOrderId);
+
+        if (assignmentError) {
+          console.error('Error validating active session assignment:', assignmentError);
+          // Keep session if validation query fails to avoid breaking active users.
+          setSession(data);
+          return;
+        }
+
+        if (!isAssigned) {
+          if (data.id) {
+            await db.updatePackerSession(data.id, { session_active: false });
+          }
+          setSession(null);
+          console.log('Discarded stale session that no longer has team membership');
+          return;
+        }
+
         setSession(data);
         console.log('Loaded existing packer session:', data);
       } else {

@@ -44,8 +44,7 @@
     "plugins": [
       "expo-router",
       "expo-dev-client",
-      "expo-camera",
-      "expo-brother-printer-sdk"
+      "expo-camera"
     ],
     "experiments": {
       "typedRoutes": true

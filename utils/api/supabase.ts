@@ -458,9 +458,30 @@ const baseDb = {
       .order('order_name');
     
     if (error) return { data: null, error };
+
+    const orders = data || [];
+    const orderIds = orders.map((order) => order.id).filter(Boolean);
+    const assignedPackerCountByOrder: Record<string, number> = {};
+
+    if (orderIds.length > 0) {
+      const { data: membershipRows, error: membershipError } = await supabase
+        .from('order_team_members')
+        .select('order_id')
+        .in('order_id', orderIds);
+
+      if (membershipError) {
+        console.warn('Failed to load order team member counts:', membershipError);
+      } else {
+        (membershipRows || []).forEach((row: any) => {
+          const rowOrderId = row?.order_id;
+          if (!rowOrderId) return;
+          assignedPackerCountByOrder[rowOrderId] = (assignedPackerCountByOrder[rowOrderId] || 0) + 1;
+        });
+      }
+    }
     
     // Transform the data to match expected format
-    const transformedData = data?.map(order => {
+    const transformedData = orders.map(order => {
       const client = unwrapSingleRelation<{ name?: string }>(order.clients);
       return {
         id: order.id,
@@ -469,9 +490,9 @@ const baseDb = {
         project_type: (order as any).project_type || 'standard',
         production_status: order.production_status,
         client_name: client?.name || 'Unknown Client',
-        assigned_packers_count: 0 // This could be calculated if needed
+        assigned_packers_count: assignedPackerCountByOrder[order.id] || 0
       };
-    }) || [];
+    });
     
     return { data: transformedData, error };
   },
@@ -770,7 +791,6 @@ const baseDb = {
 
   // Get all packers with their current assignment status
   getAllPackersWithStatus: async () => {
-    // Query directly instead of using RPC to avoid caching issues
     const { data, error } = await supabase
       .from('profiles')
       .select(`
@@ -787,9 +807,8 @@ const baseDb = {
       .order('full_name');
     
     if (error) return { data: null, error };
-    
-    // Transform to match expected format
-    const transformed = (data || []).map(packer => {
+
+    const basePackers = (data || []).map(packer => {
       const currentOrder = unwrapSingleRelation<{ order_name?: string }>(packer.orders);
       return {
         id: packer.id,
@@ -797,6 +816,91 @@ const baseDb = {
         username: packer.username,
         packer_status: packer.packer_status || 'available',
         current_order_name: currentOrder?.order_name || null
+      };
+    });
+
+    const busyWithoutOrderName = basePackers.filter(
+      (packer) => packer.packer_status !== 'available' && !packer.current_order_name
+    );
+
+    const activeSessionOrderNameByPacker: Record<string, string> = {};
+    if (busyWithoutOrderName.length > 0) {
+      const busyIds = busyWithoutOrderName.map((packer) => packer.id);
+      const { data: sessionRows, error: sessionError } = await supabase
+        .from('packer_sessions')
+        .select(`
+          packer_id,
+          created_at,
+          orders:order_id (
+            order_name
+          )
+        `)
+        .eq('session_active', true)
+        .in('packer_id', busyIds)
+        .order('created_at', { ascending: false });
+
+      if (sessionError) {
+        console.warn('Failed to load active session order names for packers:', sessionError);
+      } else {
+        (sessionRows || []).forEach((row: any) => {
+          const packerId = row?.packer_id;
+          if (!packerId || activeSessionOrderNameByPacker[packerId]) return;
+
+          const order = unwrapSingleRelation<{ order_name?: string }>(row?.orders);
+          if (order?.order_name) {
+            activeSessionOrderNameByPacker[packerId] = order.order_name;
+          }
+        });
+      }
+    }
+
+    const unresolvedBusyPackers = busyWithoutOrderName.filter(
+      (packer) => !activeSessionOrderNameByPacker[packer.id]
+    );
+
+    const membershipOrderNameByPacker: Record<string, string> = {};
+    if (unresolvedBusyPackers.length > 0) {
+      const unresolvedIds = unresolvedBusyPackers.map((packer) => packer.id);
+      const { data: membershipRows, error: membershipError } = await supabase
+        .from('order_team_members')
+        .select(`
+          packer_id,
+          created_at,
+          orders:order_id (
+            order_name
+          )
+        `)
+        .in('packer_id', unresolvedIds)
+        .order('created_at', { ascending: false });
+
+      if (membershipError) {
+        console.warn('Failed to load fallback membership order names for packers:', membershipError);
+      } else {
+        (membershipRows || []).forEach((row: any) => {
+          const packerId = row?.packer_id;
+          if (!packerId || membershipOrderNameByPacker[packerId]) return;
+
+          const order = unwrapSingleRelation<{ order_name?: string }>(row?.orders);
+          if (order?.order_name) {
+            membershipOrderNameByPacker[packerId] = order.order_name;
+          }
+        });
+      }
+    }
+    
+    const transformed = basePackers.map((packer) => {
+      if (packer.current_order_name) {
+        return packer;
+      }
+
+      if (packer.packer_status === 'available') {
+        return packer;
+      }
+
+      const resolvedOrderName = activeSessionOrderNameByPacker[packer.id] || membershipOrderNameByPacker[packer.id] || null;
+      return {
+        ...packer,
+        current_order_name: resolvedOrderName,
       };
     });
     
@@ -811,6 +915,20 @@ const baseDb = {
         lead_id: projectLeadId
       });
     
+    return { data, error };
+  },
+
+  clearProjectLead: async (orderId: UUID) => {
+    const { data, error } = await supabase
+      .from('orders')
+      .update({
+        project_lead_id: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', orderId)
+      .select('id, project_lead_id')
+      .single();
+
     return { data, error };
   },
 
