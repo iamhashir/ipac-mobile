@@ -1,6 +1,7 @@
 import { registerWebModule, NativeModule } from 'expo';
 
 import {
+  BrotherNativePrintOptions,
   BrotherPrintLabelResult,
   BrotherPrinterChannel,
   BrotherPrinterModuleEvents,
@@ -20,7 +21,8 @@ class BrotherPrinterModule extends NativeModule<BrotherPrinterModuleEvents> {
     _address: string,
     _filePath: string,
     _modelName: string | null,
-    _labelWidthMm: number
+    _labelWidthMm: number,
+    _printOptions?: BrotherNativePrintOptions
   ): Promise<BrotherPrintLabelResult> {
     unsupported();
   }

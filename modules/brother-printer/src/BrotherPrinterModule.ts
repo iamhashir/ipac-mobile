@@ -1,6 +1,7 @@
 import { NativeModule, requireNativeModule } from 'expo';
 
 import {
+  BrotherNativePrintOptions,
   BrotherPrintLabelResult,
   BrotherPrinterChannel,
   BrotherPrinterModuleEvents,
@@ -13,7 +14,8 @@ declare class BrotherPrinterModule extends NativeModule<BrotherPrinterModuleEven
     address: string,
     filePath: string,
     modelName: string | null,
-    labelWidthMm: number
+    labelWidthMm: number,
+    printOptions?: BrotherNativePrintOptions
   ): Promise<BrotherPrintLabelResult>;
   getPrinterStatusAsync(address: string, modelName: string | null): Promise<BrotherStatusResult>;
 }

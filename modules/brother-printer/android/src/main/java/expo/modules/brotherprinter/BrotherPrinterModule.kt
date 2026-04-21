@@ -29,7 +29,7 @@ class BrotherPrinterModule : Module() {
       searchBluetoothPrinters()
     }
 
-    AsyncFunction("printLabelFileAsync") { address: String, filePath: String, modelName: String?, labelWidthMm: Int ->
+    AsyncFunction("printLabelFileAsync") { address: String, filePath: String, modelName: String?, labelWidthMm: Int, printOptions: Map<String, Any>? ->
       val normalizedPath = normalizeFilePath(filePath)
       val file = File(normalizedPath)
       if (!file.exists()) {
@@ -41,8 +41,19 @@ class BrotherPrinterModule : Module() {
         val preStatus = mapStatusResult(driver.getPrinterStatus())
         throwIfBlockingStatus(preStatus)
 
+        val resolvedModel = resolvePrinterModel(modelName, labelWidthMm)
+        val resolvedLabelSize = resolveLabelSize(labelWidthMm)
+        val resolvedPrintOptions = resolvePtPrintOptions(printOptions)
+
         emitConnectionState("printing", address = address, modelName = modelName)
-        val settings = buildPtPrintSettings(modelName, labelWidthMm)
+        emitConnectionState(
+          "printing",
+          address = address,
+          modelName = modelName,
+          message = "PT settings model=${resolvedModel.name}, label=${resolvedLabelSize.name}, autoCut=${resolvedPrintOptions.autoCut}, halfCut=${resolvedPrintOptions.halfCut}, cutAtEnd=${resolvedPrintOptions.cutAtEnd}, specialTape=${resolvedPrintOptions.specialTape}, chainPrint=${resolvedPrintOptions.chainPrint}"
+        )
+
+        val settings = buildPtPrintSettings(resolvedModel, resolvedLabelSize, resolvedPrintOptions)
         val printError = if (normalizedPath.lowercase(Locale.US).endsWith(".pdf")) {
           driver.printPDF(normalizedPath, settings)
         } else {
@@ -88,7 +99,7 @@ class BrotherPrinterModule : Module() {
 
     val mapped = channels
       .map { channel -> mapChannel(channel) }
-      .sortedBy { channel -> String(channel["modelName"] ?: "") }
+      .sortedBy { channel -> channel["modelName"]?.toString().orEmpty() }
 
     emitConnectionState(
       "discovered",
@@ -100,7 +111,7 @@ class BrotherPrinterModule : Module() {
   private fun mapChannel(channel: Channel): Map<String, Any?> {
     val modelName = getExtraInfo(channel, Channel.ExtraInfoKey.ModelName)
       ?: "Brother Printer"
-    val serialNumber = getExtraInfo(channel, Channel.ExtraInfoKey.SerialNumber)
+    val serialNumber = getExtraInfo(channel, Channel.ExtraInfoKey.SerialNubmer)
     val alias = getExtraInfo(channel, Channel.ExtraInfoKey.BluetoothAlias)
     val macAddress = getExtraInfo(channel, Channel.ExtraInfoKey.MACAddress)
 
@@ -160,7 +171,7 @@ class BrotherPrinterModule : Module() {
     return mapOf(
       "model" to status?.model?.name,
       "errorCode" to printerError?.name,
-      "batteryStatus" to status?.batteryStatus?.name,
+      "batteryStatus" to status?.batteryStatus?.toString(),
       "statusQueryError" to statusErrorCode,
       "outOfPaper" to outOfPaper,
       "coverOpen" to coverOpen,
@@ -203,6 +214,12 @@ class BrotherPrinterModule : Module() {
 
       PrintError.ErrorCode.PrinterModelError -> {
         throw Exception("BROTHER_PRINTER_MODEL_ERROR: $message")
+      }
+
+      PrintError.ErrorCode.PrintSettingsError,
+      PrintError.ErrorCode.PrintSettingsNotSupportError,
+      PrintError.ErrorCode.SetLabelSizeError -> {
+        throw Exception("BROTHER_LABEL_SETTINGS_INVALID: $message")
       }
 
       else -> {
@@ -276,23 +293,104 @@ class BrotherPrinterModule : Module() {
     return if (code.startsWith("BROTHER_")) code else null
   }
 
-  private fun buildPtPrintSettings(modelName: String?, labelWidthMm: Int): PTPrintSettings {
-    val printerModel = resolvePrinterModel(modelName)
+  private data class PtPrintOptions(
+    val autoCut: Boolean,
+    val halfCut: Boolean,
+    val cutAtEnd: Boolean,
+    val specialTape: Boolean,
+    val chainPrint: Boolean,
+    val autoCutForEachPageCount: Int
+  )
+
+  private fun resolvePtPrintOptions(rawOptions: Map<String, Any>?): PtPrintOptions {
+    val options = rawOptions.orEmpty()
+    val cutAtEnd = options.booleanOption("cutAtEnd", true)
+    val chainPrint = options.booleanOptionOrNull("chainPrint") ?: !cutAtEnd
+
+    return PtPrintOptions(
+      autoCut = options.booleanOption("autoCut", false),
+      halfCut = options.booleanOption("halfCut", false),
+      cutAtEnd = cutAtEnd,
+      specialTape = options.booleanOption("specialTape", false),
+      chainPrint = chainPrint,
+      autoCutForEachPageCount = options.intOption("autoCutForEachPageCount", 1).coerceAtLeast(1)
+    )
+  }
+
+  private fun Map<String, Any>.booleanOption(key: String, defaultValue: Boolean): Boolean {
+    return booleanOptionOrNull(key) ?: defaultValue
+  }
+
+  private fun Map<String, Any>.booleanOptionOrNull(key: String): Boolean? {
+    val value = this[key] ?: return null
+    return when (value) {
+      is Boolean -> value
+      is Number -> value.toInt() != 0
+      is String -> when (value.trim().lowercase(Locale.US)) {
+        "1", "true", "yes", "on" -> true
+        "0", "false", "no", "off" -> false
+        else -> null
+      }
+
+      else -> null
+    }
+  }
+
+  private fun Map<String, Any>.intOption(key: String, defaultValue: Int): Int {
+    val value = this[key] ?: return defaultValue
+    return when (value) {
+      is Number -> value.toInt()
+      is String -> value.trim().toIntOrNull() ?: defaultValue
+      is Boolean -> if (value) 1 else 0
+      else -> defaultValue
+    }
+  }
+
+  private fun applyCutAtEndSetting(settings: PTPrintSettings, cutAtEnd: Boolean) {
+    if (invokeBooleanSetterIfExists(settings, "setCutAtEnd", cutAtEnd)) {
+      return
+    }
+
+    // Some SDK variants expose cut-at-end semantics as cut pause.
+    invokeBooleanSetterIfExists(settings, "setCutPause", !cutAtEnd)
+  }
+
+  private fun invokeBooleanSetterIfExists(target: Any, methodName: String, value: Boolean): Boolean {
+    return try {
+      val method = target.javaClass.methods.firstOrNull { method ->
+        method.name == methodName &&
+          method.parameterTypes.size == 1 &&
+          (method.parameterTypes[0] == Boolean::class.javaPrimitiveType ||
+            method.parameterTypes[0] == java.lang.Boolean::class.java)
+      } ?: return false
+
+      method.invoke(target, value)
+      true
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  private fun buildPtPrintSettings(
+    printerModel: PrinterModel,
+    labelSize: PTPrintSettings.LabelSize,
+    printOptions: PtPrintOptions
+  ): PTPrintSettings {
     val settings = PTPrintSettings(printerModel)
 
-    settings.setLabelSize(resolveLabelSize(labelWidthMm))
-    settings.setAutoCut(true)
-    settings.setHalfCut(true)
-    settings.setAutoCutForEachPageCount(1)
-    settings.setChainPrint(false)
-    settings.setSpecialTapePrint(false)
+    settings.setLabelSize(labelSize)
+    settings.setAutoCut(printOptions.autoCut)
+    settings.setHalfCut(printOptions.halfCut)
+    settings.setAutoCutForEachPageCount(printOptions.autoCutForEachPageCount)
+    settings.setChainPrint(printOptions.chainPrint)
+    settings.setSpecialTapePrint(printOptions.specialTape)
+    applyCutAtEndSetting(settings, printOptions.cutAtEnd)
 
-    // Keep output at the highest available quality for PT labels.
-    settings.setResolution(PrintImageSettings.Resolution.High)
+    settings.setResolution(PrintImageSettings.Resolution.Normal)
     settings.setPrintQuality(PrintImageSettings.PrintQuality.Best)
     settings.setNumCopies(1)
     settings.setSkipStatusCheck(false)
-    settings.setForceVanishingMargin(true)
+    settings.setForceVanishingMargin(false)
     settings.setFeedDirectionMargins(0)
 
     val workPath = appContext.reactContext?.cacheDir?.absolutePath.orEmpty()
@@ -310,8 +408,8 @@ class BrotherPrinterModule : Module() {
     }
   }
 
-  private fun resolvePrinterModel(modelHint: String?): PrinterModel {
-    val candidates = printerModelCandidates(modelHint)
+  private fun resolvePrinterModel(modelHint: String?, labelWidthMm: Int): PrinterModel {
+    val candidates = printerModelCandidates(modelHint, labelWidthMm)
     for (candidate in candidates) {
       try {
         return PrinterModel.valueOf(candidate)
@@ -323,21 +421,37 @@ class BrotherPrinterModule : Module() {
       ?: PrinterModel.values().first()
   }
 
-  private fun printerModelCandidates(modelHint: String?): List<String> {
+  private fun printerModelCandidates(modelHint: String?, labelWidthMm: Int): List<String> {
     val normalized = normalizeModelHint(modelHint)
     val candidates = mutableListOf<String>()
 
     if (normalized.isNotBlank()) {
       candidates.add(normalized)
 
-      if (normalized.startsWith("PT_E920BT")) {
+      if (normalized.startsWith("PT_E920BT") || normalized.startsWith("PT_E900")) {
         candidates.add("PT_E920BT")
+        candidates.add("PT_E900")
+        // PT-E920 can reject PT-P/DT profiles as non-target (PSMc385).
+        // Prefer known-compatible PT-E aliases when PT_E920BT is unavailable.
+        candidates.add("PT_E560BT")
+        candidates.add("PT_E550W")
+
+        // Keep broader 36mm-capable PT aliases as a last-resort fallback.
+        if (labelWidthMm >= 36) {
+          candidates.add("PT_P950NW")
+          candidates.add("PT_P900W")
+          candidates.add("PT_D800W")
+          candidates.add("PT_P910BT")
+        }
       }
       if (normalized.startsWith("PT_E560BT")) {
         candidates.add("PT_E560BT")
       }
       if (normalized.startsWith("PT_E550W")) {
         candidates.add("PT_E550W")
+      }
+      if (normalized.startsWith("PT_E900")) {
+        candidates.add("PT_E900")
       }
 
       val withoutTrailingDigits = normalized.replace(Regex("(BT|W)\\d+$"), "$1")
@@ -349,6 +463,11 @@ class BrotherPrinterModule : Module() {
     candidates.addAll(
       listOf(
         "PT_E920BT",
+        "PT_E900",
+        "PT_P950NW",
+        "PT_P900W",
+        "PT_D800W",
+        "PT_P910BT",
         "PT_E560BT",
         "PT_E550W"
       )

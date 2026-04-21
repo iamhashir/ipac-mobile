@@ -13,6 +13,7 @@ const BROTHER_NAME_HINTS = ['brother', 'pt-', 'ql-', 'rj-', 'td-', 'pj-', 'mw-']
 
 type PrintConnectionPreference = 'auto' | 'bluetooth' | 'wifi';
 type QrLogoPlacement = 'auto' | 'none' | 'above-qr' | 'inside-qr';
+type AndroidPermission = (typeof PermissionsAndroid.PERMISSIONS)[keyof typeof PermissionsAndroid.PERMISSIONS];
 
 export interface BrotherDetectedPrinter {
   modelName: string;
@@ -35,6 +36,14 @@ export interface BrotherDirectPrintOptions {
   printerAddressHint?: string;
   postPrintDelayMs?: number;
   onStatus?: (status: string) => void;
+
+  // PT cut/tape options passed through to native print settings.
+  autoCut?: boolean;
+  halfCut?: boolean;
+  cutAtEnd?: boolean;
+  specialTape?: boolean;
+  chainPrint?: boolean;
+  autoCutForEachPageCount?: number;
 
   // Compatibility placeholders to avoid breaking existing call sites.
   density?: number;
@@ -92,6 +101,19 @@ const normalizeBrotherError = (error: unknown, fallbackMessage: string): Error =
     return createBrotherError('BROTHER_BATTERY_LOW', 'Printer battery is low. Charge or replace the battery and retry.');
   }
 
+  if (
+    taggedCode === 'BROTHER_LABEL_SETTINGS_INVALID' ||
+    lowered.includes('unsupported paper is set in the print settings') ||
+    lowered.includes('label of print setting has some problem') ||
+    lowered.includes('printsettingsnotsupporterror') ||
+    lowered.includes('setlabelsizeerror')
+  ) {
+    return createBrotherError(
+      'BROTHER_LABEL_SETTINGS_INVALID',
+      'Label settings are not compatible with the selected printer profile. Reconnect the printer, confirm the installed tape width, and retry Test A.'
+    );
+  }
+
   if (taggedCode === 'BROTHER_OPEN_STREAM_FAILURE' || lowered.includes('openstreamfailure')) {
     return createBrotherError(
       'BROTHER_OPEN_STREAM_FAILURE',
@@ -139,7 +161,7 @@ const statusMessageFromNativeEvent = (event: BrotherConnectionStateEvent): strin
     case 'status_check':
       return 'Checking printer status...';
     case 'printing':
-      return 'Printing label...';
+      return event.message || 'Printing label...';
     case 'printed':
       return 'Label printed successfully.';
     case 'disconnected':
@@ -182,7 +204,7 @@ const ensureAndroidBluetoothPermissions = async (
 ): Promise<boolean> => {
   if (Platform.OS !== 'android') return true;
 
-  const requiredPermissions: string[] = [];
+  const requiredPermissions: AndroidPermission[] = [];
   const { BLUETOOTH_CONNECT, BLUETOOTH_SCAN, ACCESS_FINE_LOCATION } = PermissionsAndroid.PERMISSIONS;
 
   if (BLUETOOTH_CONNECT) requiredPermissions.push(BLUETOOTH_CONNECT);
@@ -195,7 +217,7 @@ const ensureAndroidBluetoothPermissions = async (
     requiredPermissions.push(ACCESS_FINE_LOCATION);
   }
 
-  const uniquePermissions = [...new Set(requiredPermissions)];
+  const uniquePermissions = [...new Set(requiredPermissions)] as AndroidPermission[];
   if (uniquePermissions.length === 0) return true;
 
   const alreadyGranted = await Promise.all(
@@ -208,7 +230,8 @@ const ensureAndroidBluetoothPermissions = async (
   onStatus?.('Requesting Android Bluetooth permissions...');
   const requestResult = await PermissionsAndroid.requestMultiple(missingPermissions);
   const denied = missingPermissions.filter(
-    (permission) => requestResult[permission] !== PermissionsAndroid.RESULTS.GRANTED
+    (permission) =>
+      requestResult[permission as keyof typeof requestResult] !== PermissionsAndroid.RESULTS.GRANTED
   );
 
   if (denied.length > 0) {
@@ -658,11 +681,38 @@ const printHtmlWithBrother = async (html: string, options: BrotherDirectPrintOpt
     }
 
     onStatus?.('Sending print job to Brother printer...');
+    const cutAtEnd = effectiveOptions.cutAtEnd ?? true;
+    const nativePrintOptions = {
+      autoCut: effectiveOptions.autoCut ?? false,
+      halfCut: effectiveOptions.halfCut ?? false,
+      cutAtEnd,
+      specialTape: effectiveOptions.specialTape ?? false,
+      chainPrint:
+        typeof effectiveOptions.chainPrint === 'boolean'
+          ? effectiveOptions.chainPrint
+          : !cutAtEnd,
+      autoCutForEachPageCount: Math.max(
+        1,
+        Math.round(effectiveOptions.autoCutForEachPageCount ?? 1)
+      ),
+    };
+
+    const nativePayload = {
+      address: printer.address,
+      filePath: pdf.uri,
+      modelName: printer.modelName || null,
+      labelWidthMm,
+      printOptions: nativePrintOptions,
+    };
+    console.log('[Brother Item Print] Native payload:', nativePayload);
+    onStatus?.(`[Brother Item Print] Native payload: ${JSON.stringify(nativePayload)}`);
+
     const result = await BrotherPrinter.printLabelFileAsync(
       printer.address,
       pdf.uri,
       printer.modelName || null,
-      labelWidthMm
+      labelWidthMm,
+      nativePrintOptions
     );
 
     throwIfStatusBlocked(result?.status);

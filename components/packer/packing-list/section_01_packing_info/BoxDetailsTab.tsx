@@ -170,24 +170,45 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
     try {
       setPrintingIpacTest(true);
       const brotherPrintModule = require('../../../../utils/printing/brotherDirectPrint') as {
+        getDetectedBrotherPrinter?: () => {
+          modelName: string;
+          address: string;
+          connectionType: 'bluetooth' | 'wifi' | 'unknown';
+        } | null;
         printBrotherTextLabelDirect?: (textValue: string, options?: any) => Promise<void>;
       };
-      const { printBrotherTextLabelDirect } = brotherPrintModule;
+      const { getDetectedBrotherPrinter, printBrotherTextLabelDirect } = brotherPrintModule;
 
       if (typeof printBrotherTextLabelDirect !== 'function') {
         throw new Error('Brother print module loaded but printBrotherTextLabelDirect is unavailable. Restart Metro with cache clear.');
       }
 
-      await printBrotherTextLabelDirect('IPAC', {
-        labelWidthMm: 62,
+      const connectedPrinter =
+        typeof getDetectedBrotherPrinter === 'function' ? getDetectedBrotherPrinter() : null;
+
+      if (!connectedPrinter?.address) {
+        Alert.alert(
+          'Connect Printer First',
+          'Use the Connect Printer button in the items section, then retry this test print.'
+        );
+        return;
+      }
+
+      await printBrotherTextLabelDirect('A', {
+        printerAddressHint: connectedPrinter.address,
+        preferredConnection: connectedPrinter.connectionType,
+        labelWidthMm: 36,
         postPrintDelayMs: 3000,
-        onStatus: (statusText) => console.log(`[Brother IPAC Test] ${statusText}`),
+        onStatus: (statusText) => console.log(`[Brother Test A] ${statusText}`),
       });
 
-      Alert.alert('Direct Print Sent', 'Test label text "IPAC" was sent to the Brother printer.');
+      Alert.alert(
+        'Direct Print Sent',
+        `Test label text "A" was sent to ${connectedPrinter.modelName} (${connectedPrinter.address}).`
+      );
     } catch (e: any) {
-      console.error('Error printing IPAC test label with Brother SDK:', e);
-      const message = String(e?.message || 'Unable to print IPAC test label.');
+      console.error('Error printing test label "A" with Brother SDK:', e);
+      const message = String(e?.message || 'Unable to print test label "A".');
 
       const normalized = message.toLowerCase();
       if (
@@ -224,7 +245,7 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
                 ) : (
                   <View className="flex-row items-center">
                     <Printer size={16} color="#0f766e" />
-                    <Text className="text-teal-800 text-sm font-semibold ml-1">Test IPAC</Text>
+                    <Text className="text-teal-800 text-sm font-semibold ml-1">Test A</Text>
                   </View>
                 )}
               </TouchableOpacity>

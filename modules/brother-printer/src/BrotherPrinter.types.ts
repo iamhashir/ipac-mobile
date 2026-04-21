@@ -46,6 +46,15 @@ export type BrotherStatusResult = {
   status: BrotherPrinterStatus;
 };
 
+export type BrotherNativePrintOptions = {
+  autoCut?: boolean;
+  halfCut?: boolean;
+  cutAtEnd?: boolean;
+  specialTape?: boolean;
+  chainPrint?: boolean;
+  autoCutForEachPageCount?: number;
+};
+
 export type BrotherPrinterModuleEvents = {
   onConnectionStateChange: (params: BrotherConnectionStateEvent) => void;
 };
