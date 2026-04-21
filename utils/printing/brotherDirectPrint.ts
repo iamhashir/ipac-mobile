@@ -124,7 +124,25 @@ const extractBrotherErrorCode = (rawMessage: string): string | null => {
 };
 
 const normalizeBrotherError = (error: unknown, fallbackMessage: string): Error => {
-  const raw = String((error as any)?.message || error || fallbackMessage).trim();
+  let raw = String((error as any)?.message || error || fallbackMessage).trim();
+  
+  const userInfo = (error as any)?.userInfo;
+  if (userInfo) {
+    console.log('[Brother SDK Error]', JSON.stringify(userInfo, null, 2));
+    const infoError = userInfo.error;
+    if (infoError) {
+      if (infoError.label) {
+        raw += ` (Label: ${infoError.label})`;
+      } else if (infoError.code?.label) {
+        raw += ` (Label: ${infoError.code.label})`;
+      }
+      
+      if (infoError.errorDescription) {
+        raw += ` - ${infoError.errorDescription}`;
+      }
+    }
+  }
+
   const lowered = raw.toLowerCase();
   const taggedCode = extractBrotherErrorCode(raw);
 
@@ -144,7 +162,8 @@ const normalizeBrotherError = (error: unknown, fallbackMessage: string): Error =
     taggedCode === 'BROTHER_LABEL_SETTINGS_INVALID' ||
     lowered.includes('unsupported') ||
     lowered.includes('printsettings') ||
-    lowered.includes('unknownprintermodel')
+    lowered.includes('unknownprintermodel') ||
+    lowered.includes('wronglabel')
   ) {
     return createBrotherError(
       'BROTHER_LABEL_SETTINGS_INVALID',
@@ -152,7 +171,7 @@ const normalizeBrotherError = (error: unknown, fallbackMessage: string): Error =
     );
   }
 
-  if (taggedCode === 'BROTHER_OPEN_STREAM_FAILURE' || lowered.includes('openstreamfailure')) {
+  if (taggedCode === 'BROTHER_OPEN_STREAM_FAILURE' || lowered.includes('openstreamfailure') || lowered.includes('portnotsupported')) {
     return createBrotherError(
       'BROTHER_OPEN_STREAM_FAILURE',
       'Could not open a Bluetooth printer stream. Pair the printer in Android Bluetooth settings, then reconnect and retry.'
@@ -392,7 +411,9 @@ const buildModelCandidates = (modelName: string): string[] => {
   push(withHyphen);
   push(normalized);
 
-  if (normalized.startsWith('PTE920BT')) {
+  const alphanumeric = normalized.replace(/[^A-Z0-9]/g, '');
+
+  if (alphanumeric.startsWith('PTE920BT')) {
     push('PT-E920BT');
     push('PT-P910BT');
     push('PT-P900W');
@@ -401,8 +422,8 @@ const buildModelCandidates = (modelName: string): string[] => {
     push('PT-E550W');
   }
 
-  if (normalized.startsWith('QL') && !withHyphen.startsWith('QL-')) {
-    push(`QL-${normalized.slice(2)}`);
+  if (alphanumeric.startsWith('QL')) {
+    push(`QL-${alphanumeric.slice(2)}`);
   }
 
   return candidates;
@@ -411,8 +432,9 @@ const buildModelCandidates = (modelName: string): string[] => {
 const preparePrintSettings = async (
   sdk: OfficialBrotherSdk,
   printerModelName: string,
+  labelWidthMm: number,
   onStatus?: (status: string) => void
-) => {
+): Promise<string> => {
   if (typeof sdk.newPrintSettings !== 'function') {
     throw createBrotherError('BROTHER_SDK_API_MISSING', 'Official Brother SDK newPrintSettings API is unavailable.');
   }
@@ -425,7 +447,22 @@ const preparePrintSettings = async (
       onStatus?.(`Preparing print profile for ${candidate}...`);
       const result = await sdk.newPrintSettings(candidate);
       ensurePrintSettingsResult(result, candidate);
-      return;
+
+      // Tell Native SDK to skip querying the physical hardware for its exact model string.
+      // This allows fallback profile bindings (like P910BT profiling for E920BT) to successfully map and bypass `PrinterModelError`.
+      if (typeof sdk.updatePrintSettings === 'function') {
+        try {
+          const overrideOptions: any = { skipStatusCheck: true };
+          if (candidate.startsWith('PT-')) {
+            overrideOptions.emulatePtLabelSize = `Width${labelWidthMm}mm`;
+          }
+          await sdk.updatePrintSettings(overrideOptions);
+        } catch (updateError) {
+          console.warn('[Brother Print] Failed to inject settings override:', updateError);
+        }
+      }
+
+      return candidate;
     } catch (error) {
       lastError = error;
     }
@@ -894,14 +931,22 @@ const printHtmlWithBrother = async (html: string, options: BrotherDirectPrintOpt
       throw createBrotherError('BROTHER_PDF_GENERATION_FAILED', 'Failed to generate printable document.');
     }
 
-    await preparePrintSettings(sdk, printer.modelName, onStatus);
+    const labelWidthMm = resolveLabelWidthMm(effectiveOptions.labelWidthMm);
+    const matchedModel = await preparePrintSettings(sdk, printer.modelName, labelWidthMm, onStatus);
 
     if (typeof sdk.printPDFFileWithChannel !== 'function') {
       throw createBrotherError('BROTHER_SDK_API_MISSING', 'Official Brother SDK printPDFFileWithChannel API is unavailable.');
     }
 
+    const activeChannel = { ...channel };
+    if (activeChannel.extraInfo) {
+      activeChannel.extraInfo = { ...activeChannel.extraInfo, ModelName: matchedModel };
+    }
+
+    const printablePath = pdf.uri.replace(/^file:\/\//i, '');
+
     onStatus?.('Sending print job to Brother printer...');
-    const printResult = await sdk.printPDFFileWithChannel(channel, pdf.uri);
+    const printResult = await sdk.printPDFFileWithChannel(activeChannel, printablePath);
     ensurePrintResult(printResult);
 
     const postDelay = Math.max(
