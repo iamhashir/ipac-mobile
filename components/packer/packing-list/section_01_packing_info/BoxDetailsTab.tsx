@@ -199,7 +199,7 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
         preferredConnection: connectedPrinter.connectionType,
         labelWidthMm: 36,
         postPrintDelayMs: 3000,
-        onStatus: (statusText) => console.log(`[Brother Test A] ${statusText}`),
+        onStatus: (statusText: string) => console.log(`[Brother Test A] ${statusText}`),
       });
 
       Alert.alert(

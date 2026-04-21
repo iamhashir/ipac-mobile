@@ -28,6 +28,7 @@
     "expo-status-bar": "~3.0.8",
     "lucide-react-native": "^0.530.0",
     "nativewind": "^4.1.23",
+    "official-react-brother-print-sdk": "^1.0.3",
     "qrcode-generator": "^2.0.4",
     "react": "19.1.0",
     "react-dom": "19.1.0",

@@ -1,11 +1,6 @@
 import { PermissionsAndroid, Platform } from 'react-native';
 import * as Print from 'expo-print';
 import qrcode from 'qrcode-generator';
-import BrotherPrinter, {
-  BrotherConnectionStateEvent,
-  BrotherPrinterChannel,
-  BrotherPrinterStatus,
-} from '../../modules/brother-printer';
 
 const DEFAULT_POST_PRINT_DELAY_MS = 1200;
 const DEFAULT_LABEL_WIDTH_MM = 36;
@@ -14,6 +9,51 @@ const BROTHER_NAME_HINTS = ['brother', 'pt-', 'ql-', 'rj-', 'td-', 'pj-', 'mw-']
 type PrintConnectionPreference = 'auto' | 'bluetooth' | 'wifi';
 type QrLogoPlacement = 'auto' | 'none' | 'above-qr' | 'inside-qr';
 type AndroidPermission = (typeof PermissionsAndroid.PERMISSIONS)[keyof typeof PermissionsAndroid.PERMISSIONS];
+
+type BrotherEnumMap = {
+  type?: string;
+  code?: number;
+  label?: string;
+};
+
+type BrotherChannel = {
+  channelType?: BrotherEnumMap;
+  channelInfo?: string;
+  extraInfo?: {
+    ModelName?: string;
+    SerialNumber?: string;
+    NodeName?: string;
+    MacAddress?: string;
+    Location?: string;
+  };
+};
+
+type BrotherSearchResult = {
+  channels?: BrotherChannel[];
+  error?: BrotherEnumMap;
+};
+
+type BrotherPrintError = {
+  code?: BrotherEnumMap;
+  errorDescription?: string;
+};
+
+type BrotherPrintSettingsResult = {
+  enumMap?: BrotherEnumMap;
+};
+
+type OfficialBrotherSdk = {
+  startBluetoothSearch?: () => Promise<BrotherSearchResult>;
+  startNetworkSearch?: (
+    duration: number,
+    printerList?: string[],
+    isTethering?: boolean
+  ) => Promise<BrotherSearchResult>;
+  newBluetoothChannelWithMacAddress?: (macAddress: string) => Promise<BrotherChannel>;
+  newWifiChannel?: (ipAddress: string) => Promise<BrotherChannel>;
+  newPrintSettings?: (printerModel: string) => Promise<BrotherPrintSettingsResult>;
+  printPDFFileWithChannel?: (channel: BrotherChannel, path: string) => Promise<BrotherPrintError>;
+};
 
 export interface BrotherDetectedPrinter {
   modelName: string;
@@ -37,15 +77,13 @@ export interface BrotherDirectPrintOptions {
   postPrintDelayMs?: number;
   onStatus?: (status: string) => void;
 
-  // PT cut/tape options passed through to native print settings.
+  // Compatibility placeholders to avoid breaking existing call sites.
   autoCut?: boolean;
   halfCut?: boolean;
   cutAtEnd?: boolean;
   specialTape?: boolean;
   chainPrint?: boolean;
   autoCutForEachPageCount?: number;
-
-  // Compatibility placeholders to avoid breaking existing call sites.
   density?: number;
   feedDots?: number;
   protocolOverride?: 'auto' | 'm-series' | 'm110';
@@ -69,6 +107,7 @@ const normalizeModelName = (value: unknown) =>
   String(value || '')
     .trim()
     .toUpperCase()
+    .replace(/_/g, '-')
     .replace(/\s+/g, '');
 
 const createBrotherError = (code: string, message: string): Error => {
@@ -103,21 +142,20 @@ const normalizeBrotherError = (error: unknown, fallbackMessage: string): Error =
 
   if (
     taggedCode === 'BROTHER_LABEL_SETTINGS_INVALID' ||
-    lowered.includes('unsupported paper is set in the print settings') ||
-    lowered.includes('label of print setting has some problem') ||
-    lowered.includes('printsettingsnotsupporterror') ||
-    lowered.includes('setlabelsizeerror')
+    lowered.includes('unsupported') ||
+    lowered.includes('printsettings') ||
+    lowered.includes('unknownprintermodel')
   ) {
     return createBrotherError(
       'BROTHER_LABEL_SETTINGS_INVALID',
-      'Label settings are not compatible with the selected printer profile. Reconnect the printer, confirm the installed tape width, and retry Test A.'
+      'Label settings are not compatible with the selected printer profile. Reconnect the printer, confirm media width, and retry.'
     );
   }
 
   if (taggedCode === 'BROTHER_OPEN_STREAM_FAILURE' || lowered.includes('openstreamfailure')) {
     return createBrotherError(
       'BROTHER_OPEN_STREAM_FAILURE',
-      'Could not open a Bluetooth printer stream. Pair the printer in Android Bluetooth settings, disconnect it from other devices, then reconnect and retry.'
+      'Could not open a Bluetooth printer stream. Pair the printer in Android Bluetooth settings, then reconnect and retry.'
     );
   }
 
@@ -143,60 +181,22 @@ const normalizeBrotherError = (error: unknown, fallbackMessage: string): Error =
   return createBrotherError('BROTHER_PRINT_FAILED', raw || fallbackMessage);
 };
 
-const statusMessageFromNativeEvent = (event: BrotherConnectionStateEvent): string | null => {
-  const state = String(event?.state || '').trim();
-  const address = String(event?.address || '').trim();
-  const modelName = String(event?.modelName || '').trim();
-  const suffix = [modelName, address].filter(Boolean).join(' ');
+const loadOfficialBrotherSdk = (): OfficialBrotherSdk => {
+  try {
+    const loaded = require('official-react-brother-print-sdk/js/NativeBrotherPrintSDK');
+    const sdk = (loaded?.default ?? loaded) as OfficialBrotherSdk;
 
-  switch (state) {
-    case 'searching':
-      return 'Searching paired Brother printers...';
-    case 'discovered':
-      return event.message || 'Printer discovery completed.';
-    case 'connecting':
-      return suffix ? `Connecting to ${suffix}...` : 'Connecting to printer...';
-    case 'connected':
-      return suffix ? `Connected to ${suffix}.` : 'Connected to printer.';
-    case 'status_check':
-      return 'Checking printer status...';
-    case 'printing':
-      return event.message || 'Printing label...';
-    case 'printed':
-      return 'Label printed successfully.';
-    case 'disconnected':
-      return suffix ? `Disconnected from ${suffix}.` : 'Printer disconnected.';
-    case 'error':
-      return event.message || (event.errorCode ? `Printer error (${event.errorCode}).` : 'Printer error.');
-    default:
-      return null;
+    if (!sdk) {
+      throw new Error('Official Brother SDK module is unavailable.');
+    }
+
+    return sdk;
+  } catch {
+    throw createBrotherError(
+      'BROTHER_DEV_BUILD_REQUIRED',
+      'Brother printing requires a Development Build with official-react-brother-print-sdk linked. Expo Go is not supported.'
+    );
   }
-};
-
-const addNativeStatusListener = (onStatus?: (status: string) => void): (() => void) => {
-  if (typeof onStatus !== 'function') return () => {};
-
-  const addListener = (BrotherPrinter as any)?.addListener;
-  if (typeof addListener !== 'function') return () => {};
-
-  const subscription = addListener.call(
-    BrotherPrinter,
-    'onConnectionStateChange',
-    (event: BrotherConnectionStateEvent) => {
-      const statusMessage = statusMessageFromNativeEvent(event);
-      if (statusMessage) {
-        onStatus(statusMessage);
-      }
-    }
-  );
-
-  return () => {
-    try {
-      subscription?.remove?.();
-    } catch {
-      // noop
-    }
-  };
 };
 
 const ensureAndroidBluetoothPermissions = async (
@@ -242,20 +242,44 @@ const ensureAndroidBluetoothPermissions = async (
   return true;
 };
 
-let detectedBrotherPrinter: BrotherDetectedPrinter | null = null;
+const toAddressKey = (value: string) => normalizeText(value);
+const looksLikeIpAddress = (value: string) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value.trim());
+const looksLikeMacAddress = (value: string) => /^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i.test(value.trim());
 
-const mapNativeChannel = (channel: BrotherPrinterChannel): BrotherDetectedPrinter => {
-  const address = String(channel.address || '').trim() || 'unknown';
-  const normalizedConnection = channel.connectionType === 'bluetooth' ? 'bluetooth' : 'unknown';
+const inferConnectionType = (
+  channelTypeLabel: string,
+  address: string
+): BrotherDetectedPrinter['connectionType'] => {
+  const loweredType = normalizeText(channelTypeLabel);
+  if (loweredType.includes('wifi')) return 'wifi';
+  if (loweredType.includes('bluetooth')) return 'bluetooth';
 
-  return {
-    modelName: String(channel.modelName || 'Brother Printer').trim() || 'Brother Printer',
+  if (looksLikeIpAddress(address)) return 'wifi';
+  if (looksLikeMacAddress(address)) return 'bluetooth';
+
+  return 'unknown';
+};
+
+const mapNativeChannel = (channel: BrotherChannel) => {
+  const extraInfo = channel?.extraInfo || {};
+  const modelName = String(extraInfo.ModelName || 'Brother Printer').trim() || 'Brother Printer';
+  const serialNumber = String(extraInfo.SerialNumber || '').trim() || undefined;
+  const channelInfo = String(channel?.channelInfo || '').trim();
+  const macAddress = String(extraInfo.MacAddress || '').trim();
+  const nodeName = String(extraInfo.NodeName || '').trim();
+  const address = macAddress || channelInfo || nodeName || serialNumber || 'unknown';
+  const channelTypeLabel = String(channel?.channelType?.label || '').trim();
+
+  const printer: BrotherDetectedPrinter = {
+    modelName,
     address,
-    serialNumber: channel.serialNumber,
-    connectionType: normalizedConnection,
-    channelType: channel.channelType,
+    serialNumber,
+    connectionType: inferConnectionType(channelTypeLabel, address),
+    channelType: channelTypeLabel || undefined,
     detectedAtMs: Date.now(),
   };
+
+  return { printer, channel };
 };
 
 const matchesHint = (printer: BrotherDetectedPrinter, hint: string) => {
@@ -275,6 +299,16 @@ const isLikelyBrotherPrinter = (printer: BrotherDetectedPrinter): boolean => {
     .map(normalizeText);
 
   return values.some((value) => BROTHER_NAME_HINTS.some((hint) => value.includes(hint)));
+};
+
+let detectedBrotherPrinter: BrotherDetectedPrinter | null = null;
+let detectedBrotherChannel: BrotherChannel | null = null;
+const discoveredChannelsByAddress = new Map<string, BrotherChannel>();
+
+const cacheDiscoveredChannels = (entries: Array<{ printer: BrotherDetectedPrinter; channel: BrotherChannel }>) => {
+  for (const entry of entries) {
+    discoveredChannelsByAddress.set(toAddressKey(entry.printer.address), entry.channel);
+  }
 };
 
 const withDetectedPrinterDefaults = (
@@ -319,10 +353,116 @@ const pickPreferredPrinter = (
   })[0];
 };
 
+const extractEnumLabel = (value: unknown) => String((value as any)?.label || '').trim();
+
+const ensurePrintSettingsResult = (result: BrotherPrintSettingsResult | undefined, modelName: string) => {
+  const label = extractEnumLabel(result?.enumMap);
+  if (!label || label === 'NoError') return;
+
+  throw createBrotherError(
+    'BROTHER_LABEL_SETTINGS_INVALID',
+    `Brother rejected print settings for model ${modelName} (${label}).`
+  );
+};
+
+const ensurePrintResult = (result: BrotherPrintError | undefined) => {
+  const label = extractEnumLabel(result?.code);
+  if (!label || label === 'NoError') return;
+
+  const description = String(result?.errorDescription || '').trim();
+  const normalizedCode = `BROTHER_${label.replace(/[^a-z0-9]+/gi, '_').toUpperCase()}`;
+  throw createBrotherError(normalizedCode, description || `Brother printer returned ${label}.`);
+};
+
+const buildModelCandidates = (modelName: string): string[] => {
+  const raw = String(modelName || '').trim();
+  const normalized = normalizeModelName(raw);
+  const withHyphen = normalized.includes('-')
+    ? normalized
+    : normalized.replace(/^([A-Z]{2})([A-Z0-9].+)$/, '$1-$2');
+
+  const candidates: string[] = [];
+  const push = (value: string) => {
+    const cleaned = String(value || '').trim();
+    if (!cleaned) return;
+    if (!candidates.includes(cleaned)) candidates.push(cleaned);
+  };
+
+  push(raw);
+  push(withHyphen);
+  push(normalized);
+
+  if (normalized.startsWith('PTE920BT')) {
+    push('PT-E920BT');
+    push('PT-P910BT');
+    push('PT-P900W');
+    push('PT-P950NW');
+    push('PT-E560BT');
+    push('PT-E550W');
+  }
+
+  if (normalized.startsWith('QL') && !withHyphen.startsWith('QL-')) {
+    push(`QL-${normalized.slice(2)}`);
+  }
+
+  return candidates;
+};
+
+const preparePrintSettings = async (
+  sdk: OfficialBrotherSdk,
+  printerModelName: string,
+  onStatus?: (status: string) => void
+) => {
+  if (typeof sdk.newPrintSettings !== 'function') {
+    throw createBrotherError('BROTHER_SDK_API_MISSING', 'Official Brother SDK newPrintSettings API is unavailable.');
+  }
+
+  const candidates = buildModelCandidates(printerModelName);
+  let lastError: unknown = null;
+
+  for (const candidate of candidates) {
+    try {
+      onStatus?.(`Preparing print profile for ${candidate}...`);
+      const result = await sdk.newPrintSettings(candidate);
+      ensurePrintSettingsResult(result, candidate);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw normalizeBrotherError(lastError, 'Unable to initialize print settings for the selected Brother model.');
+};
+
+const runSearch = async (
+  sdk: OfficialBrotherSdk,
+  mode: 'bluetooth' | 'wifi',
+  onStatus?: (status: string) => void
+): Promise<BrotherChannel[]> => {
+  if (mode === 'bluetooth') {
+    if (typeof sdk.startBluetoothSearch !== 'function') {
+      throw createBrotherError('BROTHER_SDK_API_MISSING', 'Official Brother SDK Bluetooth search API is unavailable.');
+    }
+
+    onStatus?.('Searching Brother printers via Bluetooth...');
+    const result = await sdk.startBluetoothSearch();
+    return Array.isArray(result?.channels) ? result.channels : [];
+  }
+
+  if (typeof sdk.startNetworkSearch !== 'function') {
+    throw createBrotherError('BROTHER_SDK_API_MISSING', 'Official Brother SDK network search API is unavailable.');
+  }
+
+  onStatus?.('Searching Brother printers via network...');
+  const result = await sdk.startNetworkSearch(5, undefined, false);
+  return Array.isArray(result?.channels) ? result.channels : [];
+};
+
 export const getDetectedBrotherPrinter = (): BrotherDetectedPrinter | null => detectedBrotherPrinter;
 
 export const clearDetectedBrotherPrinter = (): void => {
   detectedBrotherPrinter = null;
+  detectedBrotherChannel = null;
 };
 
 export async function listBrotherPrinters(
@@ -333,20 +473,14 @@ export async function listBrotherPrinters(
   }
 
   if (Platform.OS !== 'android') {
-    throw new Error('Brother BRLM module currently supports Android only.');
+    throw new Error('Brother printing currently supports Android only in this app flow.');
   }
 
   const effectiveOptions = withDetectedPrinterDefaults(options);
   const onStatus = effectiveOptions.onStatus;
-  const removeNativeStatusListener = addNativeStatusListener(onStatus);
 
   try {
-    if (effectiveOptions.preferredConnection === 'wifi') {
-      throw createBrotherError(
-        'BROTHER_WIFI_UNSUPPORTED',
-        'WiFi discovery is not enabled in this Android BRLM module. Use Bluetooth.'
-      );
-    }
+    const sdk = loadOfficialBrotherSdk();
 
     const hasPermissions = await ensureAndroidBluetoothPermissions(onStatus);
     if (!hasPermissions) {
@@ -356,19 +490,37 @@ export async function listBrotherPrinters(
       );
     }
 
-    onStatus?.('Searching Brother printers via Bluetooth...');
-    const channels = await BrotherPrinter.searchBluetoothPrintersAsync();
-    const mapped = channels.map(mapNativeChannel);
+    const searchOrder: Array<'bluetooth' | 'wifi'> =
+      effectiveOptions.preferredConnection === 'wifi'
+        ? ['wifi']
+        : effectiveOptions.preferredConnection === 'bluetooth'
+          ? ['bluetooth']
+          : ['bluetooth', 'wifi'];
 
-    const likelyBrother = mapped.filter(isLikelyBrotherPrinter);
-    const results = likelyBrother.length > 0 ? likelyBrother : mapped;
+    let discoveredChannels: BrotherChannel[] = [];
+    for (const mode of searchOrder) {
+      try {
+        const channels = await runSearch(sdk, mode, onStatus);
+        discoveredChannels = channels;
+        if (channels.length > 0) break;
+      } catch (searchError) {
+        if (mode === searchOrder[searchOrder.length - 1]) {
+          throw searchError;
+        }
+      }
+    }
 
-    onStatus?.(`Discovered ${results.length} printer candidate(s).`);
-    return results;
+    const mappedEntries = discoveredChannels.map(mapNativeChannel);
+    const likelyBrotherEntries = mappedEntries.filter((entry) => isLikelyBrotherPrinter(entry.printer));
+    const finalEntries = likelyBrotherEntries.length > 0 ? likelyBrotherEntries : mappedEntries;
+
+    cacheDiscoveredChannels(finalEntries);
+
+    const printers = finalEntries.map((entry) => entry.printer);
+    onStatus?.(`Discovered ${printers.length} printer candidate(s).`);
+    return printers;
   } catch (error) {
-    throw normalizeBrotherError(error, 'Failed to search Bluetooth Brother printers.');
-  } finally {
-    removeNativeStatusListener();
+    throw normalizeBrotherError(error, 'Failed to search Brother printers.');
   }
 }
 
@@ -380,7 +532,7 @@ export async function detectBrotherPrinter(
   }
 
   if (Platform.OS !== 'android') {
-    throw new Error('Brother BRLM module currently supports Android only.');
+    throw new Error('Brother printing currently supports Android only in this app flow.');
   }
 
   const effectiveOptions = withDetectedPrinterDefaults(options);
@@ -408,6 +560,9 @@ export async function detectBrotherPrinter(
   }
 
   detectedBrotherPrinter = selected;
+  detectedBrotherChannel =
+    discoveredChannelsByAddress.get(toAddressKey(selected.address)) || null;
+
   return selected;
 }
 
@@ -428,6 +583,83 @@ const resolveActiveBrotherPrinter = async (
   const detected = await detectBrotherPrinter(effectiveOptions);
   detectedBrotherPrinter = detected;
   return detected;
+};
+
+const resolvePrinterChannel = async (
+  sdk: OfficialBrotherSdk,
+  printer: BrotherDetectedPrinter,
+  options: BrotherDirectPrintOptions
+): Promise<BrotherChannel> => {
+  const addressKey = toAddressKey(printer.address);
+
+  if (detectedBrotherChannel && detectedBrotherPrinter && toAddressKey(detectedBrotherPrinter.address) === addressKey) {
+    return detectedBrotherChannel;
+  }
+
+  const discoveredChannel = discoveredChannelsByAddress.get(addressKey);
+  if (discoveredChannel) {
+    detectedBrotherChannel = discoveredChannel;
+    return discoveredChannel;
+  }
+
+  const preferredConnection =
+    options.preferredConnection && options.preferredConnection !== 'auto'
+      ? options.preferredConnection
+      : printer.connectionType;
+
+  const tryBluetooth = async () => {
+    if (typeof sdk.newBluetoothChannelWithMacAddress !== 'function') {
+      return null;
+    }
+    if (!looksLikeMacAddress(printer.address)) {
+      return null;
+    }
+    return sdk.newBluetoothChannelWithMacAddress(printer.address);
+  };
+
+  const tryWifi = async () => {
+    if (typeof sdk.newWifiChannel !== 'function') {
+      return null;
+    }
+    if (!looksLikeIpAddress(printer.address)) {
+      return null;
+    }
+    return sdk.newWifiChannel(printer.address);
+  };
+
+  const attempts: Array<() => Promise<BrotherChannel | null>> = [];
+  if (preferredConnection === 'wifi') {
+    attempts.push(tryWifi, tryBluetooth);
+  } else if (preferredConnection === 'bluetooth') {
+    attempts.push(tryBluetooth, tryWifi);
+  } else {
+    attempts.push(tryBluetooth, tryWifi);
+  }
+
+  for (const attempt of attempts) {
+    const channel = await attempt();
+    if (channel) {
+      discoveredChannelsByAddress.set(addressKey, channel);
+      detectedBrotherChannel = channel;
+      return channel;
+    }
+  }
+
+  const refreshedPrinter = await detectBrotherPrinter({
+    ...options,
+    printerAddressHint: printer.address,
+  });
+
+  const refreshedChannel = discoveredChannelsByAddress.get(toAddressKey(refreshedPrinter.address));
+  if (refreshedChannel) {
+    detectedBrotherChannel = refreshedChannel;
+    return refreshedChannel;
+  }
+
+  throw createBrotherError(
+    'BROTHER_CHANNEL_RESOLVE_FAILED',
+    'Unable to resolve a printer channel for the selected Brother printer.'
+  );
 };
 
 const buildQrSvgMarkup = (value: string, moduleScale: number, marginModules: number) => {
@@ -636,43 +868,25 @@ const buildTextHtml = (textValue: string, options: BrotherDirectPrintOptions) =>
 </html>`;
 };
 
-const throwIfStatusBlocked = (status?: BrotherPrinterStatus) => {
-  if (!status) return;
-
-  if (status.outOfPaper) {
-    throw createBrotherError('BROTHER_OUT_OF_PAPER', 'Printer is out of tape or paper.');
-  }
-
-  if (status.coverOpen) {
-    throw createBrotherError('BROTHER_COVER_OPEN', 'Printer cover is open.');
-  }
-
-  if (status.batteryLow) {
-    throw createBrotherError('BROTHER_BATTERY_LOW', 'Printer battery is low.');
-  }
-};
-
 const printHtmlWithBrother = async (html: string, options: BrotherDirectPrintOptions = {}) => {
   if (Platform.OS === 'web') {
     throw new Error('Brother printing is not available on web.');
   }
 
   if (Platform.OS !== 'android') {
-    throw new Error('Brother BRLM module currently supports Android only.');
+    throw new Error('Brother printing currently supports Android only in this app flow.');
   }
 
   const effectiveOptions = withDetectedPrinterDefaults(options);
   const onStatus = effectiveOptions.onStatus;
-  const removeNativeStatusListener = addNativeStatusListener(onStatus);
 
   try {
+    const sdk = loadOfficialBrotherSdk();
     const printer = await resolveActiveBrotherPrinter(effectiveOptions);
     detectedBrotherPrinter = printer;
 
-    const labelWidthMm = resolveLabelWidthMm(effectiveOptions.labelWidthMm);
-    if (Number(effectiveOptions.labelWidthMm) > 36) {
-      onStatus?.('PT label width requested above 36mm; using 36mm PT settings.');
-    }
+    const channel = await resolvePrinterChannel(sdk, printer, effectiveOptions);
+    detectedBrotherChannel = channel;
 
     onStatus?.('Generating printable document...');
     const pdf = await Print.printToFileAsync({ html });
@@ -680,42 +894,15 @@ const printHtmlWithBrother = async (html: string, options: BrotherDirectPrintOpt
       throw createBrotherError('BROTHER_PDF_GENERATION_FAILED', 'Failed to generate printable document.');
     }
 
+    await preparePrintSettings(sdk, printer.modelName, onStatus);
+
+    if (typeof sdk.printPDFFileWithChannel !== 'function') {
+      throw createBrotherError('BROTHER_SDK_API_MISSING', 'Official Brother SDK printPDFFileWithChannel API is unavailable.');
+    }
+
     onStatus?.('Sending print job to Brother printer...');
-    const cutAtEnd = effectiveOptions.cutAtEnd ?? true;
-    const nativePrintOptions = {
-      autoCut: effectiveOptions.autoCut ?? false,
-      halfCut: effectiveOptions.halfCut ?? false,
-      cutAtEnd,
-      specialTape: effectiveOptions.specialTape ?? false,
-      chainPrint:
-        typeof effectiveOptions.chainPrint === 'boolean'
-          ? effectiveOptions.chainPrint
-          : !cutAtEnd,
-      autoCutForEachPageCount: Math.max(
-        1,
-        Math.round(effectiveOptions.autoCutForEachPageCount ?? 1)
-      ),
-    };
-
-    const nativePayload = {
-      address: printer.address,
-      filePath: pdf.uri,
-      modelName: printer.modelName || null,
-      labelWidthMm,
-      printOptions: nativePrintOptions,
-    };
-    console.log('[Brother Item Print] Native payload:', nativePayload);
-    onStatus?.(`[Brother Item Print] Native payload: ${JSON.stringify(nativePayload)}`);
-
-    const result = await BrotherPrinter.printLabelFileAsync(
-      printer.address,
-      pdf.uri,
-      printer.modelName || null,
-      labelWidthMm,
-      nativePrintOptions
-    );
-
-    throwIfStatusBlocked(result?.status);
+    const printResult = await sdk.printPDFFileWithChannel(channel, pdf.uri);
+    ensurePrintResult(printResult);
 
     const postDelay = Math.max(
       0,
@@ -728,8 +915,6 @@ const printHtmlWithBrother = async (html: string, options: BrotherDirectPrintOpt
     onStatus?.('Brother print job sent.');
   } catch (error) {
     throw normalizeBrotherError(error, 'Brother print job failed.');
-  } finally {
-    removeNativeStatusListener();
   }
 };
 

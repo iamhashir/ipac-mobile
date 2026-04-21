@@ -250,7 +250,7 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
               : undefined,
         printerAddressHint: detectedPrinter?.address,
         postPrintDelayMs: 3000,
-        onStatus: (status) => console.log(`[Brother Item Print] ${status}`),
+        onStatus: (status: string) => console.log(`[Brother Item Print] ${status}`),
       });
 
       const refreshedDetected = brotherPrintModule?.getDetectedBrotherPrinter?.() || null;

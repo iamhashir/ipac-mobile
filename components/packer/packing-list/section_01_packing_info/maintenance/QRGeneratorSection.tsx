@@ -302,7 +302,7 @@ const QRGeneratorSection: React.FC<QRGeneratorSectionProps> = ({
               : undefined,
         printerAddressHint: detectedPrinter?.address,
         postPrintDelayMs: 3000,
-        onStatus: (status) => console.log(`[Brother QR Section] ${status}`),
+        onStatus: (status: string) => console.log(`[Brother QR Section] ${status}`),
       });
 
       const refreshedDetected = brotherPrintModule?.getDetectedBrotherPrinter?.() || null;
