@@ -776,17 +776,21 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
   const gapMm = isBeside ? 2 : 0;
 
   // Estimate text length: approx 0.42x tape width per character for Arial Bold
-  const charWidthMm = (safeWidthMm * 0.45);
+  const is12mm = labelWidthMm <= 12;
+  const charWidthMm = (safeWidthMm * (is12mm ? 0.60 : 0.53));
   const textLengthMm = isBeside ? itemNumber.length * charWidthMm : 0;
 
 
-  const totalLengthMm = qrLengthMm + gapMm + textLengthMm;
+  const logoMm = is12mm ? safeWidthMm : 0;
+
+  const totalLengthMm = logoMm + (is12mm ? gapMm : 0) + qrLengthMm + gapMm + textLengthMm;
   const totalLengthPoints = totalLengthMm * pointsPerMm;
   const totalLengthPx = Math.round(totalLengthPoints);
 
 
-  const is12mm = labelWidthMm <= 12;
-  const logoPlacement: QrLogoPlacement = 'inside-qr';
+
+  const logoPlacement: QrLogoPlacement = is12mm ? 'none' : 'inside-qr';
+
 
   const logoUrl = options.logoUrl || '';
   const logoText = escapeHtml(String(options.logoText || 'IPAC').trim());
@@ -832,17 +836,18 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
         align-items: center;
         justify-content: flex-start;
         box-sizing: border-box;
+        padding-left: ${is12mm ? '10%' : '0'};
       }
 
-
       .qr-wrap {
-        width: ${tapeWidthPx}px;
-        height: ${tapeWidthPx}px;
+        width: ${is12mm ? 64 : 150}px;
+        height: ${is12mm ? 64 : 150}px;
         display: flex;
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
         position: relative;
+        top: ${is12mm ? '-45%' : '-24%'};
       }
 
 
@@ -850,15 +855,35 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
         width: 100%;
         height: 100%;
       }
+      .logo-standalone {
+        width: ${tapeWidthPx + 10}px;
+        height: ${tapeWidthPx + 10}px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        position: relative;
+      }
+      .logo-standalone img {
+        max-width: 130%;
+        max-height: 130%;
+        object-fit: contain;
+        image-rendering: -webkit-optimize-contrast;
+        image-rendering: pixelated;
+        filter: grayscale(100%) contrast(500%) brightness(1.2);
+        margin-bottom: 75%;
+      }
+
       .logo-inside {
         position: absolute;
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
         background: #ffffff;
-        border: 1px solid #d1d5db;
-        border-radius: 8px;
+        border: 1px solid #7c7c7cff;
+        border-radius: 4px; /* Slightly smaller radius for sharper look */
         font-size: ${is12mm ? '12px' : '18px'};
+
         line-height: 1;
         font-weight: 700;
         color: #111827;
@@ -869,10 +894,16 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
         overflow: hidden;
       }
       .logo-inside img {
-        max-width: ${is12mm ? '22px' : '36px'};
-        max-height: ${is12mm ? '22px' : '36px'};
+        max-width: 25px; /* Fixed for 36mm */
+        max-height: 25px;
         object-fit: contain;
+        /* Sharpness optimizations for 1-bit thermal printers */
+        image-rendering: -webkit-optimize-contrast;
+        image-rendering: pixelated;
+        filter: grayscale(100%) contrast(500%) brightness(1.2);
       }
+
+
 
       .gap {
         width: ${gapMm * pointsPerMm}px;
@@ -888,11 +919,12 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
         align-items: center;
         justify-content: flex-start;
         white-space: nowrap;
-        font-size: ${tapeWidthPx * 1.2}px;
+        font-size: ${tapeWidthPx * (is12mm ? 2.4 : 1.4)}px;
 
         font-weight: 900;
         color: #000000;
         letter-spacing: 0px;
+        margin-bottom: ${is12mm ? '12%' : '7.5%'};
       }
 
 
@@ -900,14 +932,23 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
   </head>
   <body>
     <div class="sheet">
-      <div class="qr-wrap">
-        ${qrMarkup}
-        <div class="logo-inside">
+      ${is12mm ? `
+        <div class="logo-standalone">
           ${logoUrl ? `<img src="${logoUrl}" alt="logo"/>` : logoText}
         </div>
+        <div class="gap"></div>
+      ` : ''}
+      <div class="qr-wrap">
+        ${qrMarkup}
+        ${!is12mm ? `
+          <div class="logo-inside">
+            ${logoUrl ? `<img src="${logoUrl}" alt="logo"/>` : logoText}
+          </div>
+        ` : ''}
       </div>
       ${isBeside ? `<div class="gap"></div><div class="item-number">${safeItemNumber}</div>` : ''}
     </div>
+
   </body>
 </html>`,
   };
