@@ -773,11 +773,12 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
 
   // Dynamic Length Calculation (along the tape)
   const qrLengthMm = safeWidthMm; // QR is square
-  const gapMm = isBeside ? 6 : 0;
+  const gapMm = isBeside ? 2 : 0;
 
-  // Estimate text length: approx 7.5mm per character for Bold Arial at full height
-  const charWidthMm = 14;
+  // Estimate text length: approx 0.42x tape width per character for Arial Bold
+  const charWidthMm = (safeWidthMm * 0.45);
   const textLengthMm = isBeside ? itemNumber.length * charWidthMm : 0;
+
 
   const totalLengthMm = qrLengthMm + gapMm + textLengthMm;
   const totalLengthPoints = totalLengthMm * pointsPerMm;
@@ -790,8 +791,9 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
   const logoUrl = options.logoUrl || '';
   const logoText = escapeHtml(String(options.logoText || 'IPAC').trim());
 
-  const qrScale = Math.max(2, Math.round(options.moduleScale ?? (is12mm ? 2 : 4)));
-  const qrMargin = Math.max(0, Math.round(options.marginModules ?? (is12mm ? 1 : 2)));
+  const qrScale = Math.max(2, Math.round(options.moduleScale ?? (is12mm ? 3 : 6)));
+  const qrMargin = Math.max(0, Math.round(options.marginModules ?? 0));
+
 
   const providedQrBase64 = normalizeBase64Image(String(options.qrImageBase64 || ''));
   const qrMarkup = providedQrBase64
@@ -815,16 +817,23 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
         font-family: Arial, sans-serif;
       }
       .sheet {
-        width: ${tapeWidthPx}px;
-        height: ${totalLengthPx}px;
-        box-sizing: border-box;
+        /* We build it horizontally (Width = Length, Height = Tape Width) */
+        /* Then we rotate the whole thing into the narrow Portrait PDF page */
+        width: ${totalLengthPx}px;
+        height: ${tapeWidthPx}px;
+        position: absolute;
+        top: 0;
+        left: 0;
+        transform: rotate(90deg) translateY(-${tapeWidthPx}px);
+        transform-origin: top left;
+        
         display: flex;
-        flex-direction: column;
+        flex-direction: row;
         align-items: center;
         justify-content: flex-start;
-        padding: 0;
-        overflow: hidden;
+        box-sizing: border-box;
       }
+
 
       .qr-wrap {
         width: ${tapeWidthPx}px;
@@ -833,9 +842,9 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
-        transform: rotate(90deg);
         position: relative;
       }
+
 
       .qr-wrap svg, .qr-wrap .qr-image {
         width: 100%;
@@ -849,40 +858,43 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
         background: #ffffff;
         border: 1px solid #d1d5db;
         border-radius: 8px;
-        padding: ${is12mm ? '2px 6px' : '4px 10px'};
-        font-size: ${is12mm ? '18px' : '28px'};
+        font-size: ${is12mm ? '12px' : '18px'};
         line-height: 1;
         font-weight: 700;
         color: #111827;
+
         display: flex;
         align-items: center;
         justify-content: center;
         overflow: hidden;
       }
       .logo-inside img {
-        max-width: ${is12mm ? '40px' : '80px'};
-        max-height: ${is12mm ? '20px' : '40px'};
+        max-width: ${is12mm ? '22px' : '36px'};
+        max-height: ${is12mm ? '22px' : '36px'};
         object-fit: contain;
       }
+
       .gap {
-        height: ${gapMm * pointsPerMm}px;
-        width: 100%;
+        width: ${gapMm * pointsPerMm}px;
+        height: 100%;
         flex-shrink: 0;
       }
 
+
       .item-number {
         flex: 1;
-        width: ${tapeWidthPx}px;
+        height: 100%;
         display: flex;
         align-items: center;
-        justify-content: center;
+        justify-content: flex-start;
         white-space: nowrap;
-        font-size: ${tapeWidthPx * 0.8}px;
+        font-size: ${tapeWidthPx * 1.2}px;
+
         font-weight: 900;
         color: #000000;
-        letter-spacing: 2px;
-        transform: rotate(90deg);
+        letter-spacing: 0px;
       }
+
 
     </style>
   </head>
