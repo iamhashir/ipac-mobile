@@ -13,7 +13,7 @@ export interface QrPrintSizePreset {
 export const QR_PRINT_SIZE_PRESETS: QrPrintSizePreset[] = [
   {
     id: 'brother-12',
-    label: '12 mm (Logo + QR + Item #)',
+    label: '12 mm (Full QR Only)',
     labelWidthMm: 12,
     moduleScale: 2,
     marginModules: 1,
@@ -22,7 +22,7 @@ export const QR_PRINT_SIZE_PRESETS: QrPrintSizePreset[] = [
   },
   {
     id: 'brother-36',
-    label: '36 mm (Logo in QR + Item #)',
+    label: '36 mm (Full QR Only)',
     labelWidthMm: 36,
     moduleScale: 4,
     marginModules: 2,

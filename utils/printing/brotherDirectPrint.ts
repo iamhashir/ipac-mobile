@@ -125,7 +125,7 @@ const extractBrotherErrorCode = (rawMessage: string): string | null => {
 
 const normalizeBrotherError = (error: unknown, fallbackMessage: string): Error => {
   let raw = String((error as any)?.message || error || fallbackMessage).trim();
-  
+
   const userInfo = (error as any)?.userInfo;
   if (userInfo) {
     console.log('[Brother SDK Error]', JSON.stringify(userInfo, null, 2));
@@ -136,7 +136,7 @@ const normalizeBrotherError = (error: unknown, fallbackMessage: string): Error =
       } else if (infoError.code?.label) {
         raw += ` (Label: ${infoError.code.label})`;
       }
-      
+
       if (infoError.errorDescription) {
         raw += ` - ${infoError.errorDescription}`;
       }
@@ -759,7 +759,7 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
   // 12mm -> [Logo] -> [QR] -> [Item Number]
   // 36mm -> [QR with centered logo] -> [Item Number]
   const is12mm = labelWidthMm <= 12;
-  const logoPlacement: QrLogoPlacement = is12mm ? 'above-qr' : 'inside-qr';
+  const logoPlacement: QrLogoPlacement = 'inside-qr';
 
   const logoText = escapeHtml(String(options.logoText || 'IPAC').trim());
   const itemNumber = String(options.caption || '').trim();
@@ -767,7 +767,7 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
   const itemNumberFontPx = computeItemFontSizePx(itemNumber.length, labelWidthMm);
   const itemNumberLetterSpacingPx = is12mm ? 0.8 : 2.2;
 
-  const qrSizePx = is12mm ? Math.round(widthPx * 0.72) : Math.round(widthPx * 0.74);
+  const qrSizePx = is12mm ? Math.round(widthPx * 0.96) : Math.round(widthPx * 0.96);
   const qrScale = Math.max(2, Math.round(options.moduleScale ?? (is12mm ? 2 : 4)));
   const qrMargin = Math.max(0, Math.round(options.marginModules ?? (is12mm ? 1 : 2)));
 
@@ -793,14 +793,13 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
       }
       .sheet {
         width: ${widthPx}px;
-        min-height: ${Math.round(widthPx * 1.45)}px;
-        padding: ${is12mm ? 12 : 18}px ${is12mm ? 8 : 14}px;
+        min-height: ${widthPx}px;
+        padding: 4px;
         box-sizing: border-box;
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: ${is12mm ? 8 : 12}px;
       }
       .logo-top {
         font-size: ${is12mm ? 22 : 32}px;
@@ -851,12 +850,10 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
   </head>
   <body>
     <div class="sheet">
-      ${showLogoAbove ? `<div class="logo-top">${logoText}</div>` : ''}
       <div class="qr-wrap${showLogoInside ? ' inside' : ''}">
         ${qrMarkup}
         ${showLogoInside ? `<div class="logo-inside">${logoText}</div>` : ''}
       </div>
-      ${safeItemNumber ? `<div class="item-number">${safeItemNumber}</div>` : ''}
     </div>
   </body>
 </html>`;

@@ -910,10 +910,14 @@ const baseDb = {
   // Update project lead for an order
   updateProjectLead: async (orderId: UUID, projectLeadId: UUID) => {
     const { data, error } = await supabase
-      .rpc('update_project_lead_with_status', {
-        order_uuid: orderId,
-        lead_id: projectLeadId
-      });
+      .from('orders')
+      .update({
+        project_lead_id: projectLeadId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', orderId)
+      .select('id, project_lead_id')
+      .single();
     
     return { data, error };
   },

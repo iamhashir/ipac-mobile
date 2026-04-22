@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Alert, useWindowDimensions, Modal, TextInput, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../../utils/AuthContext';
 import { usePackerSession } from '../../utils/PackerSessionContext';
 import { db } from '../../utils/api/supabase';
@@ -98,6 +99,18 @@ export default function PackerDashboard() {
   useEffect(() => {
     loadData();
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      setIsAddRemoveMode(false);
+      if (session?.order_id) {
+        setSelectedOrder(session.order_id);
+      }
+      return () => {
+        setIsAddRemoveMode(false);
+      };
+    }, [session?.order_id])
+  );
 
   // Check for existing session and restore state
   useEffect(() => {
@@ -627,11 +640,17 @@ export default function PackerDashboard() {
   const togglePackerSelection = (packerId: string) => {
     const packer = allPackers.find(p => p.id === packerId);
     const isCurrentlySelected = selectedPackers.includes(packerId);
-    const isActiveSession = session && session.order_id === selectedOrder;
+    const selectedOrderInfo = selectedOrder ? availableOrders.find((order) => order.id === selectedOrder) : null;
+    const isExistingTeamOrder = Boolean(
+      (selectedOrderInfo?.assigned_packers_count || 0) > 0 ||
+      (session && session.order_id === selectedOrder)
+    );
     const hasAnyLead = projectLeads.length > 0;
+    const currentUserId = profile?.id || '';
+    const currentUserIsLead = Boolean(currentUserId && projectLeads.includes(currentUserId));
     
     // For orders with existing team: only allow team leads to modify selection
-    if (isActiveSession && hasAnyLead && !isTeamLead) {
+    if (isExistingTeamOrder && hasAnyLead && !(isTeamLead || currentUserIsLead)) {
       toast.error('Only team leads can modify team membership');
       return;
     }
@@ -654,32 +673,77 @@ export default function PackerDashboard() {
     }
   };
 
-  const toggleProjectLead = (packerId: string) => {
+  const toggleProjectLead = async (packerId: string) => {
+    if (!selectedOrder) {
+      return;
+    }
+
     // Only allow project lead selection from selected packers
     if (!selectedPackers.includes(packerId)) {
       toast.error('Please select this packer as a team member first');
       return;
     }
     
-    const isActiveSession = session && session.order_id === selectedOrder;
+    const selectedOrderInfo = availableOrders.find((order) => order.id === selectedOrder);
+    const isExistingTeamOrder = Boolean(
+      (selectedOrderInfo?.assigned_packers_count || 0) > 0 ||
+      (session && session.order_id === selectedOrder)
+    );
     const hasAnyLead = projectLeads.length > 0;
+    const currentUserId = profile?.id || '';
+    const currentUserIsLead = Boolean(currentUserId && projectLeads.includes(currentUserId));
+    const canCurrentUserManageLeads = isTeamLead || currentUserIsLead || !hasAnyLead;
     
     // For orders with existing team: only allow team leads to modify lead assignments
-    if (isActiveSession && hasAnyLead && !isTeamLead) {
+    if (isExistingTeamOrder && hasAnyLead && !canCurrentUserManageLeads) {
       toast.error('Only team leads can assign team lead roles');
       return;
     }
-    
-    // Toggle this packer as a project lead (supports multiple leads)
-    setProjectLeads(prev => {
-      if (prev.includes(packerId)) {
-        // Remove from leads
-        return prev.filter(id => id !== packerId);
-      } else {
-        // Add to leads
-        return [...prev, packerId];
+
+    const isCurrentlyLead = projectLeads.includes(packerId);
+    const nextLeadIds = isCurrentlyLead
+      ? projectLeads.filter((id) => id !== packerId)
+      : [...projectLeads, packerId];
+
+    if (isCurrentlyLead && nextLeadIds.length === 0) {
+      toast.error('At least one team lead is required');
+      return;
+    }
+
+    if (!isExistingTeamOrder) {
+      setProjectLeads(nextLeadIds);
+      if (currentUserId) {
+        setIsTeamLead(nextLeadIds.includes(currentUserId));
       }
-    });
+      return;
+    }
+
+    const { error: leadMutationError } = isCurrentlyLead
+      ? await teamLead.removeTeamLead(selectedOrder, packerId)
+      : await teamLead.addTeamLead(selectedOrder, packerId);
+
+    if (leadMutationError) {
+      console.error('Error updating team lead role:', leadMutationError);
+      toast.error('Could not update team lead role. Please try again.');
+      return;
+    }
+
+    setProjectLeads(nextLeadIds);
+    if (currentUserId) {
+      setIsTeamLead(nextLeadIds.includes(currentUserId));
+    }
+
+    if (nextLeadIds.length > 0) {
+      const { error: primaryLeadError } = await db.updateProjectLead(selectedOrder, nextLeadIds[0]);
+      if (primaryLeadError) {
+        console.warn('Project lead update (orders table) failed:', primaryLeadError);
+      }
+    } else {
+      const { error: clearLeadError } = await db.clearProjectLead(selectedOrder);
+      if (clearLeadError) {
+        console.warn('Project lead clear failed:', clearLeadError);
+      }
+    }
   };
 
   const handleNext = async () => {
@@ -897,19 +961,6 @@ export default function PackerDashboard() {
   };
 
   const isOnlySelfOnTeam = profile?.id ? (selectedPackers.length === 1 && selectedPackers[0] === profile.id) : false;
-  const canManageActiveTeam = Boolean(
-    session &&
-    session.order_id === selectedOrder &&
-    (isTeamLead || projectLeads.length === 0)
-  );
-  const canReleaseOrder = Boolean(
-    selectedOrder &&
-    session?.order_id === selectedOrder &&
-    profile?.id &&
-    selectedPackers.includes(profile.id) &&
-    (isTeamLead || isOnlySelfOnTeam)
-  );
-
   const ordersForType = getOrdersForType(projectTypeFilter);
   const visibleOrders = projectTypeFilter === 'standard'
     ? ordersForType.filter((order) => order.production_status !== 'completed')
@@ -917,12 +968,47 @@ export default function PackerDashboard() {
   const selectedOrderRecord = selectedOrder
     ? availableOrders.find((order) => order.id === selectedOrder) || null
     : null;
+  const selectedOrderHasExistingTeam = Boolean(
+    selectedOrderRecord && selectedOrderRecord.assigned_packers_count > 0
+  );
+  const isSessionForSelectedOrder = Boolean(session && session.order_id === selectedOrder);
+  const currentUserId = profile?.id || '';
+  const isCurrentUserOnSelectedTeam = Boolean(currentUserId && selectedPackers.includes(currentUserId));
+  const isCurrentUserLead = Boolean(currentUserId && projectLeads.includes(currentUserId));
+  const canManageByLeadRole = isCurrentUserLead || isTeamLead || projectLeads.length === 0;
+  const canManageActiveTeam = Boolean(
+    selectedOrder &&
+    (isSessionForSelectedOrder || isCurrentUserOnSelectedTeam) &&
+    (isSessionForSelectedOrder || selectedOrderHasExistingTeam) &&
+    canManageByLeadRole
+  );
+  const canReleaseOrder = Boolean(
+    selectedOrder &&
+    session?.order_id === selectedOrder &&
+    profile?.id &&
+    selectedPackers.includes(profile.id) &&
+    ((isTeamLead || isCurrentUserLead) || isOnlySelfOnTeam)
+  );
   const selectedOrderOccupiedByAnotherTeam = Boolean(
     selectedOrderRecord &&
     selectedOrderRecord.assigned_packers_count > 0 &&
     session?.order_id !== selectedOrder
   );
   const isCreateModeActive = projectTypeFilter !== 'standard' && maintViewMode === 'create';
+
+  const handleToggleAddRemoveMode = () => {
+    if (isAddRemoveMode) {
+      setIsAddRemoveMode(false);
+      return;
+    }
+
+    if (!canManageActiveTeam) {
+      toast.error('Only team leads can modify team membership');
+      return;
+    }
+
+    setIsAddRemoveMode(true);
+  };
 
   if (loading) {
     return (
@@ -1288,20 +1374,19 @@ export default function PackerDashboard() {
                 allPackers.map((packer) => {
                   const isSelected = selectedPackers.includes(packer.id);
                   const isProjectLead = projectLeads.includes(packer.id);
-                  const canBeProjectLead = isSelected;
-                  const isActiveSession = session && session.order_id === selectedOrder;
+                  const isExistingTeamOrder = selectedOrderHasExistingTeam || isSessionForSelectedOrder;
                   
                   // Check if packer is busy on another project
                   const isBusyOnOtherProject = !packer.is_available && !isSelected && packer.current_order_name;
                   
                   // In add/remove mode for active sessions
-                  const showAddButton = isAddRemoveMode && isActiveSession && !isSelected && packer.is_available;
-                  const showRemoveButton = isAddRemoveMode && isActiveSession && isSelected;
-                  const showQuickRemoveButton = !isAddRemoveMode && !isActiveSession && isSelected && !selectedOrderOccupiedByAnotherTeam;
+                  const showAddButton = isAddRemoveMode && canManageActiveTeam && isExistingTeamOrder && !isSelected && packer.is_available;
+                  const showRemoveButton = isAddRemoveMode && canManageActiveTeam && isExistingTeamOrder && isSelected;
+                  const showQuickRemoveButton = false;
                   
                   // Allow packer selection when not in an active session.
                   // Keep selected rows clickable so assigned busy packers can be removed.
-                  const isNewProjectSelection = selectedOrder && !isActiveSession;
+                  const isNewProjectSelection = selectedOrder && !isExistingTeamOrder;
                   const canClickToSelect = Boolean(
                     isNewProjectSelection &&
                     !selectedOrderOccupiedByAnotherTeam &&
@@ -1391,7 +1476,7 @@ export default function PackerDashboard() {
                           <TouchableOpacity 
                             onPress={(e) => {
                               e.stopPropagation();
-                              toggleProjectLead(packer.id);
+                              void toggleProjectLead(packer.id);
                             }}
                             className={`px-2 py-1.5 rounded-lg border ${
                               isProjectLead
@@ -1422,11 +1507,7 @@ export default function PackerDashboard() {
                       
                       {/* Project lead indicator when NOT in add/remove mode */}
                       {!isAddRemoveMode && isSelected && (
-                        <TouchableOpacity 
-                          onPress={(e) => {
-                            e.stopPropagation();
-                            toggleProjectLead(packer.id);
-                          }}
+                        <View
                           className={`w-6 h-6 rounded-full border-2 items-center justify-center ${
                             isProjectLead
                               ? 'bg-primary-500 border-primary-500'
@@ -1436,7 +1517,7 @@ export default function PackerDashboard() {
                           {isProjectLead && (
                             <Text className="text-white text-xs">✓</Text>
                           )}
-                        </TouchableOpacity>
+                        </View>
                       )}
                     </CardWrapper>
                   );
@@ -1464,9 +1545,9 @@ export default function PackerDashboard() {
               </TouchableOpacity>
             )}
             {/* Add/Remove Packer toggle button - only show for active sessions */}
-            {canManageActiveTeam && (
+            {(canManageActiveTeam || isAddRemoveMode) && (
               <TouchableOpacity
-                onPress={() => setIsAddRemoveMode(!isAddRemoveMode)}
+                onPress={handleToggleAddRemoveMode}
                 className={`${isCompact ? 'px-4 py-2' : 'px-5 py-3'} rounded-lg border ${
                   isAddRemoveMode
                     ? 'bg-green-600 border-green-600'
@@ -1480,7 +1561,7 @@ export default function PackerDashboard() {
             )}
             
             {/* Next button - only show for new assignments (not active sessions) */}
-            {!(session && session.order_id === selectedOrder) && (
+            {!selectedOrderHasExistingTeam && (
               <TouchableOpacity
                 onPress={handleNext}
                 disabled={!selectedOrder || selectedPackers.length === 0 || selectedOrderOccupiedByAnotherTeam}
