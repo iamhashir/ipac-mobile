@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, SafeAreaView, Platform, ScrollView } from 'react-native';
-import { Inbox, Trash2, Plus, RefreshCw, Printer, Eye, ScanQrCode, X } from 'lucide-react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as Sharing from 'expo-sharing';
+import { Inbox, Trash2, Plus, RefreshCw, FileText, Printer, Eye, ScanQrCode, X, Share2, Info } from 'lucide-react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { db } from '../../../../../utils/api/supabase';
 import CatalogBrowserModal from './CatalogBrowserModal';
@@ -42,7 +43,13 @@ const formatDetectedPrinterLabel = (printer: DetectedBrotherPrinter | null): str
 const loadBrotherPrintModule = (): BrotherPrintModule | null => {
   try {
     const loaded = require('../../../../../utils/printing/brotherDirectPrint') as
-      | BrotherPrintModule
+      | {
+          listBrotherPrinters: BrotherPrintModule['listBrotherPrinters'];
+          detectBrotherPrinter: BrotherPrintModule['detectBrotherPrinter'];
+          getDetectedBrotherPrinter: BrotherPrintModule['getDetectedBrotherPrinter'];
+          printBrotherQrLabelDirect: BrotherPrintModule['printBrotherQrLabelDirect'];
+          generateBrotherQrLabelPdf: (qrValue: string, options?: any) => Promise<any>;
+        }
       | undefined;
 
     if (!loaded) return null;
@@ -104,7 +111,13 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
   const [isModalVisible, setModalVisible] = useState(false);
   const [printingItemId, setPrintingItemId] = useState<string | null>(null);
   const [previewingItemId, setPreviewingItemId] = useState<string | null>(null);
-  const [previewItemQr, setPreviewItemQr] = useState<{ name: string; url: string } | null>(null);
+  const [previewItemQr, setPreviewItemQr] = useState<{ 
+    name: string; 
+    url: string; 
+    pdfUri?: string;
+    labelWidthMm?: number;
+    safeWidthMm?: number;
+  } | null>(null);
   const [scannerVisible, setScannerVisible] = useState(false);
   const [scannerBusy, setScannerBusy] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
@@ -188,9 +201,30 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
     try {
       setPreviewingItemId(rowId);
       const qrData = await resolveItemQrData(maintenanceItem);
+      
+      const selectedPreset = await chooseQrPrintSizePreset();
+      if (!selectedPreset) return;
+
+      const brotherPrintModule = loadBrotherPrintModule();
+      if (!brotherPrintModule?.generateBrotherQrLabelPdf) {
+          throw new Error('PDF generation module is unavailable.');
+      }
+
+      const pdfData = await brotherPrintModule.generateBrotherQrLabelPdf(qrData.qrUrl, {
+          labelWidthMm: selectedPreset.labelWidthMm,
+          moduleScale: selectedPreset.moduleScale,
+          marginModules: selectedPreset.marginModules,
+          logoPlacement: selectedPreset.logoPlacement,
+          logoText: 'IPAC',
+          caption: qrData.itemLabel,
+      });
+
       setPreviewItemQr({
         name: qrData.itemName,
         url: qrData.qrUrl,
+        pdfUri: pdfData.uri,
+        labelWidthMm: pdfData.labelWidthMm,
+        safeWidthMm: pdfData.safeWidthMm,
       });
     } catch (e: any) {
       console.error('Error previewing item QR:', e);
@@ -784,23 +818,90 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
         animationType="fade"
         onRequestClose={() => setPreviewItemQr(null)}
       >
-        <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.55)', justifyContent: 'center', paddingHorizontal: 24 }}>
-          <View className="bg-white rounded-xl p-5 items-center">
-            <Text className="text-base font-bold text-slate-900 mb-3">Item QR Preview</Text>
-            {previewItemQr?.url ? <QRCode value={previewItemQr.url} size={220} quietZone={10} /> : null}
-            <Text className="text-sm text-slate-700 mt-3 text-center" numberOfLines={2}>
-              {previewItemQr?.name || 'Item'}
-            </Text>
-            <Text className="text-xs text-gray-500 mt-2 text-center" numberOfLines={2}>
-              {previewItemQr?.url || ''}
-            </Text>
+        <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.7)', justifyContent: 'center', paddingHorizontal: 16 }}>
+          <View className="bg-white rounded-2xl overflow-hidden">
+            <View className="bg-slate-50 p-4 border-b border-slate-100 flex-row justify-between items-center">
+              <View className="flex-row items-center">
+                <View className="bg-blue-100 p-1.5 rounded-lg mr-2">
+                  <Eye size={18} color="#2563eb" />
+                </View>
+                <Text className="text-lg font-bold text-slate-900">Life-like Label Preview</Text>
+              </View>
+              <TouchableOpacity onPress={() => setPreviewItemQr(null)} className="p-1 bg-slate-200 rounded-full">
+                <X size={20} color="#64748b" />
+              </TouchableOpacity>
+            </View>
 
-            <TouchableOpacity
-              onPress={() => setPreviewItemQr(null)}
-              className="mt-5 bg-slate-900 rounded-md px-4 py-2"
-            >
-              <Text className="text-white font-medium">Close</Text>
-            </TouchableOpacity>
+            <View className="p-6 items-center">
+              <View className="mb-6 w-full items-center">
+                <Text className="text-sm font-semibold text-slate-500 mb-4 uppercase tracking-wider">Realistic Tape Mockup ({previewItemQr?.labelWidthMm}mm Tape)</Text>
+                
+                {/* TAPE MOCKUP START */}
+                <View 
+                  className="bg-[#FFE135] shadow-lg rounded-sm items-center justify-center p-2"
+                  style={{ 
+                    // 1mm = 6px on screen for a consistent preview size
+                    width: (previewItemQr?.labelWidthMm || 36) * 6,
+                    height: (previewItemQr?.labelWidthMm || 36) * 6,
+                    borderWidth: 1,
+                    borderColor: '#EAB308'
+                  }}
+                >
+                  {/* SAFE AREA INDICATOR (Dashed Line) */}
+                  <View 
+                    className="border border-slate-400/40 border-dashed items-center justify-center"
+                    style={{ 
+                      width: (previewItemQr?.safeWidthMm || 34) * 6,
+                      height: (previewItemQr?.safeWidthMm || 34) * 6,
+                    }}
+                  >
+                    {previewItemQr?.url && (
+                      <QRCode 
+                        value={previewItemQr.url} 
+                        size={(previewItemQr?.safeWidthMm || 34) * 6} 
+                        quietZone={0}
+                      />
+                    )}
+                  </View>
+                </View>
+                {/* TAPE MOCKUP END */}
+
+                <View className="mt-4 flex-row items-center bg-blue-50 px-3 py-2 rounded-full">
+                  <Info size={14} color="#3b82f6" className="mr-1.5" />
+                  <Text className="text-[10px] text-blue-700 font-medium">Yellow area = Tape width. Dashed line = Safe zone.</Text>
+                </View>
+              </View>
+
+              <View className="w-full space-y-3">
+                <View className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <Text className="text-xs font-bold text-slate-400 uppercase mb-1">Item Details</Text>
+                  <Text className="text-sm text-slate-800 font-semibold" numberOfLines={1}>{previewItemQr?.name}</Text>
+                  <Text className="text-[10px] text-slate-500 mt-1" numberOfLines={1}>{previewItemQr?.url}</Text>
+                </View>
+
+                <TouchableOpacity
+                  onPress={async () => {
+                    if (previewItemQr?.pdfUri) {
+                      await Sharing.shareAsync(previewItemQr.pdfUri, {
+                        mimeType: 'application/pdf',
+                        dialogTitle: 'Technical PDF Label View'
+                      });
+                    }
+                  }}
+                  className="w-full flex-row items-center justify-center bg-slate-900 h-12 rounded-xl"
+                >
+                  <Share2 size={18} color="white" className="mr-2" />
+                  <Text className="text-white font-bold">Open Technical PDF</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => setPreviewItemQr(null)}
+                  className="w-full items-center justify-center h-10"
+                >
+                  <Text className="text-slate-500 font-bold">Close Preview</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
         </View>
       </Modal>

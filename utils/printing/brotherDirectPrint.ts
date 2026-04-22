@@ -753,7 +753,14 @@ const computeItemFontSizePx = (itemTextLength: number, labelWidthMm: number): nu
 
 const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
   const labelWidthMm = resolveLabelWidthMm(options.labelWidthMm);
-  const widthPx = Math.max(170, Math.round((labelWidthMm / 25.4) * 360));
+
+
+  // Use a 2mm safety margin from the physical tape width (e.g., 34mm for 36mm tape)
+  const safeWidthMm = Math.max(2, labelWidthMm);
+  const widthPx = Math.max(170, Math.round((safeWidthMm / 25.4) * 144));
+  const widthPoints = (safeWidthMm / 25.4) * 72;
+  const heightPoints = widthPoints; // Perfect square
+
 
   // Required layouts:
   // 12mm -> [Logo] -> [QR] -> [Item Number]
@@ -767,7 +774,7 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
   const itemNumberFontPx = computeItemFontSizePx(itemNumber.length, labelWidthMm);
   const itemNumberLetterSpacingPx = is12mm ? 0.8 : 2.2;
 
-  const qrSizePx = is12mm ? Math.round(widthPx * 0.96) : Math.round(widthPx * 0.96);
+  const qrSizePx = widthPx;
   const qrScale = Math.max(2, Math.round(options.moduleScale ?? (is12mm ? 2 : 4)));
   const qrMargin = Math.max(0, Math.round(options.marginModules ?? (is12mm ? 1 : 2)));
 
@@ -779,7 +786,8 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
   const showLogoAbove = logoPlacement === 'above-qr' && logoText.length > 0;
   const showLogoInside = logoPlacement === 'inside-qr' && logoText.length > 0;
 
-  return `<!DOCTYPE html>
+  return {
+    html: `<!DOCTYPE html>
 <html>
   <head>
     <meta charset="utf-8" />
@@ -794,7 +802,8 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
       .sheet {
         width: ${widthPx}px;
         min-height: ${widthPx}px;
-        padding: 4px;
+        padding: 0;
+
         box-sizing: border-box;
         display: flex;
         flex-direction: column;
@@ -856,15 +865,25 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
       </div>
     </div>
   </body>
-</html>`;
+</html>`,
+    widthPoints,
+    heightPoints,
+  };
 };
 
 const buildTextHtml = (textValue: string, options: BrotherDirectPrintOptions) => {
   const labelWidthMm = resolveLabelWidthMm(options.labelWidthMm);
-  const widthPx = Math.max(170, Math.round((labelWidthMm / 25.4) * 360));
+
   const safeText = escapeHtml(textValue);
 
-  return `<!DOCTYPE html>
+  const safeWidthMm = Math.max(2, labelWidthMm - 2);
+  const widthPx = Math.max(170, Math.round((safeWidthMm / 25.4) * 360));
+  const widthPoints = (safeWidthMm / 25.4) * 72;
+  const heightPoints = (widthPx * 1.1 / 360) * 72; // Proportional to dots
+
+
+  return {
+    html: `<!DOCTYPE html>
 <html>
   <head>
     <meta charset="utf-8" />
@@ -882,7 +901,7 @@ const buildTextHtml = (textValue: string, options: BrotherDirectPrintOptions) =>
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 12px;
+        padding: 0;
         box-sizing: border-box;
       }
       .text {
@@ -899,10 +918,22 @@ const buildTextHtml = (textValue: string, options: BrotherDirectPrintOptions) =>
       <div class="text">${safeText}</div>
     </div>
   </body>
-</html>`;
+</html>`,
+    widthPoints,
+    heightPoints,
+  };
 };
 
-const printHtmlWithBrother = async (html: string, options: BrotherDirectPrintOptions = {}) => {
+const printHtmlWithBrother = async (
+  content: { html: string; widthPoints: number; heightPoints: number } | string,
+  options: BrotherDirectPrintOptions = {}
+) => {
+  const html = typeof content === 'string' ? content : content.html;
+  const widthPoints = typeof content === 'string' ? undefined : content.widthPoints;
+  const heightPoints = typeof content === 'string' ? undefined : content.heightPoints;
+  const preGeneratedPdfUri = typeof content === 'string' ? undefined : content.pdfUri;
+
+
   if (Platform.OS === 'web') {
     throw new Error('Brother printing is not available on web.');
   }
@@ -923,10 +954,15 @@ const printHtmlWithBrother = async (html: string, options: BrotherDirectPrintOpt
     detectedBrotherChannel = channel;
 
     onStatus?.('Generating printable document...');
-    const pdf = await Print.printToFileAsync({ html });
-    if (!pdf?.uri) {
+    const pdfUri = preGeneratedPdfUri || (typeof content === 'string'
+      ? (await Print.printToFileAsync({ html, width: widthPoints, height: heightPoints }))?.uri
+      : undefined);
+
+    if (!pdfUri) {
       throw createBrotherError('BROTHER_PDF_GENERATION_FAILED', 'Failed to generate printable document.');
     }
+
+
 
     const labelWidthMm = resolveLabelWidthMm(effectiveOptions.labelWidthMm);
     const matchedModel = await preparePrintSettings(sdk, printer.modelName, labelWidthMm, onStatus);
@@ -940,7 +976,8 @@ const printHtmlWithBrother = async (html: string, options: BrotherDirectPrintOpt
       activeChannel.extraInfo = { ...activeChannel.extraInfo, ModelName: matchedModel };
     }
 
-    const printablePath = pdf.uri.replace(/^file:\/\//i, '');
+    const printablePath = pdfUri.replace(/^file:\/\//i, '');
+
 
     onStatus?.('Sending print job to Brother printer...');
     const printResult = await sdk.printPDFFileWithChannel(activeChannel, printablePath);
@@ -973,16 +1010,55 @@ export async function printBrotherTextLabelDirect(
   await printHtmlWithBrother(html, options);
 }
 
-export async function printBrotherQrLabelDirect(
+export async function generateBrotherQrLabelPdf(
   qrValue: string,
   options: BrotherDirectPrintOptions = {}
-): Promise<void> {
+) {
   const value = String(qrValue || '').trim();
   if (!value) {
     throw createBrotherError('BROTHER_EMPTY_QR', 'QR value is empty.');
   }
 
   const effectiveOptions = withDetectedPrinterDefaults(options);
-  const html = buildQrHtml(value, effectiveOptions);
-  await printHtmlWithBrother(html, effectiveOptions);
+  const built = buildQrHtml(value, effectiveOptions);
+  const labelWidthMm = resolveLabelWidthMm(effectiveOptions.labelWidthMm);
+
+  const pdf = await Print.printToFileAsync({
+    html: built.html,
+    width: built.widthPoints,
+    height: built.heightPoints,
+  });
+
+  if (!pdf?.uri) {
+    throw createBrotherError('BROTHER_PDF_GENERATION_FAILED', 'Failed to generate printable document.');
+  }
+
+  return {
+    uri: pdf.uri,
+    html: built.html,
+    widthPoints: built.widthPoints,
+    heightPoints: built.heightPoints,
+    labelWidthMm,
+    safeWidthMm: Math.max(2, labelWidthMm - 0.5), // Match the logic in buildQrHtml
+  };
 }
+
+export async function printBrotherQrLabelDirect(
+  qrValue: string,
+  options: BrotherDirectPrintOptions = {}
+): Promise<void> {
+  const effectiveOptions = withDetectedPrinterDefaults(options);
+  const pdfData = await generateBrotherQrLabelPdf(qrValue, effectiveOptions);
+
+  await printHtmlWithBrother(
+    {
+      html: pdfData.html,
+      widthPoints: pdfData.widthPoints,
+      heightPoints: pdfData.heightPoints,
+      pdfUri: pdfData.uri,
+    },
+    effectiveOptions
+  );
+
+}
+
