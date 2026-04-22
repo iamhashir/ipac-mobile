@@ -8,10 +8,11 @@ import { db } from '../../../../../utils/api/supabase';
 import CatalogBrowserModal from './CatalogBrowserModal';
 import { chooseQrPrintSizePreset } from './qrPrintPresets';
 
-interface MaintenanceItemsSectionProps {
+interface OrderItemsSectionProps {
   orderId: string;
   orderPackageId: string;
   clientId: string;
+
   orderPkgInstanceId?: string | null;
   editable?: boolean;
 }
@@ -99,7 +100,7 @@ const isCatalogItemFullyPacked = (catalogItem: any): boolean => {
   return remaining !== null && remaining <= 0;
 };
 
-const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({ 
+const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({ 
   orderId,
   orderPackageId, 
   clientId, 
@@ -108,30 +109,53 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
 }) => {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [catalogVisible, setCatalogVisible] = useState(false);
   const [isModalVisible, setModalVisible] = useState(false);
-  const [printingItemId, setPrintingItemId] = useState<string | null>(null);
-  const [previewingItemId, setPreviewingItemId] = useState<string | null>(null);
-  const [previewItemQr, setPreviewItemQr] = useState<{ 
-    name: string; 
-    url: string; 
-    pdfUri?: string;
-    labelWidthMm?: number;
-    safeWidthMm?: number;
-  } | null>(null);
   const [scannerVisible, setScannerVisible] = useState(false);
   const [scannerBusy, setScannerBusy] = useState(false);
-  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-  const [scannedCatalogCandidates, setScannedCatalogCandidates] = useState<any[]>([]);
-  const [scannedCatalogItem, setScannedCatalogItem] = useState<any | null>(null);
-  const [lastScannedItemNumber, setLastScannedItemNumber] = useState('');
-  const [scanQuantityInput, setScanQuantityInput] = useState('1');
   const [assigningFromScan, setAssigningFromScan] = useState(false);
-  const [rowWidths, setRowWidths] = useState<Record<string, number>>({});
-  const [detectingPrinter, setDetectingPrinter] = useState(false);
+  const [scannedCatalogItem, setScannedCatalogItem] = useState<any | null>(null);
+  const [scanQuantityInput, setScanQuantityInput] = useState('1');
+  const [lastScannedItemNumber, setLastScannedItemNumber] = useState('');
+  const [scannedCatalogCandidates, setScannedCatalogCandidates] = useState<any[]>([]);
+  const [previewingItemId, setPreviewingItemId] = useState<string | null>(null);
+  const [printingItemId, setPrintingItemId] = useState<string | null>(null);
   const [detectedPrinter, setDetectedPrinter] = useState<DetectedBrotherPrinter | null>(null);
   const [printerPickerVisible, setPrinterPickerVisible] = useState(false);
   const [printerCandidates, setPrinterCandidates] = useState<DetectedBrotherPrinter[]>([]);
   const [connectingPrinterAddress, setConnectingPrinterAddress] = useState<string | null>(null);
+  const [detectingPrinter, setDetectingPrinterLoading] = useState(false);
+  const [clientLogoUrl, setClientLogoUrl] = useState<string | null>(null);
+
+  const [rowWidths, setRowWidths] = useState<Record<string, number>>({});
+  const [permissions, requestPermission] = useCameraPermissions();
+
+  useEffect(() => {
+    if (clientId) {
+      db.getClientQrLogoUrl(clientId).then(({ data }) => {
+        if (data) setClientLogoUrl(data);
+      });
+    }
+  }, [clientId]);
+
+  const loadItems = useCallback(async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await db.getOrderItemsForPackages([orderPackageId], clientId);
+      if (error) throw error;
+      setItems(data || []);
+    } catch (e: any) {
+      console.error('Error loading items:', e);
+      Alert.alert('Load Error', 'Unable to retrieve items for this box.');
+    } finally {
+      setLoading(false);
+    }
+  }, [orderPackageId, clientId]);
+
+
+  useEffect(() => {
+    loadItems();
+  }, [loadItems]);
 
   const prepareScannedItemForAssignment = useCallback((catalogItem: any) => {
     const remainingQty = getRemainingExpectedQty(catalogItem);
@@ -149,34 +173,6 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
     const longName = String(itemName || '').trim().length >= LONG_ITEM_NAME_THRESHOLD;
     return compactRow || longName;
   }, [rowWidths]);
-
-  const loadItems = useCallback(async () => {
-    if (!orderPackageId) return;
-    try {
-      setLoading(true);
-      const { data, error } = await db.getMaintenanceItemsForPackages(
-        [orderPackageId],
-        clientId,
-        orderPkgInstanceId ? [orderPkgInstanceId] : undefined
-      );
-      
-      if (error) {
-        console.error('Error fetching maintenance items:', error);
-        Alert.alert('Error', 'Failed to load assigned items');
-        return;
-      }
-      
-      setItems(data || []);
-    } catch (e) {
-      console.error('Unexpected error loading items:', e);
-    } finally {
-      setLoading(false);
-    }
-  }, [orderPackageId, clientId, orderPkgInstanceId]);
-
-  useEffect(() => {
-    loadItems();
-  }, [loadItems]);
 
   const resolveItemQrData = useCallback(async (maintenanceItem: any) => {
     const maintenanceItemId = maintenanceItem?.id;
@@ -214,18 +210,16 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
           labelWidthMm: selectedPreset.labelWidthMm,
           moduleScale: selectedPreset.moduleScale,
           marginModules: selectedPreset.marginModules,
-          logoPlacement: selectedPreset.logoPlacement,
-          logoText: 'IPAC',
+          logoUrl: clientLogoUrl || undefined,
+          layout: 'qr-with-caption-beside',
           caption: qrData.itemLabel,
       });
 
-      setPreviewItemQr({
-        name: qrData.itemName,
-        url: qrData.qrUrl,
-        pdfUri: pdfData.uri,
-        labelWidthMm: pdfData.labelWidthMm,
-        safeWidthMm: pdfData.safeWidthMm,
+      await Sharing.shareAsync(pdfData.uri, {
+        mimeType: 'application/pdf',
+        dialogTitle: `Technical Preview: ${qrData.itemLabel}`,
       });
+
     } catch (e: any) {
       console.error('Error previewing item QR:', e);
       Alert.alert('Preview Failed', e?.message || 'Unable to prepare item QR preview.');
@@ -273,8 +267,8 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
         labelWidthMm: selectedPreset.labelWidthMm,
         moduleScale: selectedPreset.moduleScale,
         marginModules: selectedPreset.marginModules,
-        logoPlacement: selectedPreset.logoPlacement,
-        logoText: 'IPAC',
+        logoUrl: clientLogoUrl || undefined,
+        layout: 'qr-with-caption-beside',
         caption: qrData.itemLabel,
         preferredConnection:
           detectedPrinter?.connectionType === 'wifi'
@@ -321,8 +315,9 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
     }
 
     try {
-      setDetectingPrinter(true);
+      setDetectingPrinterLoading(true);
       const brotherPrintModule = loadBrotherPrintModule();
+
       const listBrotherPrinters = brotherPrintModule?.listBrotherPrinters;
       const detectBrotherPrinter = brotherPrintModule?.detectBrotherPrinter;
 
@@ -390,8 +385,8 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
         Alert.alert('Connection Failed', message);
       }
     } finally {
+      setDetectingPrinterLoading(false);
       setConnectingPrinterAddress(null);
-      setDetectingPrinter(false);
     }
   };
 
@@ -438,13 +433,15 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
       return;
     }
 
-    if (!cameraPermission?.granted) {
-      const response = await requestCameraPermission();
+    const [cameraPermission, requestCameraPermission] = await useCameraPermissions();
+    if (!permissions?.granted) {
+      const response = await requestPermission();
       if (!response.granted) {
         Alert.alert('Permission Required', 'Camera permission is required to scan item QR codes.');
         return;
       }
     }
+
 
     setScannerBusy(false);
     setScannerVisible(true);
@@ -460,11 +457,13 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
 
     setLastScannedItemNumber(itemNumber);
 
-    const { data: catalogItems, error } = await db.getMaintenanceCatalogItemsByItemNumber(
+    const { data: catalogItems, error } = await db.getItemCatalogByNumber(
       clientId,
       itemNumber,
       orderId
     );
+
+
     if (error) {
       throw new Error(error.message || 'Failed to search catalog by scanned item number.');
     }
@@ -490,11 +489,13 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
     }
 
     if (defaultBin) {
-      const { data: fallbackMatchesRaw, error: fallbackError } = await db.getMaintenanceCatalogItemsByDefaultBin(
+      const { data: fallbackMatchesRaw, error: fallbackError } = await db.getItemCatalogByBin(
         clientId,
         defaultBin,
         orderId
       );
+
+
       if (fallbackError) {
         throw new Error(fallbackError.message || 'Failed to search catalog by default bin.');
       }
@@ -634,7 +635,23 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
       <View className="flex-row justify-between items-center mb-3">
         <View className="flex-row items-center">
           <Inbox size={18} color="#0f172a" className="mr-2" />
-          <Text className="text-base font-bold text-slate-900">Maintenance Items</Text>
+          <Text className="text-sm font-bold text-slate-800">Box Items</Text>
+          <View className="flex-row items-center gap-x-2">
+            <TouchableOpacity
+              onPress={loadItems}
+              className="p-1 px-2 flex-row items-center bg-slate-100 rounded-md"
+            >
+              <RefreshCw size={14} color="#64748b" className={loading ? 'animate-spin' : ''} />
+              <Text className="text-[10px] ml-1 text-slate-600">Refresh</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setCatalogVisible(true)}
+              className="p-1 px-2 flex-row items-center bg-blue-50 rounded-md border border-blue-100"
+            >
+              <Info size={14} color="#2563eb" />
+              <Text className="text-[10px] ml-1 text-blue-700">Items DB</Text>
+            </TouchableOpacity>
+          </View>
           <View className="bg-slate-200 ml-2 px-2 py-0.5 rounded-full">
             <Text className="text-slate-700 text-xs font-semibold">{items.length}</Text>
           </View>
@@ -680,8 +697,8 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
       ) : (
         <View className="bg-white rounded-md border border-gray-200 overflow-hidden">
           {items.map((item, index) => {
-            const maintenanceItem = item.maintenance_items;
-            const categoryLabel = maintenanceItem?.maintenance_package_categories?.label;
+            const maintenanceItem = item.item_details;
+            const categoryLabel = maintenanceItem?.pkg_category?.label;
             const itemName = maintenanceItem?.description || 'Unknown Item';
             const isLegacyItem = !!item?.is_legacy_package_item;
             const canPrintOrPreview = !!maintenanceItem?.id;
@@ -812,99 +829,7 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
         onAssigned={loadItems}
       />
 
-      <Modal
-        visible={!!previewItemQr}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setPreviewItemQr(null)}
-      >
-        <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.7)', justifyContent: 'center', paddingHorizontal: 16 }}>
-          <View className="bg-white rounded-2xl overflow-hidden">
-            <View className="bg-slate-50 p-4 border-b border-slate-100 flex-row justify-between items-center">
-              <View className="flex-row items-center">
-                <View className="bg-blue-100 p-1.5 rounded-lg mr-2">
-                  <Eye size={18} color="#2563eb" />
-                </View>
-                <Text className="text-lg font-bold text-slate-900">Life-like Label Preview</Text>
-              </View>
-              <TouchableOpacity onPress={() => setPreviewItemQr(null)} className="p-1 bg-slate-200 rounded-full">
-                <X size={20} color="#64748b" />
-              </TouchableOpacity>
-            </View>
 
-            <View className="p-6 items-center">
-              <View className="mb-6 w-full items-center">
-                <Text className="text-sm font-semibold text-slate-500 mb-4 uppercase tracking-wider">Realistic Tape Mockup ({previewItemQr?.labelWidthMm}mm Tape)</Text>
-                
-                {/* TAPE MOCKUP START */}
-                <View 
-                  className="bg-[#FFE135] shadow-lg rounded-sm items-center justify-center p-2"
-                  style={{ 
-                    // 1mm = 6px on screen for a consistent preview size
-                    width: (previewItemQr?.labelWidthMm || 36) * 6,
-                    height: (previewItemQr?.labelWidthMm || 36) * 6,
-                    borderWidth: 1,
-                    borderColor: '#EAB308'
-                  }}
-                >
-                  {/* SAFE AREA INDICATOR (Dashed Line) */}
-                  <View 
-                    className="border border-slate-400/40 border-dashed items-center justify-center"
-                    style={{ 
-                      width: (previewItemQr?.safeWidthMm || 34) * 6,
-                      height: (previewItemQr?.safeWidthMm || 34) * 6,
-                    }}
-                  >
-                    {previewItemQr?.url && (
-                      <QRCode 
-                        value={previewItemQr.url} 
-                        size={(previewItemQr?.safeWidthMm || 34) * 6} 
-                        quietZone={0}
-                      />
-                    )}
-                  </View>
-                </View>
-                {/* TAPE MOCKUP END */}
-
-                <View className="mt-4 flex-row items-center bg-blue-50 px-3 py-2 rounded-full">
-                  <Info size={14} color="#3b82f6" className="mr-1.5" />
-                  <Text className="text-[10px] text-blue-700 font-medium">Yellow area = Tape width. Dashed line = Safe zone.</Text>
-                </View>
-              </View>
-
-              <View className="w-full space-y-3">
-                <View className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <Text className="text-xs font-bold text-slate-400 uppercase mb-1">Item Details</Text>
-                  <Text className="text-sm text-slate-800 font-semibold" numberOfLines={1}>{previewItemQr?.name}</Text>
-                  <Text className="text-[10px] text-slate-500 mt-1" numberOfLines={1}>{previewItemQr?.url}</Text>
-                </View>
-
-                <TouchableOpacity
-                  onPress={async () => {
-                    if (previewItemQr?.pdfUri) {
-                      await Sharing.shareAsync(previewItemQr.pdfUri, {
-                        mimeType: 'application/pdf',
-                        dialogTitle: 'Technical PDF Label View'
-                      });
-                    }
-                  }}
-                  className="w-full flex-row items-center justify-center bg-slate-900 h-12 rounded-xl"
-                >
-                  <Share2 size={18} color="white" className="mr-2" />
-                  <Text className="text-white font-bold">Open Technical PDF</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={() => setPreviewItemQr(null)}
-                  className="w-full items-center justify-center h-10"
-                >
-                  <Text className="text-slate-500 font-bold">Close Preview</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       <Modal
         visible={printerPickerVisible}
@@ -1118,4 +1043,5 @@ const MaintenanceItemsSection: React.FC<MaintenanceItemsSectionProps> = ({
   );
 };
 
-export default MaintenanceItemsSection;
+export default OrderItemsSection;
+

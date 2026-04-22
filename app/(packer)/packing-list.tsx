@@ -405,11 +405,11 @@ export default function PackingListPage() {
         const em: Record<string, string> = {};
         
         if (hasPortal && orderData?.client_id) {
-          const { data: maintItems } = await db.getMaintenanceItemsForPackages(opIds, orderData.client_id);
+          const { data: maintItems } = await db.getOrderItemsForPackages(opIds, orderData.client_id);
           (maintItems || []).forEach((it: any) => {
             const key = it.order_package_id;
             // Use description, or item_num, or reference as the label
-            const label = it.maintenance_items?.description || it.maintenance_items?.item_num || it.maintenance_items?.reference || "";
+            const label = it.item_details?.description || it.item_details?.item_num || it.item_details?.reference || "";
             if (!em[key]) em[key] = label;
             else if (label) em[key] = `${em[key]}, ${label}`;
           });

@@ -6,7 +6,7 @@ import OrderPackingInfo, { BoxInfoDetails } from './order_packing_info';
 import OrderPackingDimensions from './order_packing_dimensions';
 import { DimensionsTriple } from '../common/DimensionsBox';
 import OrderPackingItems from '../section_02_packing_items/order_packing_items';
-import MaintenanceItemsSection from './maintenance/MaintenanceItemsSection';
+import OrderItemsSection from './items/OrderItemsSection';
 import TwoTierEditableCard from '../common/TwoTierEditableCard';
 import { PackageInfoChangeEvent } from './types';
 
@@ -358,7 +358,7 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
 
       {hasPortal && clientId && (
         <View className="mt-4">
-          <MaintenanceItemsSection 
+          <OrderItemsSection 
             orderId={orderId}
             orderPackageId={orderPackageId} 
             orderPkgInstanceId={orderPkgInstanceId}

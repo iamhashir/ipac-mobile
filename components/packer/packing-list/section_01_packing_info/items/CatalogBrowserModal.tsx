@@ -93,15 +93,16 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
     });
   }, [items, searchQuery]);
 
-  const handleAssignItem = async (maintenanceDbId: string, quantity: number) => {
+  const handleAssignItem = async (itemId: string, quantity: number) => {
     try {
-      setAssigningId(maintenanceDbId);
+      setAssigningId(itemId);
       const { error } = await db.assignItemToPackage(
-        maintenanceDbId,
+        itemId,
         orderPackageId,
         quantity,
         orderPkgInstanceId || undefined
       );
+
       
       if (error) {
         Alert.alert('Error', error.message || 'Failed to assign item to package');
@@ -160,7 +161,7 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
 
   const renderItem = ({ item }: { item: any }) => {
     const isAssigning = assigningId === item.id;
-    const categoryLabel = item.maintenance_package_categories?.label;
+    const categoryLabel = item.pkg_category?.label;
     const defaultQty = item.expected_qty ?? 1;
     const remainingQty = getRemainingExpectedQty(item);
 
@@ -278,7 +279,8 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
               <Package size={48} color="#cbd5e1" />
               <Text className="text-gray-500 mt-4 text-center font-medium">No catalog items found.</Text>
               <Text className="text-gray-400 mt-2 text-center text-sm">
-                No maintenance catalog items are available for this client yet.
+                No catalog items are available for this client yet.
+
               </Text>
             </View>
           ) : filteredItems.length === 0 ? (

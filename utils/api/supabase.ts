@@ -758,6 +758,28 @@ const baseDb = {
     return { data, error };
   },
 
+  getClientQrLogoUrl: async (clientId: UUID) => {
+    try {
+      const { data, error } = await supabase
+        .from('clients')
+        .select(`
+          portal_settings:client_portal_settings (
+            qr_logo_url
+          )
+        `)
+        .eq('id', clientId)
+        .maybeSingle();
+
+      if (error) return { data: null, error };
+      
+      const settings = unwrapSingleRelation<{ qr_logo_url: string | null }>(data?.portal_settings as any);
+      return { data: settings?.qr_logo_url || null, error: null };
+    } catch (e) {
+      return { data: null, error: e };
+    }
+  },
+
+
   // Get packers by IDs
   getPackersByIds: async (packerIds: UUID[]) => {
     const { data, error } = await supabase
@@ -1752,13 +1774,14 @@ const baseDb = {
 
   // ===== Maintenance Portal & QR Code Methods =====
 
-  getMaintenanceItemsForPackages: async (
-    opIds: UUID[],
+  getOrderItemsForPackages: async (
+    orderPackageIds: UUID[],
     clientId?: UUID,
-    pkgInstanceIds?: UUID[]
+    orderPkgInstanceIds?: UUID[]
   ) => {
-    const packageIds = Array.from(new Set((opIds || []).filter(Boolean)));
-    const requestedInstanceIds = Array.from(new Set((pkgInstanceIds || []).filter(Boolean)));
+    const packageIds = Array.from(new Set((orderPackageIds || []).filter(Boolean)));
+    const requestedInstanceIds = Array.from(new Set((orderPkgInstanceIds || []).filter(Boolean)));
+
 
     if (packageIds.length === 0 && requestedInstanceIds.length === 0) {
       return { data: [], error: null };
@@ -1811,7 +1834,7 @@ const baseDb = {
       const { data: instanceRowsRaw, error: instanceError } = await supabase
         .from('order_pkg_instance')
         .select('id, order_package_id')
-        .in('order_package_id', packageIds);
+        .in('order_package_id', orderPackageIds);
 
       if (instanceError) {
         return { data: null, error: instanceError };
@@ -1841,28 +1864,29 @@ const baseDb = {
       );
     }
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('pkd_item')
+
       .select(`
         id,
         quantity,
-        created_at,
         pkg_instance_id,
-        maintenance_db_id,
-        pkg_instance:order_pkg_instance(
+        order_pkg_instance!inner(
           id,
-          order_package_id,
-          order_pkg_overview_id,
-          instance_number,
-          status
+          order_package_id
         ),
-        maintenance_items:items_db!inner(
+
+        item_details:items_db(
+
+
+
           id,
           client_id,
+          category_id,
           reference,
-          ipac_comments,
           expected_qty,
           packed_qty,
+          ipac_comments,
           item_num,
           description,
           length,
@@ -1870,7 +1894,7 @@ const baseDb = {
           height,
           net_weight,
           warehouse_location,
-          maintenance_package_categories:pkg_category(
+          pkg_category:pkg_category(
             id,
             label,
             category_tag_map(
@@ -1878,8 +1902,16 @@ const baseDb = {
             )
           )
         )
-      `)
-      .in('pkg_instance_id', instanceIds);
+      `);
+
+    if (requestedInstanceIds.length > 0) {
+      query = query.in('pkg_instance_id', requestedInstanceIds);
+    } else {
+      query = query.in('order_pkg_instance.order_package_id', orderPackageIds);
+
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       return { data: null, error };
@@ -1888,16 +1920,19 @@ const baseDb = {
     let normalized = (data || []).map((row: any) => ({
       ...row,
       order_package_id:
-        row?.pkg_instance?.order_package_id ||
+        row?.order_pkg_instance?.order_package_id ||
+
         packageIdByInstanceId.get(String(row?.pkg_instance_id || '')) ||
         null,
     }));
 
     if (clientId) {
       normalized = normalized.filter(
-        (row: any) => String(row?.maintenance_items?.client_id || '') === String(clientId)
+        (row: any) => String(row?.item_details?.client_id || '') === String(clientId)
       );
     }
+
+
 
     if (normalized.length === 0 && requestedInstanceIds.length === 0) {
       return await loadLegacyPackageItems();
@@ -1931,7 +1966,8 @@ const baseDb = {
         height,
         net_weight,
         warehouse_location,
-        maintenance_package_categories:pkg_category(
+        pkg_category:pkg_category(
+
           id,
           label,
           category_tag_map(
@@ -1957,11 +1993,12 @@ const baseDb = {
     return await query;
   },
 
-  getMaintenanceCatalogItemsByItemNumber: async (
+  getItemCatalogByNumber: async (
     clientId: UUID,
     itemNumber: string,
     orderId?: UUID | null
   ) => {
+
     const normalizedItemNumber = String(itemNumber || '').trim();
     if (!normalizedItemNumber) {
       return {
@@ -1998,7 +2035,8 @@ const baseDb = {
         height,
         net_weight,
         warehouse_location,
-        maintenance_package_categories:pkg_category(
+        pkg_category:pkg_category(
+
           id,
           label,
           category_tag_map(
@@ -2019,11 +2057,12 @@ const baseDb = {
     return { data: data || [], error };
   },
 
-  getMaintenanceCatalogItemsByDefaultBin: async (
+  getItemCatalogByBin: async (
     clientId: UUID,
     defaultBin: string,
     orderId?: UUID | null
   ) => {
+
     const normalizedDefaultBin = String(defaultBin || '').trim();
     if (!normalizedDefaultBin) {
       return {
@@ -2449,11 +2488,12 @@ const baseDb = {
     }
 
     const { data: existing, error: existingError } = await supabase
-      .from('pkd_item')
+      .from('pkd_items')
       .select('id, quantity')
       .eq('maintenance_db_id', maintenanceDbId)
       .eq('pkg_instance_id', targetInstanceId)
       .maybeSingle();
+
 
     if (existingError) {
       return { data: null, error: existingError };
@@ -2462,9 +2502,10 @@ const baseDb = {
     if (existing?.id) {
       const nextQty = Number(existing.quantity || 0) + parsedQty;
       const { data, error } = await supabase
-        .from('pkd_item')
+        .from('pkd_items')
         .update({ quantity: nextQty })
         .eq('id', existing.id)
+
         .select()
         .single();
 
@@ -2472,12 +2513,13 @@ const baseDb = {
     }
 
     const { data, error } = await supabase
-      .from('pkd_item')
+      .from('pkd_items')
       .insert({
         maintenance_db_id: maintenanceDbId,
         pkg_instance_id: targetInstanceId,
         quantity: parsedQty,
       })
+
       .select()
       .single();
 
@@ -2486,9 +2528,10 @@ const baseDb = {
 
   unassignItemFromPackage: async (maintenancePackageItemId: UUID) => {
     const { error } = await supabase
-      .from('pkd_item')
+      .from('pkd_items')
       .delete()
       .eq('id', maintenancePackageItemId);
+
 
     return { data: null, error };
   },

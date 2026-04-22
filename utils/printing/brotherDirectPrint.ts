@@ -72,7 +72,11 @@ export interface BrotherDirectPrintOptions {
   caption?: string;
   logoPlacement?: QrLogoPlacement;
   logoText?: string;
+  logoUrl?: string; // Support for image logos
   preferredConnection?: PrintConnectionPreference;
+  layout?: 'qr-only' | 'qr-with-caption-beside';
+
+
   printerAddressHint?: string;
   postPrintDelayMs?: number;
   onStatus?: (status: string) => void;
@@ -753,28 +757,39 @@ const computeItemFontSizePx = (itemTextLength: number, labelWidthMm: number): nu
 
 const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
   const labelWidthMm = resolveLabelWidthMm(options.labelWidthMm);
+  const isBeside = options.layout === 'qr-with-caption-beside';
+
+  // Use full tape width (no safety margin as requested)
+  const safeWidthMm = labelWidthMm;
+  const pointsPerMm = 72 / 25.4;
+
+  // Base dimensions (The dimension across the tape)
+  const tapeWidthPoints = safeWidthMm * pointsPerMm;
+  const tapeWidthPx = Math.round(tapeWidthPoints);
 
 
-  // Use a 2mm safety margin from the physical tape width (e.g., 34mm for 36mm tape)
-  const safeWidthMm = Math.max(2, labelWidthMm);
-  const widthPx = Math.max(170, Math.round((safeWidthMm / 25.4) * 144));
-  const widthPoints = (safeWidthMm / 25.4) * 72;
-  const heightPoints = widthPoints; // Perfect square
+  const itemNumber = String(options.caption || '').trim();
+  const safeItemNumber = escapeHtml(itemNumber);
+
+  // Dynamic Length Calculation (along the tape)
+  const qrLengthMm = safeWidthMm; // QR is square
+  const gapMm = isBeside ? 6 : 0;
+
+  // Estimate text length: approx 7.5mm per character for Bold Arial at full height
+  const charWidthMm = 14;
+  const textLengthMm = isBeside ? itemNumber.length * charWidthMm : 0;
+
+  const totalLengthMm = qrLengthMm + gapMm + textLengthMm;
+  const totalLengthPoints = totalLengthMm * pointsPerMm;
+  const totalLengthPx = Math.round(totalLengthPoints);
 
 
-  // Required layouts:
-  // 12mm -> [Logo] -> [QR] -> [Item Number]
-  // 36mm -> [QR with centered logo] -> [Item Number]
   const is12mm = labelWidthMm <= 12;
   const logoPlacement: QrLogoPlacement = 'inside-qr';
 
+  const logoUrl = options.logoUrl || '';
   const logoText = escapeHtml(String(options.logoText || 'IPAC').trim());
-  const itemNumber = String(options.caption || '').trim();
-  const safeItemNumber = escapeHtml(itemNumber);
-  const itemNumberFontPx = computeItemFontSizePx(itemNumber.length, labelWidthMm);
-  const itemNumberLetterSpacingPx = is12mm ? 0.8 : 2.2;
 
-  const qrSizePx = widthPx;
   const qrScale = Math.max(2, Math.round(options.moduleScale ?? (is12mm ? 2 : 4)));
   const qrMargin = Math.max(0, Math.round(options.marginModules ?? (is12mm ? 1 : 2)));
 
@@ -783,11 +798,11 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
     ? `<img class="qr-image" src="data:image/png;base64,${providedQrBase64}" alt="QR"/>`
     : buildQrSvgMarkup(value, qrScale, qrMargin);
 
-  const showLogoAbove = logoPlacement === 'above-qr' && logoText.length > 0;
-  const showLogoInside = logoPlacement === 'inside-qr' && logoText.length > 0;
-
   return {
+    width: tapeWidthPoints,
+    height: totalLengthPoints,
     html: `<!DOCTYPE html>
+
 <html>
   <head>
     <meta charset="utf-8" />
@@ -800,35 +815,31 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
         font-family: Arial, sans-serif;
       }
       .sheet {
-        width: ${widthPx}px;
-        min-height: ${widthPx}px;
-        padding: 0;
-
+        width: ${tapeWidthPx}px;
+        height: ${totalLengthPx}px;
         box-sizing: border-box;
         display: flex;
         flex-direction: column;
         align-items: center;
-        justify-content: center;
+        justify-content: flex-start;
+        padding: 0;
+        overflow: hidden;
       }
-      .logo-top {
-        font-size: ${is12mm ? 22 : 32}px;
-        font-weight: 700;
-        letter-spacing: 1px;
-        color: #111827;
-      }
+
       .qr-wrap {
-        width: ${qrSizePx}px;
-        height: ${qrSizePx}px;
+        width: ${tapeWidthPx}px;
+        height: ${tapeWidthPx}px;
         display: flex;
         align-items: center;
         justify-content: center;
-      }
-      .qr-wrap.inside {
+        flex-shrink: 0;
+        transform: rotate(90deg);
         position: relative;
       }
+
       .qr-wrap svg, .qr-wrap .qr-image {
-        width: ${qrSizePx}px;
-        height: ${qrSizePx}px;
+        width: 100%;
+        height: 100%;
       }
       .logo-inside {
         position: absolute;
@@ -839,35 +850,54 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
         border: 1px solid #d1d5db;
         border-radius: 8px;
         padding: ${is12mm ? '2px 6px' : '4px 10px'};
-        font-size: ${is12mm ? 18 : 28}px;
+        font-size: ${is12mm ? '18px' : '28px'};
         line-height: 1;
         font-weight: 700;
         color: #111827;
-      }
-      .item-number {
-        max-width: 100%;
-        text-align: center;
-        white-space: nowrap;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         overflow: hidden;
-        text-overflow: clip;
-        font-size: ${itemNumberFontPx}px;
-        letter-spacing: ${itemNumberLetterSpacingPx}px;
-        font-weight: 700;
-        color: #111827;
       }
+      .logo-inside img {
+        max-width: ${is12mm ? '40px' : '80px'};
+        max-height: ${is12mm ? '20px' : '40px'};
+        object-fit: contain;
+      }
+      .gap {
+        height: ${gapMm * pointsPerMm}px;
+        width: 100%;
+        flex-shrink: 0;
+      }
+
+      .item-number {
+        flex: 1;
+        width: ${tapeWidthPx}px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        white-space: nowrap;
+        font-size: ${tapeWidthPx * 0.8}px;
+        font-weight: 900;
+        color: #000000;
+        letter-spacing: 2px;
+        transform: rotate(90deg);
+      }
+
     </style>
   </head>
   <body>
     <div class="sheet">
-      <div class="qr-wrap${showLogoInside ? ' inside' : ''}">
+      <div class="qr-wrap">
         ${qrMarkup}
-        ${showLogoInside ? `<div class="logo-inside">${logoText}</div>` : ''}
+        <div class="logo-inside">
+          ${logoUrl ? `<img src="${logoUrl}" alt="logo"/>` : logoText}
+        </div>
       </div>
+      ${isBeside ? `<div class="gap"></div><div class="item-number">${safeItemNumber}</div>` : ''}
     </div>
   </body>
 </html>`,
-    widthPoints,
-    heightPoints,
   };
 };
 
@@ -1020,26 +1050,25 @@ export async function generateBrotherQrLabelPdf(
   }
 
   const effectiveOptions = withDetectedPrinterDefaults(options);
-  const built = buildQrHtml(value, effectiveOptions);
-  const labelWidthMm = resolveLabelWidthMm(effectiveOptions.labelWidthMm);
+  const { html, width, height } = buildQrHtml(value, effectiveOptions);
 
-  const pdf = await Print.printToFileAsync({
-    html: built.html,
-    width: built.widthPoints,
-    height: built.heightPoints,
+  const { uri } = await Print.printToFileAsync({
+    html,
+    width,
+    height,
   });
 
-  if (!pdf?.uri) {
+  if (!uri) {
     throw createBrotherError('BROTHER_PDF_GENERATION_FAILED', 'Failed to generate printable document.');
   }
 
   return {
-    uri: pdf.uri,
-    html: built.html,
-    widthPoints: built.widthPoints,
-    heightPoints: built.heightPoints,
-    labelWidthMm,
-    safeWidthMm: Math.max(2, labelWidthMm - 0.5), // Match the logic in buildQrHtml
+    uri,
+    html,
+    widthPoints: width,
+    heightPoints: height,
+    labelWidthMm: effectiveOptions.labelWidthMm || DEFAULT_LABEL_WIDTH_MM,
+    safeWidthMm: effectiveOptions.labelWidthMm || DEFAULT_LABEL_WIDTH_MM,
   };
 }
 
