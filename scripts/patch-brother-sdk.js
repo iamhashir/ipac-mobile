@@ -49,4 +49,26 @@ jsiH = jsiH.replace(
 fs.writeFileSync(jsiHPath, jsiH);
 console.log('✓ Patched RTNBrotherPrintSDKSpecJSI.h');
 
+// 4. Patch ReadableMapUtils.kt — fix Kotlin null-safety compile errors
+const ktPath = path.join(__dirname, '..', 'node_modules', 'official-react-brother-print-sdk', 'android', 'src', 'main', 'java', 'com', 'brother', 'bms', 'rtnbrotherprintsdk', 'model', 'ReadableMapUtils.kt');
+if (fs.existsSync(ktPath)) {
+  let ktContent = fs.readFileSync(ktPath, 'utf8');
+  
+  // Apply fix if not already patched
+  if (!ktContent.includes('getMap(i)?.toJson()')) {
+    ktContent = ktContent.replace(
+      /ReadableType\.Map\s*->\s*getMap\(i\)\.toJson\(\)/g,
+      'ReadableType.Map -> getMap(i)?.toJson() ?: JsonNull.INSTANCE'
+    );
+    ktContent = ktContent.replace(
+      /ReadableType\.Array\s*->\s*getArray\(i\)\.toJson\(\)/g,
+      'ReadableType.Array -> getArray(i)?.toJson() ?: JsonNull.INSTANCE'
+    );
+    fs.writeFileSync(ktPath, ktContent);
+    console.log('✓ Patched ReadableMapUtils.kt');
+  } else {
+    console.log('✓ ReadableMapUtils.kt is already patched');
+  }
+}
+
 console.log('✓ All patches applied successfully');

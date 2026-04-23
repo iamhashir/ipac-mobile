@@ -12,7 +12,18 @@ interface QRGeneratorSectionProps {
   label: string;
 }
 
-const PORTAL_BASE_URL = 'https://ipac-admin.vercel.app';
+const normalizePortalBaseUrl = (value: string) => {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return 'https://ipac-admin.vercel.app';
+
+  return trimmed
+    .replace(/\/portal\/projects\/?$/i, '')
+    .replace(/\/+$/, '');
+};
+
+const PORTAL_BASE_URL = normalizePortalBaseUrl(
+  process.env.EXPO_PUBLIC_PORTAL_BASE_URL || 'https://ipac-admin.vercel.app'
+);
 const buildPortalScanUrl = (token: string) => `${PORTAL_BASE_URL}/portal/scan/${encodeURIComponent(token)}`;
 
 type DetectedBrotherPrinter = {

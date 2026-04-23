@@ -17,7 +17,18 @@ interface OrderItemsSectionProps {
   editable?: boolean;
 }
 
-const PORTAL_BASE_URL = 'https://ipac-admin.vercel.app';
+const normalizePortalBaseUrl = (value: string) => {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return 'https://ipac-admin.vercel.app';
+
+  return trimmed
+    .replace(/\/portal\/projects\/?$/i, '')
+    .replace(/\/+$/, '');
+};
+
+const PORTAL_BASE_URL = normalizePortalBaseUrl(
+  process.env.EXPO_PUBLIC_PORTAL_BASE_URL || 'https://ipac-admin.vercel.app'
+);
 const buildPortalScanUrl = (token: string) => `${PORTAL_BASE_URL}/portal/scan/${encodeURIComponent(token)}`;
 const ACTIONS_INLINE_MIN_ROW_WIDTH = 760;
 const LONG_ITEM_NAME_THRESHOLD = 72;
@@ -98,6 +109,84 @@ const getRemainingExpectedQty = (catalogItem: any): number | null => {
 const isCatalogItemFullyPacked = (catalogItem: any): boolean => {
   const remaining = getRemainingExpectedQty(catalogItem);
   return remaining !== null && remaining <= 0;
+};
+
+interface DimensionInputsProps {
+  itemId: string;
+  initialLength: number | null;
+  initialWidth: number | null;
+  initialHeight: number | null;
+  onUpdate: (dims: { length: number | null; width: number | null; height: number | null }) => Promise<void>;
+}
+
+const DimensionInputs: React.FC<DimensionInputsProps> = ({ 
+  itemId, 
+  initialLength, 
+  initialWidth, 
+  initialHeight, 
+  onUpdate 
+}) => {
+  const [l, setL] = useState(initialLength ? String(initialLength) : '');
+  const [w, setW] = useState(initialWidth ? String(initialWidth) : '');
+  const [h, setH] = useState(initialHeight ? String(initialHeight) : '');
+  const [saving, setSaving] = useState(false);
+
+  const handleBlur = async () => {
+    const nextL = toFiniteNumberOrNull(l);
+    const nextW = toFiniteNumberOrNull(w);
+    const nextH = toFiniteNumberOrNull(h);
+
+    if (nextL === initialLength && nextW === initialWidth && nextH === initialHeight) return;
+
+    setSaving(true);
+    try {
+      await onUpdate({ length: nextL, width: nextW, height: nextH });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <View className="flex-row items-center mt-2 pt-2 border-t border-gray-50">
+      <View className="flex-row items-center mr-4">
+        <Text className="text-[10px] font-bold text-gray-400 mr-1">L</Text>
+        <TextInput
+          className="w-12 text-xs text-slate-800 p-0 border-b border-gray-300 font-medium"
+          value={l}
+          onChangeText={setL}
+          onBlur={handleBlur}
+          placeholder="0"
+          keyboardType="numeric"
+          placeholderTextColor="#cbd5e1"
+        />
+      </View>
+      <View className="flex-row items-center mr-4">
+        <Text className="text-[10px] font-bold text-gray-400 mr-1">W</Text>
+        <TextInput
+          className="w-12 text-xs text-slate-800 p-0 border-b border-gray-300 font-medium"
+          value={w}
+          onChangeText={setW}
+          onBlur={handleBlur}
+          placeholder="0"
+          keyboardType="numeric"
+          placeholderTextColor="#cbd5e1"
+        />
+      </View>
+      <View className="flex-row items-center mr-4">
+        <Text className="text-[10px] font-bold text-gray-400 mr-1">H</Text>
+        <TextInput
+          className="w-12 text-xs text-slate-800 p-0 border-b border-gray-300 font-medium"
+          value={h}
+          onChangeText={setH}
+          onBlur={handleBlur}
+          placeholder="0"
+          keyboardType="numeric"
+          placeholderTextColor="#cbd5e1"
+        />
+      </View>
+      {saving && <ActivityIndicator size="small" color="#0ea5e9" className="ml-auto" />}
+    </View>
+  );
 };
 
 const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({ 
@@ -621,6 +710,17 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
     );
   };
 
+  const handleUpdateMasterDimensions = async (itemId: string, dims: { length: number | null; width: number | null; height: number | null }) => {
+    try {
+      const { error } = await db.updateItemDimensions(itemId, dims);
+      if (error) {
+        Alert.alert('Update Failed', 'Master catalog record could not be updated.');
+      }
+    } catch (e) {
+      console.error('Master update error:', e);
+    }
+  };
+
   if (loading && items.length === 0) {
     return (
       <View className="py-4 justify-center items-center">
@@ -744,6 +844,16 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
                       <Text className="text-xs text-orange-600 mt-1 italic" numberOfLines={1}>
                         Notes: {maintenanceItem.ipac_comments}
                       </Text>
+                    )}
+
+                    {!isLegacyItem && maintenanceItem?.id && (
+                      <DimensionInputs
+                        itemId={maintenanceItem.id}
+                        initialLength={maintenanceItem.length}
+                        initialWidth={maintenanceItem.width}
+                        initialHeight={maintenanceItem.height}
+                        onUpdate={(dims) => handleUpdateMasterDimensions(maintenanceItem.id, dims)}
+                      />
                     )}
                   </View>
 

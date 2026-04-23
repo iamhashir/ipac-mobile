@@ -131,6 +131,7 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
     const remainingQty = getRemainingExpectedQty(item);
     const effectiveSuggestedQty = remainingQty !== null ? remainingQty : suggestedQty;
     const safeQty = Number.isFinite(effectiveSuggestedQty) && effectiveSuggestedQty > 0 ? effectiveSuggestedQty : 1;
+    
     setSelectedItem(item);
     setQuantityInput(String(safeQty));
   };

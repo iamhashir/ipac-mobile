@@ -1993,6 +1993,20 @@ const baseDb = {
     return await query;
   },
 
+  updateItemDimensions: async (
+    itemId: UUID,
+    dims: { length: number | null; width: number | null; height: number | null }
+  ) => {
+    return supabase
+      .from('items_db')
+      .update({
+        length: dims.length,
+        width: dims.width,
+        height: dims.height,
+      })
+      .eq('id', itemId);
+  },
+
   getItemCatalogByNumber: async (
     clientId: UUID,
     itemNumber: string,
@@ -2488,7 +2502,7 @@ const baseDb = {
     }
 
     const { data: existing, error: existingError } = await supabase
-      .from('pkd_items')
+      .from('pkd_item')
       .select('id, quantity')
       .eq('maintenance_db_id', maintenanceDbId)
       .eq('pkg_instance_id', targetInstanceId)
@@ -2502,7 +2516,7 @@ const baseDb = {
     if (existing?.id) {
       const nextQty = Number(existing.quantity || 0) + parsedQty;
       const { data, error } = await supabase
-        .from('pkd_items')
+        .from('pkd_item')
         .update({ quantity: nextQty })
         .eq('id', existing.id)
 
@@ -2513,7 +2527,7 @@ const baseDb = {
     }
 
     const { data, error } = await supabase
-      .from('pkd_items')
+      .from('pkd_item')
       .insert({
         maintenance_db_id: maintenanceDbId,
         pkg_instance_id: targetInstanceId,
@@ -2528,7 +2542,7 @@ const baseDb = {
 
   unassignItemFromPackage: async (maintenancePackageItemId: UUID) => {
     const { error } = await supabase
-      .from('pkd_items')
+      .from('pkd_item')
       .delete()
       .eq('id', maintenancePackageItemId);
 
