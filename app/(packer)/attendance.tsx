@@ -20,6 +20,7 @@ interface AttendancePeriod {
   endTime: string | null;
   manualStart: boolean;
   manualEnd: boolean;
+  toolboxBriefingCompleted: boolean;
 }
 
 interface AttendanceEntry {
@@ -316,23 +317,23 @@ export default function AttendanceScreen() {
             startTime: null,
             endTime: null,
             manualStart: false,
-            manualEnd: false
+            manualEnd: false,
+            toolboxBriefingCompleted: false
           },
           afternoon: {
             present: null,
             startTime: null,
             endTime: null,
             manualStart: false,
-            manualEnd: false
+            manualEnd: false,
+            toolboxBriefingCompleted: false
           }
         };
       });
-  setAttendance(initialAttendance);
+      setAttendance(initialAttendance);
       
-  // Load existing attendance data from database
-  await loadExistingAttendance(packerList, initialAttendance);
-
-      // Project leads already loaded above
+      // Load existing attendance data from database
+      await loadExistingAttendance(packerList, initialAttendance);
 
     } catch (error) {
       console.error('Error in loadData:', error);
@@ -346,7 +347,6 @@ export default function AttendanceScreen() {
     try {
       // Get today's date
       const today = getRetrospectiveTimestamp().split('T')[0];
-      let anyToolboxCompleted = false;
       
       // Load existing attendance records for each packer
       for (const packer of packersResponse) {
@@ -381,7 +381,8 @@ export default function AttendanceScreen() {
               startTime: morningRecord.start_time ? formatTimeFromISO(morningRecord.start_time) : null,
               endTime: morningRecord.end_time ? formatTimeFromISO(morningRecord.end_time) : null,
               manualStart: false,
-              manualEnd: false
+              manualEnd: false,
+              toolboxBriefingCompleted: morningRecord.toolbox_briefing_completed === true
             };
           }
           
@@ -391,32 +392,11 @@ export default function AttendanceScreen() {
               startTime: afternoonRecord.start_time ? formatTimeFromISO(afternoonRecord.start_time) : null,
               endTime: afternoonRecord.end_time ? formatTimeFromISO(afternoonRecord.end_time) : null,
               manualStart: false,
-              manualEnd: false
+              manualEnd: false,
+              toolboxBriefingCompleted: afternoonRecord.toolbox_briefing_completed === true
             };
           }
-          
-          // Check if toolbox briefing was completed for CURRENT shift
-          // Only show toolbox button if:
-          // 1. No attendance for current shift, OR
-          // 2. Current shift has attendance with end_time (packer left and is returning - needs new toolbox)
-          const currentShift: TimePeriod = isAfternoon ? 'afternoon' : 'morning';
-          const currentShiftRecords = attendanceRows.filter(r => r.shift_period === currentShift);
-          
-          // If any current shift record has toolbox_briefing_completed = true and no end_time, they're good
-          const hasActiveToolbox = currentShiftRecords.some(
-            r => r.toolbox_briefing_completed === true && !r.end_time
-          );
-          
-          if (hasActiveToolbox) {
-            anyToolboxCompleted = true;
-          }
         }
-      }
-      
-      // Set toolbox completed if any packer has it marked for current shift without ending their shift
-      if (anyToolboxCompleted) {
-        setToolboxCompleted(true);
-        console.log('Toolbox briefing already completed for current shift');
       }
       
       // Update attendance state with loaded data
@@ -654,7 +634,8 @@ export default function AttendanceScreen() {
             ...prevAttendance[name][period],
             present: true,
             startTime: currentTime,
-            endTime: null
+            endTime: null,
+            toolboxBriefingCompleted: toolboxCompleted
           }
         }
       }));
@@ -828,7 +809,8 @@ export default function AttendanceScreen() {
             ...prevAttendance[name][period],
             startTime: currentTime,
             endTime: null,
-            present: true
+            present: true,
+            toolboxBriefingCompleted: toolboxCompleted
           }
         }
       }));
@@ -908,7 +890,7 @@ export default function AttendanceScreen() {
     try {
       // 1) End any active attendance record (present/absent without end_time)
       const endIso = getRetrospectiveTimestamp();
-  await db.updateAttendanceEndTimeByDetails(orderId, packerIdentifier, period, endIso);
+      await db.updateAttendanceEndTimeByDetails(orderId, packerIdentifier, period, endIso);
 
       // 2) Apply the requested change
       if (toPresent) {
@@ -931,6 +913,17 @@ export default function AttendanceScreen() {
     });
   };
 
+  const handleMouseUp = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  const handleLongPress = (name: string, period: TimePeriod, timeType: 'start' | 'end') => {
+    // Handle manual time entry if needed in the future
+  };
+
   const getCurrentDateTime = () => {
     const now = getEffectiveDate();
     return now.toLocaleString('en-GB', {
@@ -945,13 +938,9 @@ export default function AttendanceScreen() {
     });
   };
 
-
   const saveAttendance = async () => {
-    // Since attendance is now saved immediately when Present buttons are pressed,
-    // we just need to validate that required attendance exists and proceed
     setSaving(true);
     try {
-      // Check if at least one packer is marked as present
       const hasPresentPackers = packers.some(name => {
         const packerAttendance = attendance[name];
         return packerAttendance?.morning.present === true || packerAttendance?.afternoon.present === true;
@@ -962,7 +951,7 @@ export default function AttendanceScreen() {
         return false;
       }
 
-      console.log('Attendance validation successful - records already saved when Present buttons were pressed');
+      console.log('Attendance validation successful');
       return true;
     } catch (error) {
       console.error('Error validating attendance:', error);
@@ -974,17 +963,20 @@ export default function AttendanceScreen() {
   };
 
   const handleContinueToPackaging = async () => {
-    if (!toolboxCompleted) {
+    const currentPeriod: TimePeriod = isAfternoon ? 'afternoon' : 'morning';
+    const presentPackers = Object.values(attendance).filter(a => a[currentPeriod].present);
+    const anyMissingBriefing = presentPackers.length > 0 && presentPackers.some(a => !a[currentPeriod].toolboxBriefingCompleted);
+
+    if (anyMissingBriefing) {
       Alert.alert('Warning', 'Please confirm toolbox briefing is completed first');
       return;
     }
 
     const saved = await saveAttendance();
     if (saved) {
-      // Mark session attendance as completed so Packaging gate allows entry
       const marked = await markAttendanceCompleted();
       if (!marked) {
-        Alert.alert('Error', 'Could not mark attendance as completed. Please try again or contact your team lead.');
+        Alert.alert('Error', 'Could not mark attendance as completed.');
         return;
       }
       router.push({
@@ -1001,7 +993,6 @@ export default function AttendanceScreen() {
         console.error('Sign out error:', error);
         Alert.alert('Error', 'Failed to sign out');
       } else {
-        // Force navigation to login after successful sign out
         router.replace('/auth/login');
       }
     } catch (error) {
@@ -1019,23 +1010,6 @@ export default function AttendanceScreen() {
       </SafeAreaView>
     );
   }
-
-  const handleMouseUp = () => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  };
-
-  const handleLongPress = (name: string, period: TimePeriod, timeType: 'start' | 'end') => {
-    // Handle manual time entry if needed in the future
-  };
-
-  // Derived: whether at least one packer is marked present
-  const hasPresentPackers = packers.some(name => {
-    const packerAttendance = attendance[name];
-    return packerAttendance?.morning.present === true || packerAttendance?.afternoon.present === true;
-  });
 
   return (
     <SafeAreaView className="flex-1 bg-primary-50" edges={['top','bottom','left','right']}>
@@ -1125,39 +1099,64 @@ export default function AttendanceScreen() {
 
           {/* Footer with Submit Button */}
           <View className="p-4 bg-gray-50 border-t border-gray-200 rounded-b-lg">
-            {!toolboxCompleted && (
-              <TouchableOpacity
-                onPress={async () => {
-                  try {
-                    const shift: TimePeriod = isAfternoon ? 'afternoon' : 'morning';
-                    // Persist at the order+shift level so it stays hidden when returning
-                    await db.setToolboxBriefingForOrderShift(orderId, shift);
-                  } catch (_) {}
-                  setToolboxCompleted(true);
-                }}
-                className="mb-4 py-3 px-6 rounded-lg bg-orange-500"
-              >
-                <Text className="text-center font-semibold text-white">
-                  Confirm Toolbox Briefing Completed
-                </Text>
-              </TouchableOpacity>
-            )}
+            {(() => {
+              const currentPeriod: TimePeriod = isAfternoon ? 'afternoon' : 'morning';
+              // Logic: Show button if there are packers present in the current shift who haven't completed briefing
+              const presentPackers = Object.values(attendance).filter(a => a[currentPeriod].present);
+              const anyMissingBriefing = presentPackers.length > 0 && presentPackers.some(a => !a[currentPeriod].toolboxBriefingCompleted);
+              
+              if (anyMissingBriefing) {
+                return (
+                  <TouchableOpacity
+                    onPress={async () => {
+                      try {
+                        const shift: TimePeriod = isAfternoon ? 'afternoon' : 'morning';
+                        // Persist at the order+shift level so it stays hidden when returning
+                        await db.setToolboxBriefingForOrderShift(orderId, shift);
+                        
+                        // Update local state for all present packers
+                        setAttendance(prev => {
+                          const next = { ...prev };
+                          Object.keys(next).forEach(name => {
+                            if (next[name][shift].present) {
+                              next[name][shift] = {
+                                ...next[name][shift],
+                                toolboxBriefingCompleted: true
+                              };
+                            }
+                          });
+                          return next;
+                        });
+                        
+                        setToolboxCompleted(true);
+                      } catch (_) {}
+                    }}
+                    className="mb-4 py-3 px-6 rounded-lg bg-orange-500"
+                  >
+                    <Text className="text-center font-semibold text-white">
+                      Confirm Toolbox Briefing Completed
+                    </Text>
+                  </TouchableOpacity>
+                );
+              }
+              return null;
+            })()}
             
             <TouchableOpacity
               onPress={handleContinueToPackaging}
-              disabled={!toolboxCompleted || saving}
+              disabled={saving}
               className={`py-3 px-6 rounded-lg ${
-                !toolboxCompleted || saving
+                saving
                   ? 'bg-gray-300'
                   : 'bg-blue-500'
               }`}
             >
               <Text className={`text-center font-semibold ${
-                !toolboxCompleted || saving
+                saving
                   ? 'text-gray-500'
                   : 'text-white'
               }`}>
-{saving ? 'Saving Attendance...' : 'Continue to Packing List'}
+                {saving ? 'Saving Attendance...' : 'Continue to Packing List'}
               </Text>
             </TouchableOpacity>
           </View>

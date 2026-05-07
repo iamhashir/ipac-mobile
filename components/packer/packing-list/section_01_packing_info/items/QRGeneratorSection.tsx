@@ -7,7 +7,7 @@ import { db } from '../../../../../utils/api/supabase';
 import { chooseQrPrintSizePreset } from './qrPrintPresets';
 
 interface QRGeneratorSectionProps {
-  entityType: 'package' | 'item';
+  entityType: 'package' | 'item' | 'pkd_item';
   entityId: string;
   label: string;
 }
@@ -305,6 +305,7 @@ const QRGeneratorSection: React.FC<QRGeneratorSectionProps> = ({
         logoPlacement: selectedPreset.logoPlacement,
         logoText: 'IPAC',
         caption: label,
+        layout: 'qr-with-caption-beside',
         preferredConnection:
           detectedPrinter?.connectionType === 'wifi'
             ? 'wifi'

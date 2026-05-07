@@ -841,13 +841,13 @@ const baseDb = {
       };
     });
 
-    const busyWithoutOrderName = basePackers.filter(
-      (packer) => packer.packer_status !== 'available' && !packer.current_order_name
+    const withoutOrderName = basePackers.filter(
+      (packer) => !packer.current_order_name
     );
 
     const activeSessionOrderNameByPacker: Record<string, string> = {};
-    if (busyWithoutOrderName.length > 0) {
-      const busyIds = busyWithoutOrderName.map((packer) => packer.id);
+    if (withoutOrderName.length > 0) {
+      const busyIds = withoutOrderName.map((packer) => packer.id);
       const { data: sessionRows, error: sessionError } = await supabase
         .from('packer_sessions')
         .select(`
@@ -876,7 +876,7 @@ const baseDb = {
       }
     }
 
-    const unresolvedBusyPackers = busyWithoutOrderName.filter(
+    const unresolvedBusyPackers = withoutOrderName.filter(
       (packer) => !activeSessionOrderNameByPacker[packer.id]
     );
 
@@ -912,10 +912,6 @@ const baseDb = {
     
     const transformed = basePackers.map((packer) => {
       if (packer.current_order_name) {
-        return packer;
-      }
-
-      if (packer.packer_status === 'available') {
         return packer;
       }
 
@@ -1258,7 +1254,19 @@ const baseDb = {
    * @param notes - Optional notes (e.g., item name, task name, accessory name)
    * @returns { data: { mediaId, path, signedUrl }, error }
    */
-  uploadMediaToStorage: async (orderPackageId: string, fileUri: string, designation: string, notes?: string) => {
+  uploadMediaToStorage: async (
+    orderPackageId: string,
+    fileUri: string,
+    designation: string,
+    notes?: string,
+    mappingIds?: {
+      orderPkgInstanceId?: string | null;
+      pkdItemId?: string | null;
+      packageItemId?: string | null;
+      taskLogId?: string | null;
+      maintenanceTaskLogId?: string | null;
+    }
+  ) => {
     try {
       // 1. Get order_id and package_number from order_package
       const { data: packageData, error: pkgError } = await supabase
@@ -1309,7 +1317,6 @@ const baseDb = {
       const fullPath = `orders/${order_id}/${package_number}/${sectionFolder}/${filename}`;
 
       // 4. Create file data for React Native
-      // React Native needs ArrayBuffer or Blob-like structure
       const response = await fetch(fileUri);
       const arrayBuffer = await response.arrayBuffer();
       const fileData = new Uint8Array(arrayBuffer);
@@ -1330,11 +1337,11 @@ const baseDb = {
 
       const storagePath = uploadData?.path || fullPath;
 
-      // 6. Generate a signed URL (valid for 1 year) for private bucket access
+      // 6. Generate a signed URL (valid for 1 year)
       const { data: signedUrlData, error: urlError } = await supabase
         .storage
         .from('media')
-        .createSignedUrl(storagePath, 31536000); // 1 year in seconds
+        .createSignedUrl(storagePath, 31536000); // 1 year
 
       if (urlError) {
         console.warn('Could not create signed URL:', urlError);
@@ -1349,14 +1356,18 @@ const baseDb = {
           image_url: storagePath,
           notes: notes || null,
           order_package_id: orderPackageId,
-          designation: designation
+          designation: designation,
+          order_pkg_instance_id: mappingIds?.orderPkgInstanceId,
+          pkd_item_id: mappingIds?.pkdItemId,
+          package_item_id: mappingIds?.packageItemId,
+          task_log_id: mappingIds?.taskLogId,
+          maintenance_task_log_id: mappingIds?.maintenanceTaskLogId,
         })
         .select('id')
         .single();
 
       if (insertError) {
         console.error('Media record insert error:', insertError);
-        // Try to clean up the uploaded file
         await supabase.storage.from('media').remove([storagePath]);
         return { data: null, error: insertError };
       }
@@ -1537,19 +1548,11 @@ const baseDb = {
       ? 'maint_unpack'
       : 'maint_repack';
 
-    const uploaded = await baseDb.uploadMediaToStorage(orderPackageId, fileUri, designation, notes);
+    const uploaded = await baseDb.uploadMediaToStorage(orderPackageId, fileUri, designation, notes, { maintenanceTaskLogId });
     if (uploaded.error || !uploaded.data?.mediaId) {
       return uploaded;
     }
 
-    const { error: linkError } = await supabase
-      .from('media')
-      .update({ maintenance_task_log_id: maintenanceTaskLogId })
-      .eq('id', uploaded.data.mediaId);
-
-    if (linkError) {
-      return { data: null, error: linkError };
-    }
 
     return uploaded;
   },
@@ -1873,7 +1876,8 @@ const baseDb = {
         pkg_instance_id,
         order_pkg_instance!inner(
           id,
-          order_package_id
+          order_package_id,
+          ipac_reference
         ),
 
         item_details:items_db(
@@ -1901,7 +1905,8 @@ const baseDb = {
               tag:project_tags(id, name)
             )
           )
-        )
+        ),
+        media(id, image_url, created_at)
       `);
 
     if (requestedInstanceIds.length > 0) {
@@ -1938,7 +1943,19 @@ const baseDb = {
       return await loadLegacyPackageItems();
     }
 
-    return { data: normalized, error: null };
+    // Generate public URLs for all media items
+    const processed = normalized.map((row: any) => {
+      if (!row.media || !row.media.length) return row;
+      
+      const mediaWithUrls = (row.media || []).map((m: any) => {
+        const { data: publicData } = supabase.storage.from('media').getPublicUrl(m.image_url);
+        return { ...m, image_url: publicData?.publicUrl || m.image_url };
+      });
+      
+      return { ...row, media: mediaWithUrls };
+    });
+
+    return { data: processed, error: null };
   },
 
   getUnassignedCatalogItems: async (clientId: UUID, orderId?: UUID | null, search?: string) => {
@@ -1948,6 +1965,8 @@ const baseDb = {
     if (categoryMapError) {
       return { data: null, error: categoryMapError };
     }
+
+    const hasSearch = search && search.trim() !== '';
 
     let query = supabase
       .from('items_db')
@@ -1967,27 +1986,37 @@ const baseDb = {
         net_weight,
         warehouse_location,
         pkg_category:pkg_category(
-
           id,
           label,
           category_tag_map(
             tag:project_tags(id, name)
           )
+        ),
+        pkd_item:pkd_item(
+          id,
+          quantity,
+          instance:order_pkg_instance(
+            id,
+            ipac_reference,
+            package:order_packages(
+              id,
+              package_number,
+              order:orders(id, order_name)
+            )
+          )
         )
       `)
       .eq('client_id', clientId)
-      .order('item_num', { ascending: true });
+      .order('item_num', { ascending: true })
+      .limit(5000);
 
     if ((mappedCategoryIds || []).length > 0) {
       query = query.in('category_id', mappedCategoryIds || []);
     }
 
-    if (search && search.trim() !== '') {
-      // NOTE: Supabase OR with foreign tables requires filtering carefully or using an RPC.
-      // We will do a generic text search on the main table for reference if needed, 
-      // but typically we'd just fetch and filter client-side if it's not massive, 
-      // or we'll filter on the joined item_num/description.
-      // For now we'll fetch all unassigned for the client, then filter client-side to keep it robust.
+    if (hasSearch) {
+      const q = `%${search.trim()}%`;
+      query = query.or(`item_num.ilike.${q},reference.ilike.${q},description.ilike.${q}`);
     }
     
     return await query;
@@ -2519,9 +2548,17 @@ const baseDb = {
         .from('pkd_item')
         .update({ quantity: nextQty })
         .eq('id', existing.id)
-
         .select()
         .single();
+
+      if (!error) {
+        // Sync items_db packed_qty
+        const currentPacked = Number(catalogItem.packed_qty || 0);
+        await supabase
+          .from('items_db')
+          .update({ packed_qty: currentPacked + parsedQty })
+          .eq('id', maintenanceDbId);
+      }
 
       return { data, error };
     }
@@ -2533,24 +2570,70 @@ const baseDb = {
         pkg_instance_id: targetInstanceId,
         quantity: parsedQty,
       })
-
       .select()
       .single();
+
+    if (!error) {
+      // Sync items_db packed_qty
+      const currentPacked = Number(catalogItem.packed_qty || 0);
+      await supabase
+        .from('items_db')
+        .update({ packed_qty: currentPacked + parsedQty })
+        .eq('id', maintenanceDbId);
+    }
 
     return { data, error };
   },
 
   unassignItemFromPackage: async (maintenancePackageItemId: UUID) => {
-    const { error } = await supabase
-      .from('pkd_item')
-      .delete()
-      .eq('id', maintenancePackageItemId);
+    try {
+      // 1. Get item details before deletion to know how much to decrement
+      const { data: itemData, error: fetchError } = await supabase
+        .from('pkd_item')
+        .select('maintenance_db_id, quantity')
+        .eq('id', maintenancePackageItemId)
+        .single();
 
+      if (fetchError || !itemData) {
+        return { data: null, error: fetchError || new Error('Item not found in box.') };
+      }
 
-    return { data: null, error };
+      // 2. Delete any associated media for this item in this box
+      await supabase
+        .from('media')
+        .delete()
+        .eq('pkd_item_id', maintenancePackageItemId);
+
+      // 3. Delete the item from the box
+      const { error: deleteError } = await supabase
+        .from('pkd_item')
+        .delete()
+        .eq('id', maintenancePackageItemId);
+
+      if (deleteError) return { data: null, error: deleteError };
+
+      // 3. Decrement packed_qty in master catalog
+      const { data: catalogItem } = await supabase
+        .from('items_db')
+        .select('packed_qty')
+        .eq('id', itemData.maintenance_db_id)
+        .single();
+
+      if (catalogItem) {
+        const newPacked = Math.max(0, Number(catalogItem.packed_qty || 0) - Number(itemData.quantity || 0));
+        await supabase
+          .from('items_db')
+          .update({ packed_qty: newPacked })
+          .eq('id', itemData.maintenance_db_id);
+      }
+
+      return { data: { success: true }, error: null };
+    } catch (e: any) {
+      return { data: null, error: e };
+    }
   },
 
-  getOrCreateQrToken: async (entityType: 'package' | 'item', entityId: UUID) => {
+  getOrCreateQrToken: async (entityType: 'package' | 'item' | 'pkd_item', entityId: UUID) => {
     // 1. Try to find an existing active token
     const { data: existing, error: findError } = await supabase
       .from('qr_codes')
@@ -2581,6 +2664,96 @@ const baseDb = {
     }
 
     return { data: inserted?.token || null, error: null };
+  },
+
+  createAdHocItem: async (input: {
+    clientId: UUID;
+    description: string;
+    quantity: number;
+    length?: number;
+    width?: number;
+    height?: number;
+    netWeight?: number;
+    reference?: string;
+  }) => {
+    const { data, error } = await supabase
+      .from('items_db')
+      .insert({
+        client_id: input.clientId,
+        description: input.description,
+        expected_qty: input.quantity,
+        packed_qty: 0,
+        length: input.length || null,
+        width: input.width || null,
+        height: input.height || null,
+        net_weight: input.netWeight || null,
+        reference: input.reference || null,
+      })
+      .select('id')
+      .single();
+
+    return { data, error };
+  },
+
+  getItemMedia: async (pkdItemId: UUID) => {
+    const { data, error } = await supabase
+      .from('media')
+      .select('id, image_url, created_at')
+      .eq('pkd_item_id', pkdItemId)
+      .order('created_at', { ascending: false });
+
+    if (error || !data) return { data, error };
+
+    const mediaWithUrls = await Promise.all(data.map(async (m: any) => {
+      const { data: signedData } = await supabase.storage.from('media').createSignedUrl(m.image_url, 31536000);
+      return { ...m, image_url: signedData?.signedUrl || m.image_url };
+    }));
+
+    return { data: mediaWithUrls, error: null };
+  },
+
+  getPackageMedia: async (orderPackageId: UUID) => {
+    const { data, error } = await supabase
+      .from('media')
+      .select('id, image_url, created_at')
+      .eq('order_package_id', orderPackageId)
+      .eq('designation', 'package')
+      .order('created_at', { ascending: false });
+
+    if (error || !data) return { data, error };
+
+    const mediaWithUrls = await Promise.all(data.map(async (m: any) => {
+      const { data: signedData } = await supabase.storage.from('media').createSignedUrl(m.image_url, 31536000);
+      return { ...m, image_url: signedData?.signedUrl || m.image_url };
+    }));
+
+    return { data: mediaWithUrls, error: null };
+  },
+
+  getMediaByEntityId: async (entityId: UUID, designation: string) => {
+    const { data, error } = await supabase
+      .from('media')
+      .select('id, image_url, created_at')
+      .eq('order_package_id', entityId) // Using order_package_id as a generic entity id for now, or we could add more specific columns
+      .eq('designation', designation)
+      .order('created_at', { ascending: false });
+
+    if (error || !data) return { data, error };
+
+    const bucket = 'media';
+    const mediaWithUrls = data.map((m: any) => {
+      const { data: publicData } = supabase.storage.from(bucket).getPublicUrl(m.image_url);
+      return { ...m, image_url: publicData?.publicUrl || m.image_url };
+    });
+
+    return { data: mediaWithUrls, error: null };
+  },
+
+  deleteMedia: async (mediaId: UUID) => {
+    // 1. Get path from URL if possible, or just delete the row first
+    // For simplicity, we delete the row. Ideally we'd also delete from storage.
+    const { error } = await supabase.from('media').delete().eq('id', mediaId);
+    return { error };
   },
 };
 

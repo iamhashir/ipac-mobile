@@ -97,6 +97,17 @@ export const createAttendanceApi = (supabase: SupabaseClient) => ({
     return { data, error };
   },
 
+  getAttendanceLogsByOrderAndDate: async (orderId: UUID, date: string) => {
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .select('*')
+      .eq('order_id', orderId)
+      .eq('log_date', date)
+      .order('created_at', { ascending: false });
+
+    return { data, error };
+  },
+
   getLatestAttendanceForOrder: async (orderId: UUID) => {
     const today = new Date().toISOString().split('T')[0];
 

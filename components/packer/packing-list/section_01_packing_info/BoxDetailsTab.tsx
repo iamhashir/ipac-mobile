@@ -1,13 +1,17 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, Alert, Platform, ActivityIndicator } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { Camera, Printer } from 'lucide-react-native';
+import { Camera, Printer, Eye, X, Trash2, FileText } from 'lucide-react-native';
+import * as Sharing from 'expo-sharing';
+import { Modal, ScrollView, Image, SafeAreaView } from 'react-native';
+import { SplitThumbnail } from '../common/SplitThumbnail';
+import { chooseQrPrintSizePreset } from './items/qrPrintPresets';
 import OrderPackingInfo, { BoxInfoDetails } from './order_packing_info';
 import OrderPackingDimensions from './order_packing_dimensions';
 import { DimensionsTriple } from '../common/DimensionsBox';
-import OrderPackingItems from '../section_02_packing_items/order_packing_items';
 import OrderItemsSection from './items/OrderItemsSection';
 import TwoTierEditableCard from '../common/TwoTierEditableCard';
+import CustomPrintModal from '../common/CustomPrintModal';
 import { PackageInfoChangeEvent } from './types';
 
 interface BoxInfoPair {
@@ -47,6 +51,10 @@ interface BoxDetailsTabProps {
   hidePackingItems?: boolean;
   hasPortal?: boolean;
   clientId?: string | null;
+  detectedPrinter?: any;
+  boxQuantity?: number | null;
+  boxTypeName?: string | null;
+  destination?: string | null;
 }
 
 const normalizeReferenceValue = (value: unknown): string | null => {
@@ -54,11 +62,112 @@ const normalizeReferenceValue = (value: unknown): string | null => {
   return normalized.length > 0 ? normalized : null;
 };
 
-const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, orderPkgInstanceId = null, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, useSeiFlow = false, reference = null, instanceReference = null, status, isOrderCompleted, projectType = 'standard', onStatusChange, onReferenceChange, onDataChange, hidePackingItems = false, hasPortal = false, clientId = null }) => {
-  const [printingIpacTest, setPrintingIpacTest] = useState(false);
+const normalizePortalBaseUrl = (value: string) => {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return 'https://ipac-admin.vercel.app';
+
+  return trimmed
+    .replace(/\/portal\/projects\/?$/i, '')
+    .replace(/\/+$/, '');
+};
+
+const PORTAL_BASE_URL = normalizePortalBaseUrl(
+  process.env.EXPO_PUBLIC_PORTAL_BASE_URL || 'https://ipac-admin.vercel.app'
+);
+const buildPortalScanUrl = (token: string) => `${PORTAL_BASE_URL}/portal/scan/${encodeURIComponent(token)}`;
+
+const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, orderPkgInstanceId = null, packageNumber, description, info, dimensions, originalPkgInfoId, finalPkgInfoId, onAttachPics, originalBoxTypeId, finalBoxTypeId, originalPackingTypeId, finalPackingTypeId, useSeiFlow = false, reference = null, instanceReference = null, status, isOrderCompleted, projectType = 'standard', onStatusChange, onReferenceChange, onDataChange, hidePackingItems = false, hasPortal = false, clientId = null, detectedPrinter = null, boxQuantity = null, boxTypeName = null, destination = null }) => {
+  const [printingBoxLabel, setPrintingBoxLabel] = useState(false);
+  const [previewingBoxLabel, setPreviewingBoxLabel] = useState(false);
+  const [customPrintModalVisible, setCustomPrintModalVisible] = useState(false);
+  const [clientLogoUrl, setClientLogoUrl] = useState<string | null>(null);
   const isEditable = status !== 'packed' && !isOrderCompleted;
   const requiresOriginalFirst = projectType === 'maintenance' || projectType === 'survey';
   const referenceEditTarget: 'original' | 'final' = 'final';
+
+  // Format the box label caption: replace trailing "-NN" with "-BOX #NN" (standard) or "-QTY:NN" (custom/multi-box)
+  const isCustomBox = (() => {
+    if (boxTypeName && !boxTypeName.toLowerCase().includes('standard box')) return true;
+    const ref = String(instanceReference || '').trim();
+    // Custom boxes typically have item numbers in the reference, leading to a format like DEST-TAG-ITEMNUM-QTY
+    // Standard boxes are DEST-TAG-BOXNUM. 
+    // We can check if the reference ends with a number, preceded by another hyphen-separated section.
+    if (ref && ref.split('-').length >= 5) return true; // e.g. ALD-W-AC-12345-1
+    return false;
+  })();
+  
+  const boxLabelCaption = (() => {
+    const ref = String(instanceReference || '').trim();
+    const fallbackNum = String(packageNumber ?? 1).padStart(2, '0');
+    if (!ref) return isCustomBox ? `QTY:${fallbackNum}` : `BOX #${fallbackNum}`;
+    // Match trailing hyphen + digits (e.g. "-01", "-1", "-12")
+    const match = ref.match(/^(.*?)-(\d+)$/);
+    if (match) {
+      const base = match[1];
+      const num = String(parseInt(match[2], 10)).padStart(2, '0');
+      return isCustomBox ? `${base}-QTY:${num}` : `${base}-BOX #${num}`;
+    }
+    // No trailing number — append suffix from packageNumber
+    return isCustomBox ? `${ref}-QTY:${fallbackNum}` : `${ref}-BOX #${fallbackNum}`;
+  })();
+
+  React.useEffect(() => {
+    if (clientId) {
+      import('../../../../utils/api/supabase').then(({ db }) => {
+        db.getClientQrLogoUrl(clientId).then(({ data }) => {
+          if (data) setClientLogoUrl(data);
+        });
+      });
+    }
+  }, [clientId]);
+
+  const [media, setMedia] = useState<any[]>([]);
+  const [loadingMedia, setLoadingMedia] = useState(false);
+  const [mediaModalVisible, setMediaModalVisible] = useState(false);
+  const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
+
+  const loadBoxMedia = React.useCallback(async () => {
+    try {
+      setLoadingMedia(true);
+      const { db } = await import('../../../../utils/api/supabase');
+      const { data, error } = await db.getPackageMedia(orderPackageId);
+      if (!error && data) {
+        setMedia(data);
+      }
+    } catch (err) {
+      console.error('Error loading box media:', err);
+    } finally {
+      setLoadingMedia(false);
+    }
+  }, [orderPackageId]);
+
+  React.useEffect(() => {
+    loadBoxMedia();
+  }, [loadBoxMedia]);
+
+  const handleDeleteMedia = async (mediaId: string) => {
+    Alert.alert(
+      'Delete Photo',
+      'Are you sure you want to delete this photo?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Delete', 
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { db } = await import('../../../../utils/api/supabase');
+              const { error } = await db.deleteMedia(mediaId);
+              if (error) throw error;
+              loadBoxMedia();
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Failed to delete photo');
+            }
+          }
+        }
+      ]
+    );
+  };
 
   const handleMarkComplete = async () => {
     try {
@@ -148,83 +257,147 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
 
   const uploadAsset = async (uri: string) => {
     try {
-  const { db } = await import('../../../../utils/api/supabase');
+      const { db } = await import('../../../../utils/api/supabase');
       const notes = `Package #${packageNumber || 'N/A'}`;
-      const { data, error } = await db.uploadMediaToStorage(orderPackageId, uri, 'package', notes);
+      const { data, error } = await db.uploadMediaToStorage(
+        orderPackageId, 
+        uri, 
+        'package', 
+        notes,
+        { orderPkgInstanceId }
+      );
       if (error) {
         Alert.alert('Upload failed', 'Could not upload image to storage.');
       } else {
         Alert.alert('Uploaded', 'Image uploaded successfully.');
+        loadBoxMedia(); // Refresh media after upload
       }
     } catch (e) {
       Alert.alert('Upload error', 'Unexpected error while uploading.');
     }
   };
 
-  const handlePrintIpacTest = async () => {
+  const handlePreviewBoxLabel = async (customText?: string) => {
+    if (!orderPkgInstanceId) {
+      Alert.alert('Missing ID', 'This box does not have an instance ID assigned yet.');
+      return;
+    }
+
+    try {
+      setPreviewingBoxLabel(true);
+      const { db } = await import('../../../../utils/api/supabase');
+      const { data: token, error: tokenError } = await db.getOrCreateQrToken('package', orderPkgInstanceId);
+      
+      if (tokenError || !token) {
+        throw new Error(tokenError?.message || 'Could not generate QR token for this box.');
+      }
+
+      const selectedPreset = await chooseQrPrintSizePreset();
+      if (!selectedPreset) return;
+
+      const brotherPrintModule = require('../../../../utils/printing/brotherDirectPrint') as any;
+      if (!brotherPrintModule?.generateBrotherQrLabelPdf) {
+          throw new Error('PDF generation module is unavailable.');
+      }
+
+      const qrUrl = buildPortalScanUrl(token);
+      const pdfData = await brotherPrintModule.generateBrotherQrLabelPdf(qrUrl, {
+          labelWidthMm: selectedPreset.labelWidthMm,
+          moduleScale: selectedPreset.moduleScale,
+          marginModules: selectedPreset.marginModules,
+          logoUrl: clientLogoUrl || undefined,
+          layout: 'qr-with-caption-beside',
+          caption: customText || boxLabelCaption,
+      });
+
+      await Sharing.shareAsync(pdfData.uri, {
+        mimeType: 'application/pdf',
+        dialogTitle: `Label Preview: ${customText || instanceReference || 'Box'}`,
+      });
+
+    } catch (e: any) {
+      console.error('Error previewing box label:', e);
+      Alert.alert('Preview Failed', e?.message || 'Unable to prepare box label preview.');
+      throw e;
+    } finally {
+      setPreviewingBoxLabel(false);
+    }
+  };
+
+  const handlePrintBoxLabel = async (customText?: string) => {
+    if (!orderPkgInstanceId) {
+      Alert.alert('Missing ID', 'This box does not have an instance ID assigned yet.');
+      return;
+    }
+
     if (Platform.OS === 'web') {
       Alert.alert('Unavailable', 'Brother printing is not available on web.');
       return;
     }
 
     try {
-      setPrintingIpacTest(true);
+      setPrintingBoxLabel(true);
       const brotherPrintModule = require('../../../../utils/printing/brotherDirectPrint') as {
         getDetectedBrotherPrinter?: () => {
           modelName: string;
           address: string;
           connectionType: 'bluetooth' | 'wifi' | 'unknown';
         } | null;
-        printBrotherTextLabelDirect?: (textValue: string, options?: any) => Promise<void>;
+        printBrotherQrLabelDirect?: (qrValue: string, options?: any) => Promise<void>;
       };
-      const { getDetectedBrotherPrinter, printBrotherTextLabelDirect } = brotherPrintModule;
+      const { getDetectedBrotherPrinter, printBrotherQrLabelDirect } = brotherPrintModule;
 
-      if (typeof printBrotherTextLabelDirect !== 'function') {
-        throw new Error('Brother print module loaded but printBrotherTextLabelDirect is unavailable. Restart Metro with cache clear.');
+      if (typeof printBrotherQrLabelDirect !== 'function') {
+        throw new Error('Brother print module loaded but printBrotherQrLabelDirect is unavailable.');
       }
 
-      const connectedPrinter =
-        typeof getDetectedBrotherPrinter === 'function' ? getDetectedBrotherPrinter() : null;
+      const connectedPrinter = detectedPrinter ||
+        (typeof getDetectedBrotherPrinter === 'function' ? getDetectedBrotherPrinter() : null);
 
       if (!connectedPrinter?.address) {
         Alert.alert(
           'Connect Printer First',
-          'Use the Connect Printer button in the items section, then retry this test print.'
+          'Use the Connect Printer button at the top of the packing list, then retry.'
         );
         return;
       }
 
-      await printBrotherTextLabelDirect('A', {
+      const { db } = await import('../../../../utils/api/supabase');
+      const { data: token, error: tokenError } = await db.getOrCreateQrToken('package', orderPkgInstanceId);
+      
+      if (tokenError || !token) {
+        throw new Error(tokenError?.message || 'Could not generate QR token for this box.');
+      }
+
+      const selectedPreset = await chooseQrPrintSizePreset();
+      if (!selectedPreset) return;
+
+      const qrUrl = buildPortalScanUrl(token);
+
+      await printBrotherQrLabelDirect(qrUrl, {
         printerAddressHint: connectedPrinter.address,
         preferredConnection: connectedPrinter.connectionType,
-        labelWidthMm: 36,
+        labelWidthMm: selectedPreset.labelWidthMm,
+        moduleScale: selectedPreset.moduleScale,
+        marginModules: selectedPreset.marginModules,
+        logoUrl: clientLogoUrl || undefined,
+        layout: 'qr-with-caption-beside',
+        caption: customText || boxLabelCaption,
         postPrintDelayMs: 3000,
-        onStatus: (statusText: string) => console.log(`[Brother Test A] ${statusText}`),
+        onStatus: (statusText: string) => console.log(`[Brother Box Label] ${statusText}`),
       });
 
       Alert.alert(
         'Direct Print Sent',
-        `Test label text "A" was sent to ${connectedPrinter.modelName} (${connectedPrinter.address}).`
+        `Box label for ${customText || instanceReference || 'this box'} was sent to ${connectedPrinter.modelName}.`
       );
     } catch (e: any) {
-      console.error('Error printing test label "A" with Brother SDK:', e);
-      const message = String(e?.message || 'Unable to print test label "A".');
-
-      const normalized = message.toLowerCase();
-      if (
-        normalized.includes('expo go') ||
-        normalized.includes('development build') ||
-        normalized.includes('native module')
-      ) {
-        Alert.alert(
-          'Dev Build Required',
-          'Brother printing requires a Development Build. Build/install a Dev Client and run with expo start --dev-client.'
-        );
-      } else {
-        Alert.alert('Direct Print Failed', message);
-      }
+      console.error('Error printing box label with Brother SDK:', e);
+      const message = String(e?.message || 'Unable to print box label.');
+      Alert.alert('Direct Print Failed', message);
+      throw e;
     } finally {
-      setPrintingIpacTest(false);
+      setPrintingBoxLabel(false);
     }
   };
 
@@ -236,31 +409,44 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
           <View className="flex-row gap-2 items-center">
             {hasPortal && (
               <TouchableOpacity
-                onPress={handlePrintIpacTest}
-                disabled={printingIpacTest}
-                className="px-3 py-1 rounded border border-teal-700 bg-teal-100 justify-center items-center"
+                onPress={() => setCustomPrintModalVisible(true)}
+                disabled={previewingBoxLabel || printingBoxLabel}
+                className="px-3 py-1.5 rounded-lg border border-teal-700 bg-teal-50 flex-row items-center justify-center"
               >
-                {printingIpacTest ? (
+                {previewingBoxLabel || printingBoxLabel ? (
                   <ActivityIndicator size="small" color="#0f766e" />
                 ) : (
-                  <View className="flex-row items-center">
+                  <>
                     <Printer size={16} color="#0f766e" />
-                    <Text className="text-teal-800 text-sm font-semibold ml-1">Test A</Text>
-                  </View>
+                    <Text className="text-teal-800 text-xs font-bold ml-1.5">Print Label</Text>
+                  </>
                 )}
               </TouchableOpacity>
             )}
 
             {!isOrderCompleted && (
               <>
-            <TouchableOpacity 
-              onPress={askSource} 
-              accessibilityLabel="Attach images"
-              className="bg-primary-500 px-3 py-2 rounded flex items-center justify-center"
-              style={{ minWidth: 44, minHeight: 44 }}
-            >
-              <Camera size={20} color="#ffffff" />
-            </TouchableOpacity>
+            {media.length > 0 ? (
+              <TouchableOpacity 
+                onPress={() => setMediaModalVisible(true)}
+                className="flex-row items-center bg-green-50 border border-green-200 px-3 py-1.5 rounded-lg"
+              >
+                <Camera size={14} color="#15803d" />
+                <Text className="text-green-700 font-bold ml-1.5 text-[10px]">
+                  PHOTOS ({media.length})
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity 
+                onPress={askSource}
+                className="flex-row items-center bg-gray-50 border border-gray-300 px-3 py-1.5 rounded-lg"
+              >
+                <Camera size={14} color="#475569" />
+                <Text className="text-gray-600 font-bold ml-1.5 text-[10px]">
+                  ADD PHOTO
+                </Text>
+              </TouchableOpacity>
+            )}
             {status === 'packed' ? (
               <TouchableOpacity 
                 onPress={handleUndo} 
@@ -291,23 +477,21 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
         <Text className="text-gray-500 mt-2">No description provided.</Text>
       )}
 
-      <View className="mt-4" style={{ width: 260 }}>
-        <View className="mb-2 rounded border border-blue-100 bg-blue-50 px-3 py-2">
+      <View className="mt-4 flex-row flex-wrap gap-2">
+        <View className="mb-2 rounded border border-blue-100 bg-blue-50 px-3 py-2" style={{ flex: 1, minWidth: 200 }}>
           <Text className="text-xs font-semibold text-blue-800">IPAC Instance Reference</Text>
           <Text className="text-sm text-blue-900">{instanceReference || '—'}</Text>
         </View>
 
-        <TwoTierEditableCard
-          label="Reference"
-          original={reference}
-          final={reference}
-          type="text"
-          editTarget={referenceEditTarget}
-          editable={isEditable && !!onReferenceChange}
-          onChange={async (value) => {
-            await onReferenceChange?.(normalizeReferenceValue(value));
-          }}
-        />
+        {destination && (
+          <View className="mb-2 rounded border border-amber-200 bg-amber-50 px-3 py-2" style={{ flex: 1, minWidth: 150 }}>
+            <Text className="text-xs font-semibold text-amber-800">Destination</Text>
+            <View className="flex-row items-center mt-0.5">
+              <View className="bg-amber-400 w-2 h-2 rounded-full mr-2" />
+              <Text className="text-sm font-bold text-amber-900 uppercase">{destination}</Text>
+            </View>
+          </View>
+        )}
       </View>
 
       {/* Packing Info cards */}
@@ -346,17 +530,7 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
         />
       </View>
 
-      {!hidePackingItems && !hasPortal && (
-        <View className="mt-4">
-          <OrderPackingItems 
-            orderPackageId={orderPackageId} 
-            onAttachPics={onAttachPics} 
-            editable={isEditable}
-          />
-        </View>
-      )}
-
-      {hasPortal && clientId && (
+      {clientId && !hidePackingItems && (
         <View className="mt-4">
           <OrderItemsSection 
             orderId={orderId}
@@ -364,9 +538,122 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
             orderPkgInstanceId={orderPkgInstanceId}
             clientId={clientId}
             editable={isEditable}
+            detectedPrinter={detectedPrinter}
+            destination={destination}
           />
         </View>
       )}
+
+      <CustomPrintModal
+        visible={customPrintModalVisible}
+        onClose={() => setCustomPrintModalVisible(false)}
+        title="Print Box Label"
+        subtitle={`Box #${packageNumber}`}
+        initialText={boxLabelCaption}
+        onPreview={handlePreviewBoxLabel}
+        onPrint={handlePrintBoxLabel}
+      />
+      {/* Media Manager Modal */}
+      <Modal
+        visible={mediaModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMediaModalVisible(false)}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.9)' }}>
+          <View className="flex-row justify-between items-center px-4 py-4 border-b border-white/10">
+            <View className="flex-1 pr-4">
+              <Text className="text-white font-bold text-lg" numberOfLines={1}>
+                Box #{packageNumber} Photos
+              </Text>
+              <Text className="text-white/60 text-xs mt-0.5">
+                {media.length} Photos total
+              </Text>
+            </View>
+            <TouchableOpacity 
+              onPress={() => {
+                askSource();
+              }}
+              className="w-10 h-10 items-center justify-center bg-blue-600 rounded-full mr-2"
+            >
+              <Camera size={20} color="white" />
+            </TouchableOpacity>
+            <TouchableOpacity 
+              onPress={() => setMediaModalVisible(false)}
+              className="w-10 h-10 items-center justify-center bg-white/10 rounded-full"
+            >
+              <X size={20} color="white" />
+            </TouchableOpacity>
+          </View>
+
+          <View className="flex-1">
+            {loadingMedia ? (
+              <View className="flex-1 items-center justify-center">
+                <ActivityIndicator size="large" color="white" />
+              </View>
+            ) : media.length === 0 ? (
+              <View className="flex-1 items-center justify-center p-10">
+                <Camera size={48} color="rgba(255,255,255,0.2)" />
+                <Text className="text-white/40 mt-4 text-center">No photos added to this box yet.</Text>
+              </View>
+            ) : (
+              <ScrollView 
+                contentContainerStyle={{ padding: 16, flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}
+              >
+                {media.map((m) => (
+                  <View key={m.id} className="relative" style={{ width: '47%', aspectRatio: 1 }}>
+                    <Image
+                      source={{ uri: m.image_url }}
+                      style={{ width: '100%', height: '100%', borderRadius: 12 }}
+                      resizeMode="cover"
+                    />
+                    <View className="absolute top-2 right-2 flex-row gap-2">
+                      <TouchableOpacity
+                        onPress={() => setEnlargedImage(m.image_url)}
+                        className="bg-blue-600 w-8 h-8 rounded-full items-center justify-center shadow-lg"
+                      >
+                        <Eye size={16} color="white" />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => handleDeleteMedia(m.id)}
+                        className="bg-red-600 w-8 h-8 rounded-full items-center justify-center shadow-lg"
+                      >
+                        <Trash2 size={16} color="white" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+
+          {/* Footer button removed to avoid obstruction */}
+        </SafeAreaView>
+      </Modal>
+
+      {/* Full Screen Image Modal */}
+      <Modal
+        visible={!!enlargedImage}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEnlargedImage(null)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'black', justifyContent: 'center', alignItems: 'center' }}>
+          <TouchableOpacity 
+            className="absolute top-12 right-6 z-10 w-10 h-10 items-center justify-center bg-black/50 rounded-full"
+            onPress={() => setEnlargedImage(null)}
+          >
+            <X size={24} color="white" />
+          </TouchableOpacity>
+          {enlargedImage && (
+            <Image
+              source={{ uri: enlargedImage }}
+              style={{ width: '100%', height: '100%' }}
+              resizeMode="contain"
+            />
+          )}
+        </View>
+      </Modal>
     </View>
   );
 };

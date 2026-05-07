@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, Modal, FlatList, TextInput, Alert, SafeAreaView, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, Modal, FlatList, TextInput, Alert, SafeAreaView, KeyboardAvoidingView, Platform, Animated, Pressable, TouchableWithoutFeedback } from 'react-native';
 import { X, Search, Package, Plus } from 'lucide-react-native';
 import { db } from '../../../../../utils/api/supabase';
 
@@ -11,6 +11,7 @@ interface CatalogBrowserModalProps {
   orderPackageId: string;
   orderPkgInstanceId?: string | null;
   onAssigned: () => void;
+  destination?: string | null;
 }
 
 const toFiniteNumberOrNull = (value: unknown): number | null => {
@@ -32,6 +33,187 @@ const isCatalogItemFullyPacked = (catalogItem: any): boolean => {
   return remaining !== null && remaining <= 0;
 };
 
+const AnimatedItemRow = ({
+  item,
+  assigningId,
+  openQuantityModal,
+  openPackedInfoModal,
+  destination
+}: {
+  item: any;
+  assigningId: string | null;
+  openQuantityModal: (item: any) => void;
+  openPackedInfoModal: (item: any, locations: string[]) => void;
+  destination: string | null;
+}) => {
+  const isAssigning = assigningId === item.id;
+  const categoryLabel = item.pkg_category?.label;
+  const defaultQty = item.expected_qty ?? 1;
+  const remainingQty = getRemainingExpectedQty(item);
+  const isFullyPacked = isCatalogItemFullyPacked(item);
+
+  const destLower = destination?.toLowerCase();
+  const locLower = item.warehouse_location?.toLowerCase();
+  const hasDest = !!destination;
+  const hasLoc = !!item.warehouse_location;
+
+  const isMatch = !isFullyPacked && hasDest && hasLoc && locLower === destLower;
+  const isDiffLoc = !isFullyPacked && hasDest && locLower !== destLower;
+
+  const pulseAnim = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    if (isMatch || isDiffLoc || isFullyPacked) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 1500,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 0,
+            duration: 1500,
+            useNativeDriver: true,
+          })
+        ])
+      ).start();
+    } else {
+      pulseAnim.stopAnimation();
+      pulseAnim.setValue(0);
+    }
+  }, [isMatch, isDiffLoc, isFullyPacked]);
+
+  const packedLocations = (item.pkd_item || [])
+    .map((pkd: any) => {
+      const inst = Array.isArray(pkd.instance) ? pkd.instance[0] : pkd.instance;
+      if (!inst) return null;
+
+      const pkg = Array.isArray(inst?.package) ? inst.package[0] : inst?.package;
+      const order = Array.isArray(pkg?.order) ? pkg.order[0] : pkg?.order;
+
+      const boxNum = pkg?.package_number;
+      const orderRef = order?.order_name;
+
+      if (boxNum !== undefined && boxNum !== null) {
+        return `Box #${boxNum}${orderRef ? ` (${orderRef})` : ''}`;
+      } else if (inst.ipac_reference) {
+        return inst.ipac_reference;
+      }
+      return null;
+    })
+    .filter(Boolean);
+
+  const handlePress = () => {
+    if (isFullyPacked) {
+      openPackedInfoModal(item, packedLocations);
+    } else {
+      openQuantityModal(item);
+    }
+  };
+
+  // Determine colors based on state
+  let borderColorClass = 'border-gray-100';
+  let highlightHex = '';
+  let rowBg = 'bg-white';
+
+  if (isFullyPacked) {
+    borderColorClass = 'border-blue-400 border-l-4';
+    highlightHex = '#93c5fd'; // blue-300
+    rowBg = 'bg-blue-50/40';
+  } else if (isMatch) {
+    borderColorClass = 'border-green-500 border-l-4';
+    highlightHex = '#86efac'; // green-300
+    rowBg = 'bg-green-50/50';
+  } else if (isDiffLoc) {
+    borderColorClass = 'border-yellow-500 border-l-4';
+    highlightHex = '#fde047'; // yellow-300
+    rowBg = 'bg-yellow-50/40';
+  }
+
+  return (
+    <TouchableOpacity
+      className={`${rowBg} p-4 border-b ${borderColorClass} flex-row items-center justify-between ${isAssigning ? 'opacity-50' : ''} overflow-hidden`}
+      onPress={handlePress}
+      disabled={isAssigning || !!assigningId}
+    >
+      {(isMatch || isDiffLoc || isFullyPacked) && (
+        <Animated.View
+          style={{
+            position: 'absolute',
+            top: -50,
+            bottom: -50,
+            right: -80,
+            width: 400,
+            backgroundColor: highlightHex,
+            transform: [{ rotate: '15deg' }],
+            opacity: pulseAnim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0.1, 0.3]
+            }),
+          }}
+        />
+      )}
+
+      <View className="flex-1 pr-4">
+        <View className="flex-row items-center mb-1">
+          <Text className={`font-semibold text-base ${isFullyPacked ? 'text-gray-500' : 'text-slate-800'}`} numberOfLines={1}>
+            {item.description || "Unknown Item"}
+          </Text>
+          {categoryLabel && (
+            <View className="ml-2 bg-slate-100 px-1.5 py-0.5 rounded">
+              <Text className="text-slate-600 text-[10px] font-medium">{categoryLabel}</Text>
+            </View>
+          )}
+          {isFullyPacked && (
+            <View className="ml-2 bg-blue-100 border border-blue-200 px-1.5 py-0.5 rounded flex-row items-center">
+              <View className="w-1.5 h-1.5 rounded-full bg-blue-500 mr-1" />
+              <Text className="text-blue-800 text-[10px] font-bold" numberOfLines={1}>
+                {packedLocations.length > 0 ? `IN ${Array.from(new Set(packedLocations)).join(', ')}`.toUpperCase() : 'PACKED'}
+              </Text>
+            </View>
+          )}
+          {isMatch && (
+            <View className="ml-2 bg-green-100 border border-green-200 px-1.5 py-0.5 rounded flex-row items-center">
+              <View className="w-1.5 h-1.5 rounded-full bg-green-500 mr-1" />
+              <Text className="text-green-800 text-[10px] font-bold">MATCH</Text>
+            </View>
+          )}
+          {isDiffLoc && (
+            <View className="ml-2 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded flex-row items-center">
+              <View className="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1" />
+              <Text className="text-amber-800 text-[10px] font-bold">DIFF LOC</Text>
+            </View>
+          )}
+        </View>
+
+        <Text className="text-sm text-gray-600 leading-5">
+          <Text className="font-medium text-gray-500">Item #:</Text> {item.item_num || "N/A"}{"  "}
+          <Text className="font-medium text-gray-500">Ref:</Text> {item.reference || "N/A"}{"  "}
+          {!isFullyPacked && (
+            <Text><Text className="font-medium text-gray-500">Rem:</Text> {remainingQty} / {defaultQty}{"  "}</Text>
+          )}
+          <Text className="font-medium text-gray-500">Loc:</Text> {item.warehouse_location || "—"}
+          {item.ipac_comments ? (
+            <Text className="italic text-orange-600">{"  "}• {item.ipac_comments}</Text>
+          ) : null}
+        </Text>
+
+      </View>
+
+      <View className={`w-8 h-8 rounded-full items-center justify-center ${isAssigning ? 'bg-gray-50' : isFullyPacked ? 'bg-blue-100' : isMatch ? 'bg-green-100' : isDiffLoc ? 'bg-amber-100' : 'bg-slate-100'}`}>
+        {isAssigning ? (
+          <ActivityIndicator size="small" color="#2563eb" />
+        ) : isFullyPacked ? (
+          <Package size={18} color="#2563eb" />
+        ) : (
+          <Plus size={18} color={isMatch ? "#16a34a" : isDiffLoc ? "#d97706" : "#475569"} />
+        )}
+      </View>
+    </TouchableOpacity>
+  );
+};
+
 const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
   visible,
   onClose,
@@ -39,7 +221,8 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
   orderId,
   orderPackageId,
   orderPkgInstanceId = null,
-  onAssigned
+  onAssigned,
+  destination
 }) => {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -48,21 +231,42 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
   const [selectedItem, setSelectedItem] = useState<any | null>(null);
   const [quantityInput, setQuantityInput] = useState('1');
   const [hiddenPackedCount, setHiddenPackedCount] = useState(0);
+  const [packedInfoModal, setPackedInfoModal] = useState<{ visible: boolean; item: any | null; locations: string[] }>({ visible: false, item: null, locations: [] });
 
-  const loadItems = useCallback(async () => {
+  const selectedItemStatus = useMemo(() => {
+    if (!selectedItem || !destination) return 'none';
+    const destLower = destination.toLowerCase();
+    const locLower = selectedItem.warehouse_location?.toLowerCase();
+
+    // If location is empty or doesn't match, it's a "diff" status
+    if (!locLower || locLower !== destLower) return 'diff';
+
+    return 'match';
+  }, [selectedItem, destination]);
+
+  const loadItems = useCallback(async (currentSearch?: string) => {
     if (!visible || !clientId) return;
-    
+
     setLoading(true);
     try {
-      const { data, error } = await db.getUnassignedCatalogItems(clientId, orderId);
+      const { data, error } = await db.getUnassignedCatalogItems(clientId, orderId, currentSearch);
       if (error) {
         console.error('Error fetching catalog items:', error);
         Alert.alert('Error', 'Failed to load catalog items');
       } else {
         const catalogItems = data || [];
-        const availableItems = catalogItems.filter((item) => !isCatalogItemFullyPacked(item));
-        setItems(availableItems);
-        setHiddenPackedCount(Math.max(0, catalogItems.length - availableItems.length));
+        const isSearching = currentSearch && currentSearch.trim() !== '';
+
+        if (isSearching) {
+          // When searching, show both packed and unpacked
+          setItems(catalogItems);
+          setHiddenPackedCount(0);
+        } else {
+          // Default view: only show available items
+          const availableItems = catalogItems.filter((item) => !isCatalogItemFullyPacked(item));
+          setItems(availableItems);
+          setHiddenPackedCount(Math.max(0, catalogItems.length - availableItems.length));
+        }
       }
     } catch (e) {
       console.error('Unexpected error loading catalog items:', e);
@@ -80,18 +284,43 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
     }
   }, [visible, loadItems]);
 
+  // Debounced search
+  useEffect(() => {
+    if (!visible) return;
+
+    const handler = setTimeout(() => {
+      if (searchQuery.trim() !== '') {
+        loadItems(searchQuery);
+      } else {
+        loadItems();
+      }
+    }, 500);
+
+    return () => clearTimeout(handler);
+  }, [searchQuery, visible, loadItems]);
+
   const filteredItems = useMemo(() => {
-    if (!searchQuery.trim()) return items;
-    
-    const query = searchQuery.toLowerCase().trim();
-    return items.filter((item) => {
-      const itemNum = (item.item_num || '').toLowerCase();
-      const desc = (item.description || '').toLowerCase();
-      const ref = (item.reference || '').toLowerCase();
-      
-      return itemNum.includes(query) || desc.includes(query) || ref.includes(query);
+    let sorted = [...items];
+    const destLower = destination?.toLowerCase();
+
+    sorted.sort((a, b) => {
+      const aPacked = isCatalogItemFullyPacked(a) ? 1 : 0;
+      const bPacked = isCatalogItemFullyPacked(b) ? 1 : 0;
+
+      if (aPacked !== bPacked) {
+        return aPacked - bPacked; // packed items go to the end
+      }
+
+      if (destLower) {
+        const aMatches = a.warehouse_location?.toLowerCase() === destLower ? 1 : 0;
+        const bMatches = b.warehouse_location?.toLowerCase() === destLower ? 1 : 0;
+        return bMatches - aMatches;
+      }
+      return 0;
     });
-  }, [items, searchQuery]);
+
+    return sorted;
+  }, [items, destination]);
 
   const handleAssignItem = async (itemId: string, quantity: number) => {
     try {
@@ -103,7 +332,7 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
         orderPkgInstanceId || undefined
       );
 
-      
+
       if (error) {
         Alert.alert('Error', error.message || 'Failed to assign item to package');
       } else {
@@ -131,7 +360,7 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
     const remainingQty = getRemainingExpectedQty(item);
     const effectiveSuggestedQty = remainingQty !== null ? remainingQty : suggestedQty;
     const safeQty = Number.isFinite(effectiveSuggestedQty) && effectiveSuggestedQty > 0 ? effectiveSuggestedQty : 1;
-    
+
     setSelectedItem(item);
     setQuantityInput(String(safeQty));
   };
@@ -161,61 +390,14 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
   };
 
   const renderItem = ({ item }: { item: any }) => {
-    const isAssigning = assigningId === item.id;
-    const categoryLabel = item.pkg_category?.label;
-    const defaultQty = item.expected_qty ?? 1;
-    const remainingQty = getRemainingExpectedQty(item);
-
     return (
-      <TouchableOpacity 
-        className={`bg-white p-4 border-b border-gray-100 flex-row items-center justify-between ${isAssigning ? 'opacity-50' : ''}`}
-        onPress={() => openQuantityModal(item)}
-        disabled={isAssigning || !!assigningId}
-      >
-        <View className="flex-1 pr-4">
-          <View className="flex-row items-center mb-1">
-            <Text className="font-semibold text-slate-800 text-base" numberOfLines={1}>
-              {item.description || "Unknown Item"}
-            </Text>
-            {categoryLabel && (
-              <View className="ml-2 bg-blue-100 px-1.5 py-0.5 rounded">
-                <Text className="text-blue-800 text-[10px] font-medium">{categoryLabel}</Text>
-              </View>
-            )}
-          </View>
-          
-          <View className="flex-row items-center mt-1">
-            <Text className="text-sm text-gray-600 mr-3">
-              <Text className="font-medium text-gray-500">Item #:</Text> {item.item_num || "N/A"}
-            </Text>
-            <Text className="text-sm text-gray-600 mr-3">
-              <Text className="font-medium text-gray-500">Ref:</Text> {item.reference || "N/A"}
-            </Text>
-            <Text className="text-sm text-gray-600">
-              <Text className="font-medium text-gray-500">Default Qty:</Text> {defaultQty}
-            </Text>
-            {remainingQty !== null && (
-              <Text className="text-sm text-gray-600">
-                <Text className="font-medium text-gray-500">Remaining:</Text> {remainingQty}
-              </Text>
-            )}
-          </View>
-          
-          {item.ipac_comments && (
-            <Text className="text-xs text-orange-600 mt-1 italic" numberOfLines={1}>
-              {item.ipac_comments}
-            </Text>
-          )}
-        </View>
-
-        <View className={`w-8 h-8 rounded-full items-center justify-center ${isAssigning ? 'bg-gray-100' : 'bg-blue-50'}`}>
-          {isAssigning ? (
-            <ActivityIndicator size="small" color="#2563eb" />
-          ) : (
-            <Plus size={18} color="#2563eb" />
-          )}
-        </View>
-      </TouchableOpacity>
+      <AnimatedItemRow
+        item={item}
+        assigningId={assigningId}
+        openQuantityModal={openQuantityModal}
+        openPackedInfoModal={(item, locations) => setPackedInfoModal({ visible: true, item, locations })}
+        destination={destination || null}
+      />
     );
   };
 
@@ -227,8 +409,8 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
       onRequestClose={onClose}
     >
       <SafeAreaView className="flex-1 bg-gray-50">
-        <KeyboardAvoidingView 
-          className="flex-1" 
+        <KeyboardAvoidingView
+          className="flex-1"
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           {/* Header */}
@@ -237,7 +419,7 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
               <Package size={20} color="#0f172a" className="mr-2" />
               <Text className="text-lg font-bold text-slate-900">Item Catalog</Text>
             </View>
-            <TouchableOpacity 
+            <TouchableOpacity
               onPress={onClose}
               className="p-2 bg-gray-100 rounded-full"
             >
@@ -313,54 +495,160 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
         animationType="fade"
         onRequestClose={() => setSelectedItem(null)}
       >
-        <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.45)', justifyContent: 'center', paddingHorizontal: 24 }}>
-          <View className="bg-white rounded-xl p-4">
-            <Text className="text-base font-bold text-slate-900">Assign Item Quantity</Text>
-            <Text className="text-sm text-gray-500 mt-1" numberOfLines={2}>
-              {selectedItem?.description || selectedItem?.reference || 'Selected item'}
-            </Text>
+        <Pressable
+          style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.45)', justifyContent: 'center', paddingHorizontal: 144 }}
+          onPress={() => !assigningId && setSelectedItem(null)}
+        >
+          <TouchableWithoutFeedback>
+            <View className={`bg-white rounded-xl w-full overflow-hidden border-2 shadow-xl ${selectedItemStatus === 'match' ? 'border-green-300' :
+                selectedItemStatus === 'diff' ? 'border-yellow-300' :
+                  'border-slate-300'
+              }`}>
+              <View className={`p-3 gap-2 border-b flex-row items-center ${selectedItemStatus === 'match' ? 'bg-green-50 border-green-100' :
+                  selectedItemStatus === 'diff' ? 'bg-yellow-50 border-yellow-100' :
+                    'bg-slate-50 border-slate-100'
+                }`}>
+                <Plus size={20} color={
+                  selectedItemStatus === 'match' ? '#16a34a' :
+                    selectedItemStatus === 'diff' ? '#ca8a04' :
+                      '#64748b'
+                } />
+                <Text className={`text-base font-bold ${selectedItemStatus === 'match' ? 'text-green-900' :
+                    selectedItemStatus === 'diff' ? 'text-yellow-900' :
+                      'text-slate-900'
+                  }`}>Assign to Box</Text>
+              </View>
 
-            <View className="mt-4">
-              <Text className="text-xs text-gray-600 mb-1 font-medium">Quantity for this box</Text>
-              <TextInput
-                className="border border-gray-300 rounded-lg px-3 py-2 text-slate-900"
-                value={quantityInput}
-                onChangeText={setQuantityInput}
-                keyboardType="numeric"
-                placeholder="1"
-                placeholderTextColor="#94a3b8"
-                editable={!assigningId}
-              />
-              {getRemainingExpectedQty(selectedItem) !== null && (
-                <Text className="text-xs text-gray-500 mt-1">
-                  Remaining available: {getRemainingExpectedQty(selectedItem)}
-                </Text>
-              )}
-            </View>
-
-            <View className="mt-4 flex-row justify-end">
-              <TouchableOpacity
-                onPress={() => setSelectedItem(null)}
-                className="px-4 py-2 rounded-md bg-gray-100 mr-2"
-                disabled={!!assigningId}
-              >
-                <Text className="text-gray-700 font-medium">Cancel</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={confirmAssignSelectedItem}
-                className="px-4 py-2 rounded-md bg-blue-600"
-                disabled={!!assigningId}
-              >
-                {assigningId ? (
-                  <ActivityIndicator size="small" color="#ffffff" />
-                ) : (
-                  <Text className="text-white font-medium">Assign to Box</Text>
+              <View className="p-4">
+                {selectedItemStatus === 'match' && (
+                  <View className="bg-green-50 border border-green-200 p-2 rounded-lg mb-3">
+                    <Text className="text-green-800 text-[11px] font-medium text-center">
+                      This item matches your destination location!
+                    </Text>
+                  </View>
                 )}
-              </TouchableOpacity>
+                {selectedItemStatus === 'diff' && (
+                  <View className="bg-yellow-50 border border-yellow-200 p-2 rounded-lg mb-3">
+                    <Text className="text-yellow-800 text-[11px] font-medium text-center">
+                      Note: This item belongs to a different warehouse location.
+                    </Text>
+                  </View>
+                )}
+
+                <View className="flex-row items-start justify-between mb-4">
+                  <Text className="font-semibold text-slate-800 text-sm flex-1 mr-2">
+                    {selectedItem?.description || "Selected Item"}
+                  </Text>
+                  <View className="bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                    <Text className="text-slate-600 font-bold text-xs">Stock: {selectedItem?.expected_qty || 0}</Text>
+                  </View>
+                </View>
+
+                <View>
+                  <Text className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Quantity to add</Text>
+                  <TextInput
+                    className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-slate-900 font-medium"
+                    value={quantityInput}
+                    onChangeText={setQuantityInput}
+                    keyboardType="numeric"
+                    placeholder="1"
+                    placeholderTextColor="#94a3b8"
+                    editable={!assigningId}
+                    autoFocus
+                  />
+                  {getRemainingExpectedQty(selectedItem) !== null && (
+                    <Text className="text-[10px] text-slate-500 mt-1.5 ml-1">
+                      Available to pack: <Text className="font-bold text-slate-700">{getRemainingExpectedQty(selectedItem)}</Text>
+                    </Text>
+                  )}
+                </View>
+              </View>
+
+              <View className="p-3 bg-slate-50 border-t border-slate-100 flex-row justify-end gap-2">
+                <TouchableOpacity
+                  onPress={() => setSelectedItem(null)}
+                  className="px-5 py-2 rounded-lg bg-white border border-slate-200"
+                  disabled={!!assigningId}
+                >
+                  <Text className="text-slate-600 font-bold text-xs">Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={confirmAssignSelectedItem}
+                  className={`px-6 py-2 rounded-lg ${selectedItemStatus === 'match' ? 'bg-green-600' :
+                      selectedItemStatus === 'diff' ? 'bg-yellow-600' :
+                        'bg-blue-600'
+                    }`}
+                  disabled={!!assigningId}
+                >
+                  {assigningId ? (
+                    <ActivityIndicator size="small" color="#ffffff" />
+                  ) : (
+                    <Text className="text-white font-bold text-xs">Assign to Box</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
-        </View>
+          </TouchableWithoutFeedback>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={packedInfoModal.visible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setPackedInfoModal({ visible: false, item: null, locations: [] })}
+      >
+        <Pressable
+          className="flex-1 bg-black/45 justify-center px-36"
+          onPress={() => setPackedInfoModal({ visible: false, item: null, locations: [] })}
+        >
+          <TouchableWithoutFeedback>
+            <View className="bg-white rounded-xl w-full overflow-hidden border-2 border-blue-300 shadow-xl">
+              <View className="bg-blue-50 p-3 gap-2 border-b border-blue-100 flex-row items-center">
+                <Package size={20} color="#3b82f6" />
+                <Text className="text-base font-bold text-blue-900">Item Fully Packed</Text>
+              </View>
+              <View className="p-4">
+                <View className="bg-amber-50 border border-amber-200 p-2.5 rounded-lg mb-4">
+                  <Text className="text-amber-800 text-[11px] font-medium text-center">
+                    All items are packed and you cannot add any more.
+                  </Text>
+                </View>
+
+                <View className="flex-row items-start justify-between mb-2">
+                  <Text className="font-semibold text-slate-800 text-sm flex-1 mr-2">
+                    {packedInfoModal.item?.description || "Unknown Item"}
+                  </Text>
+                  <View className="bg-blue-100 px-2 py-0.5 rounded border border-blue-200">
+                    <Text className="text-blue-800 font-bold text-xs">Qty: {packedInfoModal.item?.expected_qty || 0}</Text>
+                  </View>
+                </View>
+
+                <Text className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">References / Boxes</Text>
+                <View className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                  {packedInfoModal.locations.map((loc, idx) => (
+                    <View key={idx} className="flex-row items-center mb-1.5 last:mb-0">
+                      <View className="w-1 h-1 rounded-full bg-blue-400 mr-2" />
+                      <Text className="text-xs text-slate-700 font-medium">{loc}</Text>
+                    </View>
+                  ))}
+                  {packedInfoModal.locations.length === 0 && (
+                    <Text className="text-xs text-slate-500 italic">No reference found.</Text>
+                  )}
+                </View>
+              </View>
+              <View className="p-3 bg-slate-50 border-t border-slate-100 flex-row justify-end">
+                <TouchableOpacity
+                  className="bg-blue-600 px-6 py-2 rounded-lg"
+                  onPress={() => setPackedInfoModal({ visible: false, item: null, locations: [] })}
+                >
+                  <Text className="text-white font-bold text-xs">Close</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableWithoutFeedback>
+        </Pressable>
       </Modal>
     </Modal>
   );

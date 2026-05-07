@@ -1,11 +1,17 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from "react";
-import {
-  View,
-  Text,
-  Alert,
-  TouchableOpacity,
-  ScrollView,
+import { ArrowLeft, Search, Plus, Filter, Printer, RefreshCw, X, ScanQrCode } from "lucide-react-native";
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { 
+  View, 
+  Text, 
+  TouchableOpacity, 
+  ScrollView, 
+  Alert, 
+  ActivityIndicator,
+  TextInput,
+  Platform,
   Dimensions,
+  Modal
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -13,7 +19,6 @@ import { useAuth } from "../../utils/AuthContext";
 import { usePackerSession } from "../../utils/PackerSessionContext";
 import { useTextSize } from "../../utils/TextSizeContext";
 import { db, supabase } from "../../utils/api/supabase";
-import { ArrowLeft, Plus } from "lucide-react-native";
 import { NavigationButtons } from "../../components/NavigationButtons";
 import TabLayout, {
   TabDefinition,
@@ -74,6 +79,7 @@ interface OrderPackageInstance {
   instance_number: number | null;
   ipac_reference: string | null;
   status: string;
+  destination: string | null;
 }
 
 interface PackageInfo {
@@ -158,6 +164,285 @@ export default function PackingListPage() {
   const [boxStartedMap, setBoxStartedMap] = useState<Record<string, boolean>>(
     {}
   ); // order_package_id -> has started tasks
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
+  const [globalScannerVisible, setGlobalScannerVisible] = useState(false);
+  const [globalScannerBusy, setGlobalScannerBusy] = useState(false);
+  const [cameraPermissions, requestCameraPermission] = useCameraPermissions();
+  const [detectedPrinter, setDetectedPrinter] = useState<any>(null);
+  const [detectingPrinterLoading, setDetectingPrinterLoading] = useState(false);
+
+  // Sync printer status from module
+  useEffect(() => {
+    const checkPrinter = () => {
+      try {
+        const brotherPrintModule = require('../../utils/printing/brotherDirectPrint');
+        if (brotherPrintModule?.getDetectedBrotherPrinter) {
+          const printer = brotherPrintModule.getDetectedBrotherPrinter();
+          setDetectedPrinter(printer);
+        }
+      } catch (e) {
+        // Module might not be available
+      }
+    };
+    checkPrinter();
+    const interval = setInterval(checkPrinter, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const connectPrinter = async () => {
+    if (Platform.OS === 'web') {
+      Alert.alert('Unavailable', 'Brother printing is not available on web.');
+      return;
+    }
+
+    try {
+      setDetectingPrinterLoading(true);
+      const brotherPrintModule = require('../../utils/printing/brotherDirectPrint');
+
+      const listBrotherPrinters = brotherPrintModule?.listBrotherPrinters;
+      const detectBrotherPrinter = brotherPrintModule?.detectBrotherPrinter;
+
+      if (typeof detectBrotherPrinter !== 'function') {
+        throw new Error(
+          'Brother printer module is unavailable in this build.'
+        );
+      }
+
+      let discoveredPrinters: any[] = [];
+
+      if (typeof listBrotherPrinters === 'function') {
+        discoveredPrinters = await listBrotherPrinters({
+          onStatus: (status: string) => console.log(`[Brother Global Connect] ${status}`),
+        });
+      } else {
+        const detected = await detectBrotherPrinter({
+          onStatus: (status: string) => console.log(`[Brother Global Connect] ${status}`),
+        });
+        discoveredPrinters = detected ? [detected] : [];
+      }
+
+      if (!discoveredPrinters.length) {
+        Alert.alert(
+          'No Brother Printer Found',
+          'Ensure the printer is on and nearby, then retry.'
+        );
+        return;
+      }
+
+      if (discoveredPrinters.length === 1) {
+        const candidate = discoveredPrinters[0];
+        const detected = await detectBrotherPrinter({
+          printerAddressHint: candidate.address,
+          preferredConnection: candidate.connectionType,
+          onStatus: (status: string) => console.log(`[Brother Global Connect] ${status}`),
+        });
+        setDetectedPrinter(detected);
+        Alert.alert('Printer Connected', `Connected to ${detected.modelName} (${detected.address}).`);
+        return;
+      }
+
+      // If multiple, show picker
+      Alert.alert(
+        'Multiple Printers Found',
+        'Please select a printer:',
+        [
+          ...discoveredPrinters.map(p => ({
+            text: `${p.modelName} (${p.address})`,
+            onPress: async () => {
+               const d = await detectBrotherPrinter({
+                  printerAddressHint: p.address,
+                  preferredConnection: p.connectionType,
+               });
+               setDetectedPrinter(d);
+            }
+          })),
+          { text: 'Cancel', style: 'cancel' }
+        ]
+      );
+
+    } catch (e: any) {
+      Alert.alert('Connection Failed', e.message || 'Unable to connect to printer.');
+    } finally {
+      setDetectingPrinterLoading(false);
+    }
+  };
+
+  const handleGlobalSearch = async (text: string) => {
+    setSearchQuery(text);
+    const cleanedText = text.trim();
+    if (!cleanedText) return;
+
+    // For manual typing, wait for at least 1 char for numbers, 2 for text
+    const isNumeric = /^\d+$/.test(cleanedText);
+    if (!isNumeric && cleanedText.length < 2) return;
+
+    setIsSearching(true);
+    try {
+      const pkgIds = orderPackages.map(p => p.id);
+      if (pkgIds.length === 0) {
+        setIsSearching(false);
+        return;
+      }
+
+      // 1. Check if it's a direct Box Number match first
+      if (isNumeric) {
+        // Search in overviews first if they exist
+        if (orderPackageOverviews.length > 0) {
+          const overviewMatch = orderPackageOverviews.find(ov => ov.pkg_number?.toString() === cleanedText);
+          if (overviewMatch) {
+            handleTabChange(`overview-${overviewMatch.id}`);
+            setSearchQuery("");
+            setIsSearching(false);
+            return;
+          }
+        }
+        
+        const boxMatch = orderPackages.find(p => p.package_number?.toString() === cleanedText);
+        if (boxMatch) {
+          handleTabChange(boxMatch.id);
+          setSearchQuery("");
+          setIsSearching(false);
+          return;
+        }
+      }
+
+      const matches: {boxId: string, label: string}[] = [];
+      const seenBoxIds = new Set<string>();
+
+      // 2. Search for items in boxes
+      const { data: maintItems } = await supabase
+        .from('pkd_item')
+        .select(`
+          id,
+          pkg_instance_id,
+          order_pkg_instance!inner(order_package_id, order_pkg_overview_id),
+          items_db!inner(item_num, reference, description)
+        `)
+        .in('order_pkg_instance.order_package_id', pkgIds)
+        .or(`item_num.ilike.%${cleanedText}%,reference.ilike.%${cleanedText}%,description.ilike.%${cleanedText}%`, { foreignTable: 'items_db' });
+
+      if (maintItems) {
+        maintItems.forEach((it: any) => {
+          const overviewId = it.order_pkg_instance?.order_pkg_overview_id;
+          const pkgId = it.order_pkg_instance?.order_package_id;
+          const finalId = overviewId ? `overview-${overviewId}` : pkgId;
+          
+          if (finalId && !seenBoxIds.has(finalId)) {
+            seenBoxIds.add(finalId);
+            const boxNum = overviewId 
+              ? orderPackageOverviews.find(ov => ov.id === overviewId)?.pkg_number 
+              : orderPackages.find(p => p.id === pkgId)?.package_number;
+            matches.push({ 
+              boxId: finalId, 
+              label: `Box #${boxNum || '?'} - ${it.items_db?.item_num || it.items_db?.description}` 
+            });
+          }
+        });
+      }
+
+      // 3. Search for legacy items
+      const { data: legacyItems } = await supabase
+        .from('package_items')
+        .select('order_package_id, designation, reference')
+        .in('order_package_id', pkgIds)
+        .or(`reference.ilike.%${cleanedText}%,designation.ilike.%${cleanedText}%`);
+
+      if (legacyItems) {
+        legacyItems.forEach(it => {
+          if (it.order_package_id && !seenBoxIds.has(it.order_package_id)) {
+            seenBoxIds.add(it.order_package_id);
+            const pkg = orderPackages.find(p => p.id === it.order_package_id);
+            matches.push({ 
+              boxId: it.order_package_id, 
+              label: `Box #${pkg?.package_number || '?'} - ${it.designation || it.reference}` 
+            });
+          }
+        });
+      }
+
+      // 4. Fallback: Search box references
+      if (matches.length === 0) {
+        const refMatch = orderPackages.find(p => 
+          p.reference?.toLowerCase().includes(cleanedText.toLowerCase())
+        );
+        if (refMatch) {
+          handleTabChange(refMatch.id);
+          setSearchQuery("");
+          setIsSearching(false);
+          return;
+        }
+      }
+
+      // Handle results
+      if (matches.length === 1) {
+        handleTabChange(matches[0].boxId);
+        setSearchQuery("");
+      } else if (matches.length > 1) {
+        Alert.alert(
+          "Multiple Matches",
+          "Select the box to open:",
+          [
+            ...matches.slice(0, 6).map(m => ({
+              text: m.label,
+              onPress: () => {
+                handleTabChange(m.boxId);
+                setSearchQuery("");
+              }
+            })),
+            { text: "Cancel", style: "cancel" }
+          ]
+        );
+      } else {
+        // If it was a scan, show "not found"
+        if (isNumeric && cleanedText.length > 3) {
+          Alert.alert("Not Found", `No item or box found matching "${cleanedText}"`);
+        }
+      }
+    } catch (err) {
+      console.error("Global search error:", err);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const openGlobalScanner = async () => {
+    if (Platform.OS === 'web') {
+      Alert.alert('Unavailable', 'Camera scanning is not available on web.');
+      return;
+    }
+
+    if (!cameraPermissions?.granted) {
+      const response = await requestCameraPermission();
+      if (!response.granted) {
+        Alert.alert('Permission Required', 'Camera permission is required to scan QR codes.');
+        return;
+      }
+    }
+
+    setGlobalScannerBusy(false);
+    setGlobalScannerVisible(true);
+  };
+
+  const handleGlobalScannedCode = async (data: string) => {
+    if (globalScannerBusy) return;
+    
+    try {
+      setGlobalScannerBusy(true);
+      // Try to parse item number if it's an item QR (format: itemNo-batchNo)
+      const segments = data.split('-');
+      const searchTerm = segments[0]?.trim() || data;
+      
+      setGlobalScannerVisible(false);
+      await handleGlobalSearch(searchTerm);
+    } catch (e) {
+      console.error("Global scan error:", e);
+      Alert.alert("Scan Error", "Failed to process the scanned code.");
+    } finally {
+      setGlobalScannerBusy(false);
+    }
+  };
 
   // Check toolbox briefing requirement on page load and periodically
   useEffect(() => {
@@ -244,7 +529,8 @@ export default function PackingListPage() {
   }, [orderId, sessionLoading]);
 
   // Modify loadData to accept an optional parameter for the initial loading spinner
-  const loadData = async (showLoadingSpinner = true) => {
+  const loadData = useCallback(
+    async (showLoadingSpinner = true) => {
     try {
       if (showLoadingSpinner) setLoading(true);
       if (!orderId) {
@@ -296,7 +582,7 @@ export default function PackingListPage() {
           if (overviewIds.length > 0) {
             const { data: instancesRaw, error: instancesErr } = await supabase
               .from('order_pkg_instance')
-              .select('id, order_pkg_overview_id, order_package_id, instance_number, ipac_reference, status')
+              .select('id, order_pkg_overview_id, order_package_id, instance_number, ipac_reference, status, destination')
               .in('order_pkg_overview_id', overviewIds)
               .order('instance_number', { ascending: true });
 
@@ -445,7 +731,7 @@ export default function PackingListPage() {
       console.log("loadData completed, setting loading to false");
       if (showLoadingSpinner) setLoading(false);
     }
-  };
+  }, [orderId]);
 
   const [packTypeHasVacuum, setPackTypeHasVacuum] = useState<
     Record<string, boolean>
@@ -724,6 +1010,7 @@ export default function PackingListPage() {
         grossWeightIsFinal: grossWeight.isFinal,
         isPacked: isPackedFromOverview || p?.status === "packed",
         isStarted: p?.id ? boxStartedMap[p.id] || false : false,
+        destination: box.selectedInstance?.destination ?? null,
       };
     });
   }, [
@@ -913,6 +1200,16 @@ export default function PackingListPage() {
               onDataChange={handlePackageInfoChange}
               hasPortal={!!(order?.client as any)?.portal_settings_id}
               clientId={order?.client_id}
+              detectedPrinter={detectedPrinter}
+              boxQuantity={box.quantity ?? null}
+              boxTypeName={
+                final?.box_type_id
+                  ? boxTypes[final.box_type_id]
+                  : original?.box_type_id
+                    ? boxTypes[original.box_type_id]
+                    : null
+              }
+              destination={box.selectedInstance?.destination ?? null}
             />
 
             {/* Comments section */}
@@ -1102,6 +1399,7 @@ export default function PackingListPage() {
     handleOrderPackageReferenceChange,
     handlePackageInfoChange,
     selectedInstanceByOverview,
+    detectedPrinter,
   ]);
 
   const handleBack = () => router.back();
@@ -1292,7 +1590,7 @@ export default function PackingListPage() {
     <SafeAreaView className="flex-1 bg-primary-50">
       <ScrollView ref={scrollViewRef} showsVerticalScrollIndicator={false}>
         {/* Header */}
-        <View className="flex-row justify-between items-center p-4 bg-primary-500">
+        <View className="bg-primary-500 pt-2 pb-4 px-4 flex-row justify-between items-center">
           <TouchableOpacity
             onPress={handleBack}
             className="flex-row items-center"
@@ -1305,17 +1603,12 @@ export default function PackingListPage() {
               Back
             </Text>
           </TouchableOpacity>
-          <Text
-            style={{ fontSize: headerFontSize }}
-            className="text-white font-semibold"
-          >
-            Packing List
-          </Text>
+
           <TouchableOpacity
             onPress={handleSignOut}
-            className="bg-primary-600 px-3 py-1 rounded"
+            className="bg-primary-600 px-3 py-1.5 rounded-lg"
           >
-            <Text style={{ fontSize: buttonFontSize }} className="text-white">
+            <Text style={{ fontSize: buttonFontSize }} className="text-white font-bold">
               Sign Out
             </Text>
           </TouchableOpacity>
@@ -1326,7 +1619,33 @@ export default function PackingListPage() {
 
         {/* Order summary */}
         {order && (
-          <View className="bg-white rounded-lg border border-gray-200 m-4 p-4">
+          <View className="bg-white rounded-lg border border-gray-200 m-4 p-4 shadow-sm">
+            <View className="flex-row items-center bg-gray-100 rounded-xl px-3 py-2 border border-gray-200 mb-4">
+              <TouchableOpacity onPress={() => handleGlobalSearch(searchQuery)}>
+                <Search size={20} color="#0ea5e9" />
+              </TouchableOpacity>
+              <TextInput
+                placeholder="Search item ref / item number / box #"
+                placeholderTextColor="#94a3b8"
+                className="flex-1 ml-2 text-slate-800 font-medium"
+                style={{ fontSize: textFontSize }}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                onSubmitEditing={() => handleGlobalSearch(searchQuery)}
+                autoCapitalize="none"
+                returnKeyType="search"
+              />
+              {isSearching && <ActivityIndicator size="small" color="#0ea5e9" className="ml-2" />}
+              {searchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setSearchQuery("")}>
+                  <X size={20} color="#64748b" className="ml-2" />
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity onPress={openGlobalScanner} className="ml-3 p-1.5 bg-white rounded-lg border border-gray-200">
+                <ScanQrCode size={20} color="#0ea5e9" />
+              </TouchableOpacity>
+            </View>
+
             <View className="flex-row justify-between items-start">
               <View className="flex-1">
                 <Text
@@ -1348,17 +1667,35 @@ export default function PackingListPage() {
                   Status: <Text className="capitalize font-medium text-gray-800">{order.production_status?.replace('_', ' ') || 'Pending'}</Text>
                 </Text>
               </View>
-              {order.production_status !== 'completed' && (
+              
+              <View className="flex-row gap-2">
                 <TouchableOpacity
-                  onPress={handleEndProject}
-                  className="bg-green-600 px-4 py-3 rounded-lg flex-row items-center ml-4"
+                  onPress={connectPrinter}
+                  className={`flex-row items-center px-4 py-2 rounded-lg border ${detectedPrinter ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}
                   style={{ minHeight: 48 }}
                 >
-                  <Text style={{ fontSize: buttonFontSize }} className="text-white font-bold">
-                    Complete Project
+                  {detectingPrinterLoading ? (
+                    <ActivityIndicator size="small" color="#0ea5e9" />
+                  ) : (
+                    <Printer size={20} color={detectedPrinter ? '#059669' : '#475569'} />
+                  )}
+                  <Text style={{ fontSize: buttonFontSize }} className={`font-bold ml-2 ${detectedPrinter ? 'text-emerald-700' : 'text-slate-600'}`}>
+                    {detectedPrinter ? 'Printer Active' : 'Connect Printer'}
                   </Text>
                 </TouchableOpacity>
-              )}
+
+                {order.production_status !== 'completed' && (
+                  <TouchableOpacity
+                    onPress={handleEndProject}
+                    className="bg-green-600 px-4 py-2 rounded-lg flex-row items-center"
+                    style={{ minHeight: 48 }}
+                  >
+                    <Text style={{ fontSize: buttonFontSize }} className="text-white font-bold">
+                      Complete Project
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             </View>
             <Text
               style={{ fontSize: textFontSize }}
@@ -1383,6 +1720,43 @@ export default function PackingListPage() {
           />
         </View>
       </ScrollView>
+
+      {/* Global Scanner Modal */}
+      <Modal
+        visible={globalScannerVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setGlobalScannerVisible(false)}
+      >
+        <SafeAreaView className="flex-1 bg-black">
+          <View className="flex-1">
+            <CameraView
+              style={{ flex: 1 }}
+              onBarcodeScanned={({ data }) => handleGlobalScannedCode(data)}
+              barcodeSettings={{
+                barcodeTypes: ['qr'],
+              }}
+            />
+            
+            <View className="absolute top-6 left-6">
+              <TouchableOpacity 
+                onPress={() => setGlobalScannerVisible(false)}
+                className="w-10 h-10 items-center justify-center bg-black/40 rounded-full"
+              >
+                <X size={24} color="white" />
+              </TouchableOpacity>
+            </View>
+
+            <View className="absolute bottom-12 left-0 right-0 items-center">
+              <View className="bg-black/60 px-6 py-3 rounded-2xl border border-white/20">
+                <Text className="text-white font-bold text-center">
+                  Scan an item QR to find its box
+                </Text>
+              </View>
+            </View>
+          </View>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }

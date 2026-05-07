@@ -757,7 +757,7 @@ const computeItemFontSizePx = (itemTextLength: number, labelWidthMm: number): nu
 
 const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
   const labelWidthMm = resolveLabelWidthMm(options.labelWidthMm);
-  const isBeside = options.layout === 'qr-with-caption-beside';
+  const isBeside = options.layout === 'qr-with-caption-beside' || (!!options.caption && options.layout !== 'qr-only');
 
   // Use full tape width (no safety margin as requested)
   const safeWidthMm = labelWidthMm;
@@ -773,17 +773,26 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
 
   // Dynamic Length Calculation (along the tape)
   const qrLengthMm = safeWidthMm; // QR is square
-  const gapMm = isBeside ? 2 : 0;
+  const gapMm = isBeside ? 7 : 0;
 
-  // Estimate text length: approx 0.42x tape width per character for Arial Bold
+  // Estimate text length: for 12mm we use a much larger font (2.4x)
+  // so we need a much larger width estimation per character.
   const is12mm = labelWidthMm <= 12;
-  const charWidthMm = (safeWidthMm * (is12mm ? 0.60 : 0.53));
+  // const charWidthMm = (safeWidthMm * (is12mm ? 0.60 : 0.53));
+  const charWidthMm = (safeWidthMm * (is12mm ? 0.64 : 0.55));
   const textLengthMm = isBeside ? itemNumber.length * charWidthMm : 0;
-
 
   const logoMm = is12mm ? safeWidthMm : 0;
 
-  const totalLengthMm = logoMm + (is12mm ? gapMm : 0) + qrLengthMm + gapMm + textLengthMm;
+  let totalLengthMm = logoMm + (is12mm ? gapMm : 0) + qrLengthMm + gapMm + textLengthMm;
+
+  // Add safety margin for 12mm to account for padding-left: 10% and font variations
+  // if (is12mm) {
+  //   totalLengthMm *= 1.25; 
+  // } else {
+  //   totalLengthMm += 5; // Small fixed buffer for 36mm
+  // }
+
   const totalLengthPoints = totalLengthMm * pointsPerMm;
   const totalLengthPx = Math.round(totalLengthPoints);
 
@@ -855,6 +864,7 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
         width: 100%;
         height: 100%;
       }
+      
       .logo-standalone {
         width: ${tapeWidthPx + 10}px;
         height: ${tapeWidthPx + 10}px;
@@ -864,14 +874,17 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
         flex-shrink: 0;
         position: relative;
       }
+      
       .logo-standalone img {
-        max-width: 130%;
-        max-height: 130%;
+        max-width: 140%;
+        max-height: 140%;
         object-fit: contain;
         image-rendering: -webkit-optimize-contrast;
         image-rendering: pixelated;
         filter: grayscale(100%) contrast(500%) brightness(1.2);
-        margin-bottom: 75%;
+        margin-bottom: 70%;
+        margin-left: 40%;
+        margin-right: 30%;
       }
 
       .logo-inside {
@@ -893,6 +906,7 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
         justify-content: center;
         overflow: hidden;
       }
+
       .logo-inside img {
         max-width: 25px; /* Fixed for 36mm */
         max-height: 25px;
@@ -903,14 +917,11 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
         filter: grayscale(100%) contrast(500%) brightness(1.2);
       }
 
-
-
       .gap {
         width: ${gapMm * pointsPerMm}px;
         height: 100%;
         flex-shrink: 0;
       }
-
 
       .item-number {
         flex: 1;
@@ -919,12 +930,12 @@ const buildQrHtml = (value: string, options: BrotherDirectPrintOptions) => {
         align-items: center;
         justify-content: flex-start;
         white-space: nowrap;
-        font-size: ${tapeWidthPx * (is12mm ? 2.4 : 1.4)}px;
+        font-size: ${tapeWidthPx * (is12mm ? 2.3 : 1.4)}px;
 
         font-weight: 900;
         color: #000000;
         letter-spacing: 0px;
-        margin-bottom: ${is12mm ? '12%' : '7.5%'};
+        margin-bottom: ${is12mm ? `${17 - (itemNumber.length * 0.6)}%` : `${12 - (itemNumber.length * 0.5)}%`};
       }
 
 

@@ -326,7 +326,7 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
     const notes = `task_log_id:${taskLogId}; task:${taskName}`;
     const uploadResults = await Promise.all(
       uniquePackageIds.flatMap((packageId) =>
-        taskPhotoUris.map((uri) => db.uploadMediaToStorage(packageId, uri, 'task', notes))
+        taskPhotoUris.map((uri) => db.uploadMediaToStorage(packageId, uri, 'task', notes, { taskLogId }))
       )
     );
 

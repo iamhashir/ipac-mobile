@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, SafeAreaView, Platform, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, SafeAreaView, Platform, ScrollView, Image } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
-import { Inbox, Trash2, Plus, RefreshCw, FileText, Printer, Eye, ScanQrCode, X, Share2, Info } from 'lucide-react-native';
+import { Inbox, Trash2, Plus, RefreshCw, FileText, Printer, Eye, ScanQrCode, X, Share2, Info, Camera } from 'lucide-react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { db } from '../../../../../utils/api/supabase';
 import CatalogBrowserModal from './CatalogBrowserModal';
 import { chooseQrPrintSizePreset } from './qrPrintPresets';
+import CustomPrintModal from '../../common/CustomPrintModal';
+import { SplitThumbnail } from '../../common/SplitThumbnail';
 
 interface OrderItemsSectionProps {
   orderId: string;
@@ -15,6 +18,8 @@ interface OrderItemsSectionProps {
 
   orderPkgInstanceId?: string | null;
   editable?: boolean;
+  detectedPrinter?: DetectedBrotherPrinter | null;
+  destination?: string | null;
 }
 
 const normalizePortalBaseUrl = (value: string) => {
@@ -147,7 +152,7 @@ const DimensionInputs: React.FC<DimensionInputsProps> = ({
   };
 
   return (
-    <View className="flex-row items-center mt-2 pt-2 border-t border-gray-50">
+    <View className="flex-row items-center mt-1">
       <View className="flex-row items-center mr-4">
         <Text className="text-[10px] font-bold text-gray-400 mr-1">L</Text>
         <TextInput
@@ -194,7 +199,9 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
   orderPackageId, 
   clientId, 
   orderPkgInstanceId = null,
-  editable = true 
+  editable = true,
+  detectedPrinter: propDetectedPrinter = null,
+  destination = null
 }) => {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -216,8 +223,26 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
   const [detectingPrinter, setDetectingPrinterLoading] = useState(false);
   const [clientLogoUrl, setClientLogoUrl] = useState<string | null>(null);
 
+  const [manualItemModalVisible, setManualItemModalVisible] = useState(false);
+  const [manualItemSaving, setManualItemSaving] = useState(false);
+  const [manualItemDesignation, setManualItemDesignation] = useState('');
+  const [manualItemQty, setManualItemQty] = useState('1');
+  const [manualItemLength, setManualItemLength] = useState('');
+  const [manualItemWidth, setManualItemWidth] = useState('');
+  const [manualItemHeight, setManualItemHeight] = useState('');
+
+  const [itemMediaModalVisible, setItemMediaModalVisible] = useState(false);
+  const [selectedItemForMedia, setSelectedItemForMedia] = useState<any | null>(null);
+  const [itemMedia, setItemMedia] = useState<any[]>([]);
+  const [loadingItemMedia, setLoadingItemMedia] = useState(false);
+
   const [rowWidths, setRowWidths] = useState<Record<string, number>>({});
+  const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
   const [permissions, requestPermission] = useCameraPermissions();
+  const [customPrintModalVisible, setCustomPrintModalVisible] = useState(false);
+  const [selectedItemForCustomPrint, setSelectedItemForCustomPrint] = useState<{item: any, rowId: string, outerItem: any} | null>(null);
+  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+  const [itemMediaCounts, setItemMediaCounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
     if (clientId) {
@@ -227,19 +252,41 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
     }
   }, [clientId]);
 
+  const loadMediaCounts = useCallback(async () => {
+    try {
+      const { data, error } = await db.query
+        .from('media')
+        .select('pkd_item_id')
+        .eq('order_package_id', orderPackageId);
+      
+      if (!error && data) {
+        const counts: Record<string, number> = {};
+        data.forEach(m => {
+          if (m.pkd_item_id) {
+            counts[m.pkd_item_id] = (counts[m.pkd_item_id] || 0) + 1;
+          }
+        });
+        setItemMediaCounts(counts);
+      }
+    } catch (e) {
+      console.warn('Error loading media counts:', e);
+    }
+  }, [orderPackageId]);
+
   const loadItems = useCallback(async () => {
     try {
       setLoading(true);
       const { data, error } = await db.getOrderItemsForPackages([orderPackageId], clientId);
       if (error) throw error;
       setItems(data || []);
+      await loadMediaCounts();
     } catch (e: any) {
       console.error('Error loading items:', e);
       Alert.alert('Load Error', 'Unable to retrieve items for this box.');
     } finally {
       setLoading(false);
     }
-  }, [orderPackageId, clientId]);
+  }, [orderPackageId, clientId, loadMediaCounts]);
 
 
   useEffect(() => {
@@ -263,29 +310,31 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
     return compactRow || longName;
   }, [rowWidths]);
 
-  const resolveItemQrData = useCallback(async (maintenanceItem: any) => {
-    const maintenanceItemId = maintenanceItem?.id;
-    if (!maintenanceItemId) {
-      throw new Error('This item does not have a valid ID for QR generation.');
+  const resolveItemQrData = useCallback(async (maintenanceItem: any, pkdItemId: string, customText?: string) => {
+    if (!pkdItemId) {
+      throw new Error('This item does not have a valid packed instance ID for QR generation.');
     }
 
-    const { data: token, error: tokenError } = await db.getOrCreateQrToken('item', maintenanceItemId);
+    // Use pkd_item.id with 'pkd_item' entity type — each physical instance gets its own unique token
+    const { data: token, error: tokenError } = await db.getOrCreateQrToken('pkd_item', pkdItemId);
     if (tokenError || !token) {
       throw new Error(tokenError?.message || 'Could not generate item QR token.');
     }
 
+    const defaultLabel = maintenanceItem?.order_pkg_instance?.ipac_reference || maintenanceItem?.item_num || maintenanceItem?.reference || 'item';
+
     return {
       token,
       qrUrl: buildPortalScanUrl(token),
-      itemLabel: maintenanceItem?.item_num || maintenanceItem?.reference || 'item',
+      itemLabel: customText || defaultLabel,
       itemName: maintenanceItem?.description || maintenanceItem?.reference || 'Item',
     };
   }, []);
 
-  const handlePreviewItemQr = async (maintenanceItem: any, rowId: string) => {
+  const handlePreviewItemQr = async (maintenanceItem: any, rowId: string, customText?: string) => {
     try {
       setPreviewingItemId(rowId);
-      const qrData = await resolveItemQrData(maintenanceItem);
+      const qrData = await resolveItemQrData(maintenanceItem, rowId, customText);
       
       const selectedPreset = await chooseQrPrintSizePreset();
       if (!selectedPreset) return;
@@ -312,12 +361,13 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
     } catch (e: any) {
       console.error('Error previewing item QR:', e);
       Alert.alert('Preview Failed', e?.message || 'Unable to prepare item QR preview.');
+      throw e;
     } finally {
       setPreviewingItemId(null);
     }
   };
 
-  const handleDirectPrintItemQr = async (maintenanceItem: any, rowId: string) => {
+  const handleDirectPrintItemQr = async (maintenanceItem: any, rowId: string, customText?: string) => {
     if (!maintenanceItem?.id) {
       Alert.alert('Unavailable', 'This item does not have a valid ID for QR generation.');
       return;
@@ -328,10 +378,15 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
       return;
     }
 
-    if (!detectedPrinter) {
+    // Use the globally connected printer (prop) first, fall back to local state, then check native module state
+    const brotherPrintModule = loadBrotherPrintModule();
+    const activePrinter = propDetectedPrinter || detectedPrinter || 
+      (typeof brotherPrintModule?.getDetectedBrotherPrinter === 'function' ? brotherPrintModule.getDetectedBrotherPrinter() : null);
+
+    if (!activePrinter) {
       Alert.alert(
         'Connect Printer First',
-        'Tap Connect Printer and select your Brother printer before printing.'
+        'Use the Connect Printer button at the top of the packing list, then retry.'
       );
       return;
     }
@@ -341,9 +396,8 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
       if (!selectedPreset) return;
 
       setPrintingItemId(rowId);
-      const qrData = await resolveItemQrData(maintenanceItem);
+      const qrData = await resolveItemQrData(maintenanceItem, rowId, customText);
 
-      const brotherPrintModule = loadBrotherPrintModule();
       const printBrotherQrLabelDirect = brotherPrintModule?.printBrotherQrLabelDirect;
 
       if (typeof printBrotherQrLabelDirect !== 'function') {
@@ -360,40 +414,187 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
         layout: 'qr-with-caption-beside',
         caption: qrData.itemLabel,
         preferredConnection:
-          detectedPrinter?.connectionType === 'wifi'
+          activePrinter?.connectionType === 'wifi'
             ? 'wifi'
-            : detectedPrinter?.connectionType === 'bluetooth'
+            : activePrinter?.connectionType === 'bluetooth'
               ? 'bluetooth'
               : undefined,
-        printerAddressHint: detectedPrinter?.address,
+        printerAddressHint: activePrinter?.address,
         postPrintDelayMs: 3000,
         onStatus: (status: string) => console.log(`[Brother Item Print] ${status}`),
       });
-
-      const refreshedDetected = brotherPrintModule?.getDetectedBrotherPrinter?.() || null;
-      if (refreshedDetected) {
-        setDetectedPrinter(refreshedDetected);
-      }
 
       Alert.alert('Direct Print Sent', `Item QR label (${selectedPreset.label}) sent to Brother printer for ${qrData.itemLabel}.`);
     } catch (e: any) {
       console.error('Error printing item QR with Brother SDK:', e);
       const message = String(e?.message || 'Unable to print item QR label.');
-      const normalized = message.toLowerCase();
-      if (
-        normalized.includes('expo go') ||
-        normalized.includes('development build') ||
-        normalized.includes('native module')
-      ) {
-        Alert.alert(
-          'Dev Build Required',
-          'Brother printing requires a Development Build. Build/install a Dev Client and run with expo start --dev-client.'
-        );
-      } else {
-        Alert.alert('Direct Print Failed', message);
-      }
+      Alert.alert('Print Failed', message);
+      throw e;
     } finally {
       setPrintingItemId(null);
+    }
+  };
+
+  const handleAddItemPhoto = async (itemId: string, itemName: string, isLegacy: boolean) => {
+    Alert.alert(
+      'Add Photo',
+      'Choose a source',
+      [
+        {
+          text: 'Camera',
+          onPress: () => handleTakePhotoForItem(itemId, itemName, isLegacy)
+        },
+        {
+          text: 'Gallery',
+          onPress: () => handlePickPhotoForItem(itemId, itemName, isLegacy)
+        },
+        { text: 'Cancel', style: 'cancel' }
+      ]
+    );
+  };
+
+  const handleTakePhotoForItem = async (itemId: string, itemName: string, isLegacy: boolean) => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Camera access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadItemAsset(res.assets[0].uri, itemId, itemName, isLegacy);
+    }
+  };
+
+  const handlePickPhotoForItem = async (itemId: string, itemName: string, isLegacy: boolean) => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Gallery access is needed.');
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({ quality: 0.7, selectionLimit: 1 });
+    if (!res.canceled && res.assets && res.assets.length) {
+      await uploadItemAsset(res.assets[0].uri, itemId, itemName, isLegacy);
+    }
+  };
+
+  const uploadItemAsset = async (uri: string, itemId: string, itemName: string, isLegacy: boolean) => {
+    try {
+      setLoading(true);
+      const notes = `Item: ${itemName}`;
+      const mappingIds = isLegacy 
+        ? { packageItemId: itemId, orderPkgInstanceId } 
+        : { pkdItemId: itemId, orderPkgInstanceId };
+
+      const { error } = await db.uploadMediaToStorage(
+        orderPackageId, 
+        uri, 
+        'item', 
+        notes,
+        mappingIds
+      );
+      if (error) {
+        Alert.alert('Upload failed', 'Could not upload item image.');
+      } else {
+        await loadItems();
+        Alert.alert('Uploaded', 'Image linked to item successfully.');
+      }
+    } catch (e) {
+      Alert.alert('Upload error', 'Unexpected error while uploading item image.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpenMediaManager = async (item: any) => {
+    setSelectedItemForMedia(item);
+    setLoadingItemMedia(true);
+    setItemMediaModalVisible(true);
+    try {
+      const { data, error } = await db.getItemMedia(item.id);
+      if (error) throw error;
+      setItemMedia(data || []);
+    } catch (e) {
+      console.error('Error loading item media:', e);
+      Alert.alert('Error', 'Unable to load photos for this item.');
+    } finally {
+      setLoadingItemMedia(false);
+    }
+  };
+
+  const handleDeleteMedia = async (mediaId: string) => {
+    Alert.alert(
+      'Delete Photo',
+      'Are you sure you want to delete this photo?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { error } = await db.deleteMedia(mediaId);
+              if (error) throw error;
+              setItemMedia((prev) => prev.filter((m) => m.id !== mediaId));
+              await loadItems(); // Refresh thumbnails
+            } catch (e) {
+              Alert.alert('Error', 'Failed to delete photo.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleSaveManualItem = async () => {
+    if (!manualItemDesignation.trim()) {
+      Alert.alert('Missing Name', 'Please enter an item name/designation.');
+      return;
+    }
+
+    const qty = Number(manualItemQty);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      Alert.alert('Validation', 'Please enter a quantity greater than 0.');
+      return;
+    }
+
+    try {
+      setManualItemSaving(true);
+      // 1. Create ad-hoc item in items_db
+      const { data: catalogItem, error: catalogError } = await db.createAdHocItem({
+        clientId,
+        description: manualItemDesignation.trim(),
+        quantity: qty,
+        length: Number(manualItemLength) || undefined,
+        width: Number(manualItemWidth) || undefined,
+        height: Number(manualItemHeight) || undefined,
+      });
+
+      if (catalogError || !catalogItem?.id) throw catalogError || new Error('Failed to create item');
+
+      // 2. Assign to package
+      const { error: assignError } = await db.assignItemToPackage(
+        catalogItem.id,
+        orderPackageId,
+        Number(manualItemQty) || 1,
+        orderPkgInstanceId || undefined
+      );
+
+      if (assignError) throw assignError;
+
+      setManualItemModalVisible(false);
+      // Reset form
+      setManualItemDesignation('');
+      setManualItemQty('1');
+      setManualItemLength('');
+      setManualItemWidth('');
+      setManualItemHeight('');
+
+      await loadItems();
+      Alert.alert('Success', 'Item added to box.');
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to add manual item.');
+    } finally {
+      setManualItemSaving(false);
     }
   };
 
@@ -522,7 +723,6 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
       return;
     }
 
-    const [cameraPermission, requestCameraPermission] = await useCameraPermissions();
     if (!permissions?.granted) {
       const response = await requestPermission();
       if (!response.granted) {
@@ -757,35 +957,12 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
           </View>
         </View>
         <View className="flex-row items-center">
-          {Platform.OS !== 'web' && (
-            <TouchableOpacity
-              onPress={connectPrinter}
-              disabled={detectingPrinter || loading}
-              className={`mr-2 px-3 py-1.5 rounded-md border ${detectedPrinter ? 'border-emerald-300 bg-emerald-50' : 'border-slate-300 bg-slate-100'}`}
-            >
-              {detectingPrinter ? (
-                <ActivityIndicator size="small" color="#334155" />
-              ) : (
-                <Text className={`text-xs font-semibold ${detectedPrinter ? 'text-emerald-700' : 'text-slate-700'}`}>
-                  {detectedPrinter ? 'Printer Ready' : 'Connect Printer'}
-                </Text>
-              )}
-            </TouchableOpacity>
-          )}
-
           <TouchableOpacity onPress={loadItems} disabled={loading} className="p-1 rounded-full bg-gray-200">
             <RefreshCw size={14} color="#64748b" />
           </TouchableOpacity>
         </View>
       </View>
 
-      {Platform.OS !== 'web' && (
-        <View className="mb-3 bg-slate-100 border border-slate-200 rounded-md px-3 py-2">
-          <Text className="text-xs text-slate-600" numberOfLines={1}>
-            Printer: {formatDetectedPrinterLabel(detectedPrinter)}
-          </Text>
-        </View>
-      )}
 
       {items.length === 0 ? (
         <View className="py-6 items-center bg-white rounded-md border border-dashed border-gray-300">
@@ -795,117 +972,133 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
           </Text>
         </View>
       ) : (
-        <View className="bg-white rounded-md border border-gray-200 overflow-hidden">
-          {items.map((item, index) => {
+        <View style={{ maxHeight: 380 }}>
+          <ScrollView 
+            nestedScrollEnabled={true} 
+            showsVerticalScrollIndicator={true}
+            contentContainerStyle={{ paddingBottom: 24 }}
+          >
+            {items.map((item, index) => {
             const maintenanceItem = item.item_details;
             const categoryLabel = maintenanceItem?.pkg_category?.label;
             const itemName = maintenanceItem?.description || 'Unknown Item';
             const isLegacyItem = !!item?.is_legacy_package_item;
             const canPrintOrPreview = !!maintenanceItem?.id;
-            const stackActions = shouldStackRowActions(item.id, itemName);
             
             return (
               <View 
                 key={item.id} 
-                className={`p-3 ${index !== items.length - 1 ? 'border-b border-gray-100' : ''}`}
-                onLayout={(event) => {
-                  const width = Math.round(event.nativeEvent.layout.width);
-                  setRowWidths((prev) => (prev[item.id] === width ? prev : { ...prev, [item.id]: width }));
-                }}
+                className="flex-row bg-white border border-gray-300 rounded-md mb-3 overflow-hidden shadow-sm"
               >
-                <View className="flex-row flex-wrap items-start" style={{ rowGap: 8 }}>
-                  <View
-                    className="pr-3"
-                    style={
-                      stackActions
-                        ? { width: '100%' }
-                        : { flexGrow: 1, flexShrink: 1, flexBasis: 220, minWidth: 190 }
-                    }
-                  >
-                    <View className="flex-row items-center mb-1">
-                      <Text className="font-semibold text-slate-800 text-sm" numberOfLines={stackActions ? 2 : 1}>
-                        {itemName}
-                      </Text>
+                {/* 1. NO. Column */}
+                <View className="w-10 items-center justify-center border-r border-gray-300 bg-gray-100/50">
+                  <Text className="text-[10px] font-bold text-gray-500">{index + 1}</Text>
+                </View>
+
+                {/* 2. QTY Column */}
+                <View className="w-14 items-center justify-center border-r border-gray-300">
+                  <Text className="text-base font-bold text-slate-900">{item.quantity}</Text>
+                  <Text className="text-[8px] text-gray-500 uppercase font-black">Qty</Text>
+                </View>
+
+                {/* 3. MAIN CONTENT AREA */}
+                <View className="flex-1 p-2">
+                  {/* TOP ROW: Item info + Remove */}
+                  <View className="flex-row items-center mb-2">
+                    <View className="flex-1 flex-row items-center flex-wrap" style={{ columnGap: 12 }}>
+                      <View>
+                        <Text className="text-[9px] text-gray-400 uppercase font-bold">Item No.</Text>
+                        <Text className="text-xs font-semibold text-slate-700">{maintenanceItem?.item_num || "N/A"}</Text>
+                      </View>
+                      <View>
+                        <Text className="text-[9px] text-gray-400 uppercase font-bold">Ref</Text>
+                        <Text className="text-xs font-semibold text-slate-700">{maintenanceItem?.reference || "N/A"}</Text>
+                      </View>
+                      <TouchableOpacity 
+                        onPress={() => setExpandedRows(prev => ({ ...prev, [item.id]: !prev[item.id] }))}
+                        activeOpacity={0.7}
+                        className="flex-1 min-w-[120px]"
+                      >
+                        <Text className="text-[9px] text-gray-400 uppercase font-bold">Name of Item</Text>
+                        <Text className="text-[13px] font-bold text-slate-800" numberOfLines={expandedRows[item.id] ? undefined : 1}>
+                          {itemName}
+                        </Text>
+                      </TouchableOpacity>
                       {categoryLabel && (
-                        <View className="ml-2 bg-blue-100 px-1.5 py-0.5 rounded">
-                          <Text className="text-blue-800 text-[10px] font-medium">{categoryLabel}</Text>
-                        </View>
-                      )}
-                      {isLegacyItem && (
-                        <View className="ml-2 bg-amber-100 px-1.5 py-0.5 rounded">
-                          <Text className="text-amber-800 text-[10px] font-medium">Legacy</Text>
+                        <View className="bg-blue-50 px-1 py-0.5 rounded border border-blue-100 self-end mb-0.5">
+                          <Text className="text-blue-700 text-[8px] font-bold">{categoryLabel}</Text>
                         </View>
                       )}
                     </View>
-                    <Text className="text-xs text-gray-500">
-                      Ref: {maintenanceItem?.reference || "N/A"} • Item #: {maintenanceItem?.item_num || "N/A"} • Qty: {item.quantity}
-                    </Text>
-                    {maintenanceItem?.ipac_comments && (
-                      <Text className="text-xs text-orange-600 mt-1 italic" numberOfLines={1}>
-                        Notes: {maintenanceItem.ipac_comments}
-                      </Text>
-                    )}
-
-                    {!isLegacyItem && maintenanceItem?.id && (
-                      <DimensionInputs
-                        itemId={maintenanceItem.id}
-                        initialLength={maintenanceItem.length}
-                        initialWidth={maintenanceItem.width}
-                        initialHeight={maintenanceItem.height}
-                        onUpdate={(dims) => handleUpdateMasterDimensions(maintenanceItem.id, dims)}
-                      />
-                    )}
-                  </View>
-
-                  <View
-                    className={`flex-row items-center ${stackActions ? '' : 'ml-auto'}`}
-                    style={
-                      stackActions
-                        ? { width: '100%', justifyContent: 'flex-end' }
-                        : { flexShrink: 0 }
-                    }
-                  >
-                    {canPrintOrPreview && (
-                      <TouchableOpacity
-                        onPress={() => handlePreviewItemQr(maintenanceItem, item.id)}
-                        className="p-2 rounded-full bg-slate-100 mr-2"
-                        disabled={previewingItemId === item.id || printingItemId === item.id}
-                      >
-                        {previewingItemId === item.id ? (
-                          <ActivityIndicator size="small" color="#475569" />
-                        ) : (
-                          <Eye size={16} color="#475569" />
-                        )}
-                      </TouchableOpacity>
-                    )}
-
-                    {canPrintOrPreview && (
-                      <TouchableOpacity
-                        onPress={() => handleDirectPrintItemQr(maintenanceItem, item.id)}
-                        className="p-2 rounded-full bg-teal-50 mr-2"
-                        disabled={printingItemId === item.id || previewingItemId === item.id}
-                      >
-                        {printingItemId === item.id ? (
-                          <ActivityIndicator size="small" color="#0f766e" />
-                        ) : (
-                          <Printer size={16} color="#0f766e" />
-                        )}
-                      </TouchableOpacity>
-                    )}
 
                     {editable && !isLegacyItem && (
                       <TouchableOpacity 
                         onPress={() => handleRemoveItem(item.id, isLegacyItem)}
-                        className="p-2 rounded-full bg-red-50"
+                        className="ml-2 px-2 py-1 rounded bg-red-50 border border-red-200"
                       >
-                        <Trash2 size={16} color="#ef4444" />
+                        <Text className="text-[10px] font-bold text-red-600">REMOVE</Text>
                       </TouchableOpacity>
                     )}
+                  </View>
+
+                  {/* Horizontal Line as per drawing */}
+                  <View className="h-[1px] bg-gray-200 w-full mb-2" />
+
+                  {/* BOTTOM ROW: Dimensions + Actions */}
+                  <View className="flex-row items-end">
+                    <View className="flex-1">
+                      {!isLegacyItem && maintenanceItem?.id && (
+                        <DimensionInputs
+                          itemId={maintenanceItem.id}
+                          initialLength={maintenanceItem.length}
+                          initialWidth={maintenanceItem.width}
+                          initialHeight={maintenanceItem.height}
+                          onUpdate={(dims) => handleUpdateMasterDimensions(maintenanceItem.id, dims)}
+                        />
+                      )}
+                    </View>
+
+                    <View className="flex-row items-center gap-x-2">
+                      {canPrintOrPreview && (
+                        <TouchableOpacity
+                          onPress={() => {
+                            setSelectedItemForCustomPrint({ item: maintenanceItem, rowId: item.id, outerItem: item });
+                            setCustomPrintModalVisible(true);
+                          }}
+                          className="px-3 py-1.5 rounded bg-teal-50 border border-teal-100 flex-row items-center"
+                          disabled={printingItemId === item.id || previewingItemId === item.id}
+                        >
+                          <Printer size={14} color="#0f766e" />
+                          <Text className="text-[10px] font-bold text-teal-700 ml-1">PRINT</Text>
+                        </TouchableOpacity>
+                      )}
+
+                      <TouchableOpacity 
+                        onPress={() => handleOpenMediaManager(item)}
+                        className={`px-3 py-1.5 rounded flex-row items-center ${
+                          (itemMediaCounts[item.id] || 0) > 0 
+                            ? 'bg-emerald-50 border border-emerald-100' 
+                            : 'bg-blue-50 border border-blue-100'
+                        }`}
+                      >
+                        <Camera 
+                          size={14} 
+                          color={(itemMediaCounts[item.id] || 0) > 0 ? '#059669' : '#2563eb'} 
+                          fill={(itemMediaCounts[item.id] || 0) > 0 ? '#059669' : 'transparent'}
+                        />
+                        <Text className={`text-[10px] font-bold ml-1 ${
+                          (itemMediaCounts[item.id] || 0) > 0 ? 'text-emerald-700' : 'text-blue-700'
+                        }`}>
+                          {(itemMediaCounts[item.id] || 0) > 0 ? `PHOTOS (${itemMediaCounts[item.id]})` : 'ADD PIC'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 </View>
               </View>
             );
           })}
+          </ScrollView>
         </View>
       )}
 
@@ -921,10 +1114,18 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
 
           <TouchableOpacity
             onPress={openScanModal}
-            className="flex-row items-center justify-center bg-emerald-600 px-4 py-2.5 rounded-md flex-1"
+            className="flex-row items-center justify-center bg-emerald-600 px-4 py-2.5 rounded-md flex-1 mr-2"
           >
             <ScanQrCode size={16} color="white" className="mr-1.5" />
             <Text className="text-white font-medium">Scan QR</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => setManualItemModalVisible(true)}
+            className="flex-row items-center justify-center bg-slate-700 px-4 py-2.5 rounded-md flex-1"
+          >
+            <Plus size={16} color="white" className="mr-1.5" />
+            <Text className="text-white font-medium">Add Manual</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -937,6 +1138,7 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
         orderPackageId={orderPackageId}
         orderPkgInstanceId={orderPkgInstanceId}
         onAssigned={loadItems}
+        destination={destination}
       />
 
 
@@ -1149,9 +1351,237 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
           </View>
         </View>
       </Modal>
+
+      <Modal
+        visible={manualItemModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setManualItemModalVisible(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.45)', justifyContent: 'center', paddingHorizontal: 20 }}>
+          <View className="bg-white rounded-2xl p-5 shadow-xl">
+            <View className="flex-row justify-between items-center mb-4">
+              <Text className="text-xl font-bold text-slate-900">Add Manual Item</Text>
+              <TouchableOpacity onPress={() => setManualItemModalVisible(false)}>
+                <X size={24} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <View className="space-y-4">
+                <View>
+                  <Text className="text-sm font-semibold text-slate-700 mb-1">Item Name / Designation</Text>
+                  <TextInput
+                    className="border border-slate-200 rounded-xl px-4 py-3 text-slate-900 bg-slate-50"
+                    placeholder="e.g. Spare Parts Box"
+                    value={manualItemDesignation}
+                    onChangeText={setManualItemDesignation}
+                  />
+                </View>
+
+                <View className="flex-row space-x-3">
+                  <View className="flex-1">
+                    <Text className="text-sm font-semibold text-slate-700 mb-1">Quantity</Text>
+                    <TextInput
+                      className="border border-slate-200 rounded-xl px-4 py-3 text-slate-900 bg-slate-50"
+                      keyboardType="numeric"
+                      value={manualItemQty}
+                      onChangeText={setManualItemQty}
+                    />
+                  </View>
+                </View>
+
+                <Text className="text-sm font-bold text-slate-800 mt-2">Dimensions (cm) - Optional</Text>
+                <View className="flex-row space-x-2">
+                  <View className="flex-1">
+                    <Text className="text-[10px] font-bold text-slate-500 uppercase">Length</Text>
+                    <TextInput
+                      className="border border-slate-200 rounded-xl px-3 py-2.5 text-slate-900 bg-slate-50"
+                      keyboardType="numeric"
+                      placeholder="L"
+                      value={manualItemLength}
+                      onChangeText={setManualItemLength}
+                    />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-[10px] font-bold text-slate-500 uppercase">Width</Text>
+                    <TextInput
+                      className="border border-slate-200 rounded-xl px-3 py-2.5 text-slate-900 bg-slate-50"
+                      keyboardType="numeric"
+                      placeholder="W"
+                      value={manualItemWidth}
+                      onChangeText={setManualItemWidth}
+                    />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-[10px] font-bold text-slate-500 uppercase">Height</Text>
+                    <TextInput
+                      className="border border-slate-200 rounded-xl px-3 py-2.5 text-slate-900 bg-slate-50"
+                      keyboardType="numeric"
+                      placeholder="H"
+                      value={manualItemHeight}
+                      onChangeText={setManualItemHeight}
+                    />
+                  </View>
+                </View>
+              </View>
+            </ScrollView>
+
+            <View className="mt-6 flex-row space-x-3">
+              <TouchableOpacity
+                onPress={() => setManualItemModalVisible(false)}
+                className="flex-1 py-3.5 rounded-xl bg-slate-100 items-center mr-2"
+                disabled={manualItemSaving}
+              >
+                <Text className="text-slate-600 font-bold">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleSaveManualItem}
+                className="flex-1 py-3.5 rounded-xl bg-blue-600 items-center shadow-md shadow-blue-200"
+                disabled={manualItemSaving}
+              >
+                {manualItemSaving ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <Text className="text-white font-bold">Save Item</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={itemMediaModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setItemMediaModalVisible(false)}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.9)' }}>
+          <View className="flex-row justify-between items-center px-4 py-4 border-b border-white/10">
+            <View className="flex-1 pr-4">
+              <Text className="text-white font-bold text-lg" numberOfLines={1}>
+                {selectedItemForMedia?.item_details?.description || 'Item Photos'}
+              </Text>
+              <Text className="text-white/60 text-xs mt-0.5">
+                {itemMedia.length} Photos total
+              </Text>
+            </View>
+            <TouchableOpacity 
+              onPress={() => {
+                handleAddItemPhoto(selectedItemForMedia.id, selectedItemForMedia?.item_details?.description || 'Item', false);
+              }}
+              className="w-10 h-10 items-center justify-center bg-blue-600 rounded-full mr-2"
+            >
+              <Camera size={20} color="white" />
+            </TouchableOpacity>
+            <TouchableOpacity 
+              onPress={() => setItemMediaModalVisible(false)}
+              className="w-10 h-10 items-center justify-center bg-white/10 rounded-full"
+            >
+              <X size={20} color="white" />
+            </TouchableOpacity>
+          </View>
+
+          <View className="flex-1">
+            {loadingItemMedia ? (
+              <View className="flex-1 items-center justify-center">
+                <ActivityIndicator size="large" color="white" />
+              </View>
+            ) : itemMedia.length === 0 ? (
+              <View className="flex-1 items-center justify-center p-10">
+                <Camera size={48} color="rgba(255,255,255,0.2)" />
+                <Text className="text-white/40 mt-4 text-center">No photos added to this item yet.</Text>
+              </View>
+            ) : (
+              <ScrollView 
+                contentContainerStyle={{ padding: 16, flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}
+              >
+                {itemMedia.map((media) => (
+                  <View key={media.id} className="relative" style={{ width: '47%', aspectRatio: 1 }}>
+                    <Image
+                      source={{ uri: media.image_url }}
+                      style={{ width: '100%', height: '100%', borderRadius: 12 }}
+                      resizeMode="cover"
+                    />
+                    <View className="absolute top-2 right-2 flex-row gap-2">
+                      <TouchableOpacity
+                        onPress={() => setEnlargedImage(media.image_url)}
+                        className="bg-blue-600 w-8 h-8 rounded-full items-center justify-center shadow-lg"
+                      >
+                        <Eye size={16} color="white" />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => handleDeleteMedia(media.id)}
+                        className="bg-red-600 w-8 h-8 rounded-full items-center justify-center shadow-lg"
+                      >
+                        <Trash2 size={16} color="white" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+
+          {/* Removed footer button as it was obscured and moved to header */}
+        </SafeAreaView>
+      </Modal>
+      
+      {/* Full Screen Image Modal */}
+      <Modal
+        visible={!!enlargedImage}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEnlargedImage(null)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'black', justifyContent: 'center', alignItems: 'center' }}>
+          <TouchableOpacity 
+            className="absolute top-12 right-6 z-10 w-10 h-10 items-center justify-center bg-black/50 rounded-full"
+            onPress={() => setEnlargedImage(null)}
+          >
+            <X size={24} color="white" />
+          </TouchableOpacity>
+          {enlargedImage && (
+            <Image
+              source={{ uri: enlargedImage }}
+              style={{ width: '100%', height: '100%' }}
+              resizeMode="contain"
+            />
+          )}
+        </View>
+      </Modal>
+      <CustomPrintModal
+        visible={customPrintModalVisible}
+        onClose={() => {
+          setCustomPrintModalVisible(false);
+          setSelectedItemForCustomPrint(null);
+        }}
+        title="Print Item Label"
+        subtitle={selectedItemForCustomPrint?.item?.description || 'Item'}
+        initialText={(() => {
+          if (!selectedItemForCustomPrint) return '';
+          const mi = selectedItemForCustomPrint.item;
+          const oi = selectedItemForCustomPrint.outerItem;
+          // Resolve project type prefix from tags (P- for Power, W- for Water)
+          const tags: string[] = (mi?.pkg_category?.category_tag_map || []).map(
+            (m: any) => String(m?.tag?.name || '').trim().toLowerCase()
+          );
+          const prefix = tags.some(t => t.includes('power')) ? 'P-'
+            : tags.some(t => t.includes('water')) ? 'W-'
+            : '';
+          const itemNum = String(mi?.item_num || mi?.reference || '').trim();
+          const qty = Number(oi?.quantity ?? 0);
+          const qtyStr = qty > 0 ? String(qty).padStart(2, '0') : '01';
+          return `${prefix}${itemNum}-QTY:${qtyStr}`;
+        })()}
+        onPreview={(text) => selectedItemForCustomPrint && handlePreviewItemQr(selectedItemForCustomPrint.item, selectedItemForCustomPrint.rowId, text)}
+        onPrint={(text) => selectedItemForCustomPrint && handleDirectPrintItemQr(selectedItemForCustomPrint.item, selectedItemForCustomPrint.rowId, text)}
+      />
     </View>
   );
 };
+
 
 export default OrderItemsSection;
 

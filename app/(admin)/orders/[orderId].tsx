@@ -8,7 +8,7 @@ import ManufacturingSection from '../../../components/packer/packing-list/sectio
 import { ConfirmModal } from '../../../components/ui/ConfirmModal';
 import PackageInfoFields, { PackageInfoValue } from '../../../components/admin/orders/PackageInfoFields';
 import OrderPackingInfo, { BoxInfoDetails } from '../../../components/packer/packing-list/section_01_packing_info/order_packing_info';
-import OrderPackingItems from '../../../components/packer/packing-list/section_02_packing_items/order_packing_items';
+import OrderItemsSection from '../../../components/packer/packing-list/section_01_packing_info/items/OrderItemsSection';
 import PackageForm from '../../../components/admin/orders/PackageForm';
 import AccessoriesSection from '../../../components/packer/packing-list/section_09_accessories/AccessoriesSection';
 import VacuumPackingSection from '../../../components/packer/packing-list/section_08_vacuum/VacuumPackingSection';
@@ -242,37 +242,14 @@ export default function OrderDetailsPage() {
                 })()}
               </View>
 
-              {/* Package Items (add) */}
-              <View className="mt-2.5 p-2.5 border border-green-200 rounded-lg bg-green-50">
-                <Text className="text-green-800 font-semibold text-sm mb-2">Package Items</Text>
-                <View className="flex-row gap-2 mb-2">
-                  <View className="flex-1 bg-white border border-gray-300 rounded-lg">
-                    <Text className="text-xs text-gray-600 px-2 pt-1">Designation</Text>
-                    <View className="px-2 pb-2">
-<TextInput value={(newItem[p.id]?.designation) || ''} onChangeText={(t) => setNewItem(prev => ({ ...prev, [p.id]: { designation: t, qty: prev[p.id]?.qty || '' } }))} placeholder="e.g., Motor assembly" className="border-0 px-0 py-0" />
-                    </View>
-                  </View>
-                  <View className="w-28 bg-white border border-gray-300 rounded-lg">
-                    <Text className="text-xs text-gray-600 px-2 pt-1">Qty</Text>
-                    <View className="px-2 pb-2">
-<TextInput value={(newItem[p.id]?.qty) || ''} onChangeText={(t) => setNewItem(prev => ({ ...prev, [p.id]: { designation: prev[p.id]?.designation || '', qty: t } }))} placeholder="0" keyboardType="numeric" className="border-0 px-0 py-0" />
-                    </View>
-                  </View>
-                  <TouchableOpacity
-                    onPress={async () => {
-                      const des = (newItem[p.id]?.designation || '').trim();
-                      const qtyStr = (newItem[p.id]?.qty || '').trim();
-                      const qty = qtyStr === '' ? null : Number(qtyStr);
-                      if (!des || !qty || qty <= 0) { Alert.alert('Enter item and qty'); return; }
-                      try { await db.addPackageItem({ order_package_id: p.id, designation: des, quantity: qty }); setNewItem(prev => ({ ...prev, [p.id]: { designation: '', qty: '' } })); await load(); } catch (e) { console.error('Add item error:', e); Alert.alert('Error', 'Failed to add item'); }
-                    }}
-                    className={`px-3 py-2 rounded ${allowOriginalEdits ? 'bg-green-600' : 'bg-gray-300'}`}
-                    disabled={!allowOriginalEdits}
-                  >
-                    <Text className="text-white font-medium">Add Item</Text>
-                  </TouchableOpacity>
-                </View>
-                <OrderPackingItems orderPackageId={p.id} editable={false} />
+              {/* Package Items */}
+              <View className="mt-2.5">
+                <OrderItemsSection 
+                  orderId={orderId as string}
+                  orderPackageId={p.id}
+                  clientId={order?.client_id}
+                  editable={allowOriginalEdits}
+                />
               </View>
 
               {/* Securing section: admin edits ORIGINAL fields inline (manual save) */}

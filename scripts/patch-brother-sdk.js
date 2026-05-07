@@ -71,4 +71,39 @@ if (fs.existsSync(ktPath)) {
   }
 }
 
-console.log('✓ All patches applied successfully');
+// 5. Patch V4SdkConnector.kt — inject PT label size bypass for newer printer support
+const v4Path = path.join(__dirname, '..', 'node_modules', 'official-react-brother-print-sdk', 'android', 'src', 'main', 'java', 'com', 'brother', 'bms', 'rtnbrotherprintsdk', 'sdkconnector', 'V4SdkConnector.kt');
+if (fs.existsSync(v4Path)) {
+  let v4Content = fs.readFileSync(v4Path, 'utf8');
+
+  if (!v4Content.includes('EMERGENCY NATIVE PATCH')) {
+    const anchor = 'Setters.resetPropertiesNotUpdated()\n            val propertiesNotUpdated';
+    const replacement = `Setters.resetPropertiesNotUpdated()
+
+            // EMERGENCY NATIVE PATCH: Bypass missing PTSetters map
+            if (it is com.brother.sdk.lmprinter.setting.PTPrintSettings) {
+                if (newSettings.hasKey("emulatePtLabelSize")) {
+                    try {
+                        val labelStr = newSettings.getString("emulatePtLabelSize")!!
+                        it.labelSize = com.brother.sdk.lmprinter.setting.PTPrintSettings.LabelSize.valueOf(labelStr)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+
+            val propertiesNotUpdated`;
+
+    if (v4Content.includes(anchor)) {
+      v4Content = v4Content.replace(anchor, replacement);
+      fs.writeFileSync(v4Path, v4Content);
+      console.log('✓ Patched V4SdkConnector.kt');
+    } else {
+      console.warn('⚠ V4SdkConnector.kt: anchor string not found — patch skipped. Manual review needed.');
+    }
+  } else {
+    console.log('✓ V4SdkConnector.kt is already patched');
+  }
+}
+
+console.log('✓ All patches applied successfully');

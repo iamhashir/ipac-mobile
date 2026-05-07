@@ -64,6 +64,7 @@ type RepackChip = 'vacuum' | 'gas' | 'defensor' | 'heatshrink';
 
 interface MaintenanceTaskFlowSectionProps {
   orderPackageId: string;
+  orderPkgInstanceId?: string | null;
   readOnly?: boolean;
   activeSeiCategoryId?: string | null;
   activeSeiProtectionId?: string | null;
@@ -73,7 +74,7 @@ interface MaintenanceTaskFlowSectionProps {
 type SeiCategoryLookup = { id: number; code: number | null; name: string; description?: string | null };
 type SeiProtectionLookup = { id: number; code: string; name: string; description?: string | null };
 
-const MaintenanceTaskFlowSection: React.FC<MaintenanceTaskFlowSectionProps> = ({ orderPackageId, readOnly = false, activeSeiCategoryId, activeSeiProtectionId, activeBoxTypeId }) => {
+const MaintenanceTaskFlowSection: React.FC<MaintenanceTaskFlowSectionProps> = ({ orderPackageId, orderPkgInstanceId = null, readOnly = false, activeSeiCategoryId, activeSeiProtectionId, activeBoxTypeId }) => {
   const { getRetrospectiveTimestamp } = usePackerSession();
   const [rows, setRows] = useState<TaskLogRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -467,7 +468,7 @@ const MaintenanceTaskFlowSection: React.FC<MaintenanceTaskFlowSectionProps> = ({
       try {
         const relation = asTaskRelation(row.tasks);
         const notes = relation?.name ? `${relation.name} - seq ${row.sequence_order}` : `Maintenance task ${row.sequence_order}`;
-        const { error } = await db.uploadMaintenanceTaskMedia(orderPackageId, row.id, row.category, uri, notes);
+        const { error } = await db.uploadMaintenanceTaskMedia(orderPackageId, row.id, row.category, uri, notes, orderPkgInstanceId);
 
         if (error) {
           console.log('➡️ MaintenanceTaskFlowSection: failed upload', error);

@@ -20,7 +20,7 @@ const CoverSection: React.FC<CoverSectionProps> = ({
       <OrderPackageMaterialsSection
         orderPackageId={orderPackageId}
         title="Cover"
-        materialType="Cover"
+        materialType="Defensor"
         variantSources={[
           { type: "material", value: "Defensor" },
           { type: "material", value: "Tarpaulin" },
@@ -32,7 +32,7 @@ const CoverSection: React.FC<CoverSectionProps> = ({
         editable={editable}
         hideUseButton={hideUseButton}
         hideRemoveButton={hideRemoveButton}
-        addPendingConfig={{ autoTag: "Cover", materialType: "Cover" }}
+        addPendingConfig={{ autoTag: "Cover", materialType: "Defensor" }}
         hideInnerSectionTitle
       />
     </View>

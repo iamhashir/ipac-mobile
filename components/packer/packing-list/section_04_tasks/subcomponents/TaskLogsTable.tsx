@@ -171,7 +171,7 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
     try {
       const taskName = taskRow.tasks?.name || 'Unknown Task';
       const notes = `task_log_id:${taskRow.id}; task:${taskName}`;
-      const { error } = await db.uploadMediaToStorage(orderPackageId, uri, 'task', notes);
+      const { error } = await db.uploadMediaToStorage(orderPackageId, uri, 'task', notes, { taskLogId: taskRow.id });
       if (error) {
         Alert.alert('Upload failed', 'Could not upload image to storage.');
       } else {
@@ -219,6 +219,13 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
     });
   }, [rows, currentPackageId, taskPackageMap]);
 
+  // Stable string of IDs — only changes when the actual set of tasks changes,
+  // not on every poll that returns the same rows as a new array reference.
+  const filteredRowIds = useMemo(
+    () => filteredRows.map((r) => r.id).join(','),
+    [filteredRows]
+  );
+
   useEffect(() => {
     if (!orderPackageId) {
       setTaskMediaMap({});
@@ -232,8 +239,17 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
 
     let isMounted = true;
     const loadMedia = async () => {
+      // Only fetch media for rows that are not yet in the cache.
+      // This prevents re-fetching every 5s when the polling loop returns
+      // the same task list as a new array reference.
+      const rowsNeedingMedia = filteredRows.filter(
+        (row) => !(row.id in taskMediaMap)
+      );
+
+      if (rowsNeedingMedia.length === 0) return;
+
       const entries = await Promise.all(
-        filteredRows.map(async (row) => {
+        rowsNeedingMedia.map(async (row) => {
           const media = await loadTaskMediaForLog(row.id);
           return { taskLogId: row.id, media };
         })
@@ -241,11 +257,13 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
 
       if (!isMounted) return;
 
-      const nextMap: Record<string, TaskMediaItem[]> = {};
-      entries.forEach((entry) => {
-        nextMap[entry.taskLogId] = entry.media;
+      setTaskMediaMap((prev) => {
+        const next = { ...prev };
+        entries.forEach((entry) => {
+          next[entry.taskLogId] = entry.media;
+        });
+        return next;
       });
-      setTaskMediaMap(nextMap);
     };
 
     loadMedia();
@@ -253,7 +271,8 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [orderPackageId, filteredRows]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderPackageId, filteredRowIds]);
 
   const confirmDeletePreviewMedia = () => {
     if (!mediaPreview.media || !mediaPreview.taskLogId) return;

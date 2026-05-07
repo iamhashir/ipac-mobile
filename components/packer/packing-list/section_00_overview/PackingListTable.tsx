@@ -27,6 +27,7 @@ export interface PackingRow {
   grossWeightIsFinal?: boolean;
   isPacked?: boolean; // Box completed (blue)
   isStarted?: boolean; // Box has tasks started (green)
+  destination?: string | null;
 }
 
 interface PackingListTableProps {
@@ -80,6 +81,7 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
   type ColKey =
     | "box"
     | "reference"
+    | "destination"
     | "name"
     | "cog"
     | "boxQty"
@@ -90,15 +92,16 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
 
   const allCols: { key: ColKey; label: string; flex: number }[] = [
     // Desired order: Box #, Reference, Box Quantity, Name, Box Type, S.E.I, Center of Gravity, Net, Gross
-    { key: "box", label: "Box #", flex: 0.9 },
+    { key: "box", label: "Box #", flex: 0.8 },
     { key: "reference", label: "Reference", flex: 1.2 },
-    { key: "boxQty", label: "Box Quantity", flex: 1.2 },
-    { key: "name", label: "Name of Equipment", flex: 2.2 },
-    { key: "boxType", label: "Box Type", flex: 1.6 },
-    { key: "packType", label: "S.E.I", flex: 1.6 },
-    { key: "cog", label: "Center of Gravity", flex: 1.2 },
-    { key: "net", label: "Net Weight", flex: 1.2 },
-    { key: "gross", label: "Gross Weight", flex: 1.2 },
+    { key: "destination", label: "Dest", flex: 1.0 },
+    { key: "boxQty", label: "Box Qty", flex: 0.8 },
+    { key: "name", label: "Name of Equipment", flex: 2.0 },
+    { key: "boxType", label: "Box Type", flex: 1.4 },
+    { key: "packType", label: "S.E.I", flex: 1.4 },
+    { key: "cog", label: "C.O.G", flex: 0.8 },
+    { key: "net", label: "Net", flex: 0.8 },
+    { key: "gross", label: "Gross", flex: 0.8 },
   ];
 
   // Always render all columns for non-tiny screens; enable horizontal scrolling when needed
@@ -207,6 +210,11 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
               }`}
               >
                 {[
+                  {
+                    label: "Destination",
+                    value: r.destination || "—",
+                    isFinal: undefined,
+                  },
                   {
                     label: "Name of Equipment",
                     value: r.equipmentName || "—",
@@ -348,6 +356,10 @@ const PackingListTable: React.FC<PackingListTableProps> = ({
                       break;
                     case "reference":
                       value = r.reference || "—";
+                      isFinal = undefined;
+                      break;
+                    case "destination":
+                      value = r.destination || "—";
                       isFinal = undefined;
                       break;
                     case "name":
