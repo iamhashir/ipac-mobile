@@ -1958,12 +1958,23 @@ const baseDb = {
     return { data: processed, error: null };
   },
 
-  getUnassignedCatalogItems: async (clientId: UUID, orderId?: UUID | null, search?: string) => {
-    const { data: mappedCategoryIds, error: categoryMapError } =
-      await getMappedCategoryIdsForOrder(orderId);
-
-    if (categoryMapError) {
-      return { data: null, error: categoryMapError };
+  getUnassignedCatalogItems: async (
+    clientId: UUID,
+    orderId?: UUID | null,
+    search?: string,
+    overrideCategoryId?: UUID | null
+  ) => {
+    // If an instance-level category override is provided, bypass the order-level map
+    let categoryIds: string[] = [];
+    if (overrideCategoryId) {
+      categoryIds = [String(overrideCategoryId)];
+    } else {
+      const { data: mappedCategoryIds, error: categoryMapError } =
+        await getMappedCategoryIdsForOrder(orderId);
+      if (categoryMapError) {
+        return { data: null, error: categoryMapError };
+      }
+      categoryIds = mappedCategoryIds || [];
     }
 
     const hasSearch = search && search.trim() !== '';
@@ -2010,8 +2021,8 @@ const baseDb = {
       .order('item_num', { ascending: true })
       .limit(5000);
 
-    if ((mappedCategoryIds || []).length > 0) {
-      query = query.in('category_id', mappedCategoryIds || []);
+    if (categoryIds.length > 0) {
+      query = query.in('category_id', categoryIds);
     }
 
     if (hasSearch) {
@@ -2753,6 +2764,163 @@ const baseDb = {
     // 1. Get path from URL if possible, or just delete the row first
     // For simplicity, we delete the row. Ideally we'd also delete from storage.
     const { error } = await supabase.from('media').delete().eq('id', mediaId);
+    return { error };
+  },
+
+  // ===== Box Creation Flow Helpers =====
+
+  /**
+   * Returns all box types for the box type picker.
+   * Standard boxes have names starting with "Standard Box" and codes starting with "standardbox".
+   */
+  getAllBoxTypes: async () => {
+    const { data, error } = await supabase
+      .from('box_type')
+      .select('id, name, code')
+      .order('name', { ascending: true });
+    return { data, error };
+  },
+
+  /**
+   * Returns categories mapped to an order via category_order_map,
+   * each with their tags ordered by tag_order for abbreviation building.
+   */
+  getOrderCategories: async (orderId: UUID) => {
+    const { data, error } = await supabase
+      .from('category_order_map')
+      .select(`
+        category_id,
+        pkg_category:pkg_category(
+          id,
+          label,
+          category_tag_map(
+            tag_order,
+            tag:project_tags(id, name, abbreviation)
+          )
+        )
+      `)
+      .eq('order_id', orderId)
+      .not('category_id', 'is', null);
+
+    if (error) return { data: null, error };
+
+    const seen = new Set<string>();
+    const categories = (data || [])
+      .map((row: any) => {
+        const cat = Array.isArray(row.pkg_category) ? row.pkg_category[0] : row.pkg_category;
+        if (!cat?.id || seen.has(cat.id)) return null;
+        seen.add(cat.id);
+        return cat;
+      })
+      .filter(Boolean);
+
+    return { data: categories, error: null };
+  },
+
+  /**
+   * Builds the abbreviated tag string for a category in tag_order sequence.
+   * e.g. category "Power + Non-AC" → "P-NAC"
+   * Falls back to deriving abbreviation from tag name if no abbreviation stored.
+   */
+  buildCategoryTagAbbreviation: async (categoryId: UUID): Promise<string> => {
+    const { data, error } = await supabase
+      .from('category_tag_map')
+      .select('tag_order, tag:project_tags(name, abbreviation)')
+      .eq('category_id', categoryId)
+      .order('tag_order', { ascending: true });
+
+    if (error || !data?.length) return '';
+
+    const parts = (data as any[]).map((row) => {
+      const tag = Array.isArray(row.tag) ? row.tag[0] : row.tag;
+      if (tag?.abbreviation) return String(tag.abbreviation).trim();
+      // Derive from name as fallback
+      const name = String(tag?.name || '').trim();
+      // All-caps short tokens kept as-is (AC, NAC, etc.)
+      if (/^[A-Z0-9-]{1,5}$/.test(name)) return name;
+      // Otherwise take first letter uppercased
+      return name.charAt(0).toUpperCase();
+    });
+
+    return parts.filter(Boolean).join('-');
+  },
+
+  /**
+   * Generates and saves the ipac_reference for a custom box instance.
+   * Format: DESTINATION-TAGABBREV-ITEMNO-SEQID (zero-padded, min 2 digits)
+   * e.g. "ALD-P-NAC-53286-01"
+   * For standard boxes no reference is generated (returns null).
+   */
+  generateAndSaveIpacReference: async (opts: {
+    instanceId: UUID;
+    destination: string;
+    categoryId: UUID;
+    itemNum: string | number | null;
+    instanceSeq: number;
+    isCustomBox: boolean;
+  }): Promise<{ ipacReference: string | null; error: any }> => {
+    if (!opts.isCustomBox) {
+      return { ipacReference: null, error: null };
+    }
+
+    // Build tag abbreviation from DB
+    const tagAbbrev = await baseDb.buildCategoryTagAbbreviation(opts.categoryId);
+
+    const dest = String(opts.destination || '').trim().toUpperCase();
+    const itemNo = String(opts.itemNum ?? '').trim();
+    const seq = String(opts.instanceSeq).padStart(2, '0');
+
+    const parts = [dest];
+    if (tagAbbrev) parts.push(tagAbbrev);
+    if (itemNo) parts.push(itemNo);
+    parts.push(seq);
+
+    const ipacReference = parts.join('-');
+
+    const { error } = await supabase
+      .from('order_pkg_instance')
+      .update({ ipac_reference: ipacReference })
+      .eq('id', opts.instanceId);
+
+    return { ipacReference: error ? null : ipacReference, error };
+  },
+
+  /**
+   * Returns the total packed item quantity for an instance (sum of pkd_item.quantity).
+   * Used at label print time to build the accurate QTY caption for custom boxes.
+   */
+  getInstancePackedItemQty: async (instanceId: UUID): Promise<{ qty: number; error: any }> => {
+    const { data, error } = await supabase
+      .from('pkd_item')
+      .select('quantity')
+      .eq('pkg_instance_id', instanceId);
+
+    if (error) return { qty: 0, error };
+
+    const qty = (data || []).reduce((sum: number, row: any) => {
+      const q = Number(row.quantity);
+      return sum + (Number.isFinite(q) ? q : 0);
+    }, 0);
+
+    return { qty, error: null };
+  },
+
+  /**
+   * Updates destination and/or category_id on an order_pkg_instance row.
+   */
+  updateInstanceFields: async (
+    instanceId: UUID,
+    fields: { destination?: string | null; category_id?: UUID | null }
+  ) => {
+    const patch: Record<string, any> = {};
+    if ('destination' in fields) patch.destination = fields.destination ?? null;
+    if ('category_id' in fields) patch.category_id = fields.category_id ?? null;
+
+    const { error } = await supabase
+      .from('order_pkg_instance')
+      .update(patch)
+      .eq('id', instanceId);
+
     return { error };
   },
 };

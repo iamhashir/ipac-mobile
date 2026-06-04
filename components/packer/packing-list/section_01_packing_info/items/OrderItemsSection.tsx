@@ -276,7 +276,14 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
   const loadItems = useCallback(async () => {
     try {
       setLoading(true);
-      const { data, error } = await db.getOrderItemsForPackages([orderPackageId], clientId);
+      // Pass the current instance ID so we only fetch pkd_items for THIS instance,
+      // not all instances in the package.
+      const instanceFilter = orderPkgInstanceId ? [orderPkgInstanceId] : undefined;
+      const { data, error } = await db.getOrderItemsForPackages(
+        [orderPackageId],
+        clientId,
+        instanceFilter
+      );
       if (error) throw error;
       setItems(data || []);
       await loadMediaCounts();
@@ -286,7 +293,7 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [orderPackageId, clientId, loadMediaCounts]);
+  }, [orderPackageId, clientId, orderPkgInstanceId, loadMediaCounts]);
 
 
   useEffect(() => {

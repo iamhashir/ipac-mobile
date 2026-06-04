@@ -80,6 +80,7 @@ interface OrderPackageInstance {
   ipac_reference: string | null;
   status: string;
   destination: string | null;
+  category_id: string | null;
 }
 
 interface PackageInfo {
@@ -582,7 +583,7 @@ export default function PackingListPage() {
           if (overviewIds.length > 0) {
             const { data: instancesRaw, error: instancesErr } = await supabase
               .from('order_pkg_instance')
-              .select('id, order_pkg_overview_id, order_package_id, instance_number, ipac_reference, status, destination')
+              .select('id, order_pkg_overview_id, order_package_id, instance_number, ipac_reference, status, destination, category_id')
               .in('order_pkg_overview_id', overviewIds)
               .order('instance_number', { ascending: true });
 
@@ -1350,6 +1351,7 @@ export default function PackingListPage() {
           orderId={orderId}
           useSeiFlow={isMaintenanceFlow}
           isMaintenanceFlow={isMaintenanceFlow}
+          clientId={order?.client_id ?? null}
           nextPackageNumber={
             orderPackages.length > 0
               ? Math.max(...orderPackages.map((pkg) => pkg.package_number || 0)) + 1

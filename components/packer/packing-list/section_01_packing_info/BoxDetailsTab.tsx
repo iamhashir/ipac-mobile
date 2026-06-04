@@ -81,35 +81,50 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
   const [previewingBoxLabel, setPreviewingBoxLabel] = useState(false);
   const [customPrintModalVisible, setCustomPrintModalVisible] = useState(false);
   const [clientLogoUrl, setClientLogoUrl] = useState<string | null>(null);
+  const [resolvedModalCaption, setResolvedModalCaption] = useState<string | null>(null);
   const isEditable = status !== 'packed' && !isOrderCompleted;
   const requiresOriginalFirst = projectType === 'maintenance' || projectType === 'survey';
   const referenceEditTarget: 'original' | 'final' = 'final';
 
-  // Format the box label caption: replace trailing "-NN" with "-BOX #NN" (standard) or "-QTY:NN" (custom/multi-box)
+  // Standard box: name starts with "Standard Box" OR code starts with "standardbox"
   const isCustomBox = (() => {
-    if (boxTypeName && !boxTypeName.toLowerCase().includes('standard box')) return true;
-    const ref = String(instanceReference || '').trim();
-    // Custom boxes typically have item numbers in the reference, leading to a format like DEST-TAG-ITEMNUM-QTY
-    // Standard boxes are DEST-TAG-BOXNUM. 
-    // We can check if the reference ends with a number, preceded by another hyphen-separated section.
-    if (ref && ref.split('-').length >= 5) return true; // e.g. ALD-W-AC-12345-1
-    return false;
+    if (!boxTypeName) return false; // no box type set yet — treat as standard
+    const name = boxTypeName.trim().toLowerCase();
+    const code = String(name || ''); // we only have boxTypeName here; code check via name
+    if (name.startsWith('standard box')) return false;
+    return true;
   })();
-  
-  const boxLabelCaption = (() => {
+
+  /**
+   * Builds the base label caption from the stored ipac_reference.
+   * For custom boxes: replaces trailing instance-seq with QTY:{qty} (qty resolved at print time).
+   * For standard boxes: replaces trailing instance-seq with Box #NN.
+   * This is used as a fallback when the live qty hasn't been fetched yet.
+   */
+  const buildBoxLabelCaption = (liveQty?: number | null) => {
     const ref = String(instanceReference || '').trim();
     const fallbackNum = String(packageNumber ?? 1).padStart(2, '0');
-    if (!ref) return isCustomBox ? `QTY:${fallbackNum}` : `BOX #${fallbackNum}`;
+    if (!ref) return isCustomBox ? `QTY:${fallbackNum}` : `Box #${fallbackNum}`;
     // Match trailing hyphen + digits (e.g. "-01", "-1", "-12")
     const match = ref.match(/^(.*?)-(\d+)$/);
     if (match) {
       const base = match[1];
-      const num = String(parseInt(match[2], 10)).padStart(2, '0');
-      return isCustomBox ? `${base}-QTY:${num}` : `${base}-BOX #${num}`;
+      const seqNum = parseInt(match[2], 10);
+      if (isCustomBox) {
+        const qty = liveQty != null ? liveQty : seqNum; // use live qty if available
+        return `${base}-QTY:${qty}`;
+      }
+      return `${base}-Box #${String(seqNum).padStart(2, '0')}`;
     }
-    // No trailing number — append suffix from packageNumber
-    return isCustomBox ? `${ref}-QTY:${fallbackNum}` : `${ref}-BOX #${fallbackNum}`;
-  })();
+    if (isCustomBox) {
+      const qty = liveQty != null ? liveQty : Number(fallbackNum);
+      return `${ref}-QTY:${qty}`;
+    }
+    return `${ref}-Box #${fallbackNum}`;
+  };
+
+  // Sync caption (no live qty yet — used for display only)
+  const boxLabelCaption = buildBoxLabelCaption();
 
   React.useEffect(() => {
     if (clientId) {
@@ -286,8 +301,15 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
     try {
       setPreviewingBoxLabel(true);
       const { db } = await import('../../../../utils/api/supabase');
+
+      // For custom boxes, fetch live item qty for accurate label caption
+      let resolvedCaption = customText || boxLabelCaption;
+      if (!customText && isCustomBox && orderPkgInstanceId) {
+        const { qty } = await db.getInstancePackedItemQty(orderPkgInstanceId);
+        resolvedCaption = buildBoxLabelCaption(qty > 0 ? qty : null);
+      }
+
       const { data: token, error: tokenError } = await db.getOrCreateQrToken('package', orderPkgInstanceId);
-      
       if (tokenError || !token) {
         throw new Error(tokenError?.message || 'Could not generate QR token for this box.');
       }
@@ -297,22 +319,22 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
 
       const brotherPrintModule = require('../../../../utils/printing/brotherDirectPrint') as any;
       if (!brotherPrintModule?.generateBrotherQrLabelPdf) {
-          throw new Error('PDF generation module is unavailable.');
+        throw new Error('PDF generation module is unavailable.');
       }
 
       const qrUrl = buildPortalScanUrl(token);
       const pdfData = await brotherPrintModule.generateBrotherQrLabelPdf(qrUrl, {
-          labelWidthMm: selectedPreset.labelWidthMm,
-          moduleScale: selectedPreset.moduleScale,
-          marginModules: selectedPreset.marginModules,
-          logoUrl: clientLogoUrl || undefined,
-          layout: 'qr-with-caption-beside',
-          caption: customText || boxLabelCaption,
+        labelWidthMm: selectedPreset.labelWidthMm,
+        moduleScale: selectedPreset.moduleScale,
+        marginModules: selectedPreset.marginModules,
+        logoUrl: clientLogoUrl || undefined,
+        layout: 'qr-with-caption-beside',
+        caption: resolvedCaption,
       });
 
       await Sharing.shareAsync(pdfData.uri, {
         mimeType: 'application/pdf',
-        dialogTitle: `Label Preview: ${customText || instanceReference || 'Box'}`,
+        dialogTitle: `Label Preview: ${resolvedCaption || instanceReference || 'Box'}`,
       });
 
     } catch (e: any) {
@@ -351,7 +373,8 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
         throw new Error('Brother print module loaded but printBrotherQrLabelDirect is unavailable.');
       }
 
-      const connectedPrinter = detectedPrinter ||
+      const connectedPrinter =
+        detectedPrinter ||
         (typeof getDetectedBrotherPrinter === 'function' ? getDetectedBrotherPrinter() : null);
 
       if (!connectedPrinter?.address) {
@@ -363,8 +386,15 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
       }
 
       const { db } = await import('../../../../utils/api/supabase');
+
+      // For custom boxes, query actual item qty for accurate label caption
+      let resolvedCaption = customText || boxLabelCaption;
+      if (!customText && isCustomBox && orderPkgInstanceId) {
+        const { qty } = await db.getInstancePackedItemQty(orderPkgInstanceId);
+        resolvedCaption = buildBoxLabelCaption(qty > 0 ? qty : null);
+      }
+
       const { data: token, error: tokenError } = await db.getOrCreateQrToken('package', orderPkgInstanceId);
-      
       if (tokenError || !token) {
         throw new Error(tokenError?.message || 'Could not generate QR token for this box.');
       }
@@ -382,14 +412,14 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
         marginModules: selectedPreset.marginModules,
         logoUrl: clientLogoUrl || undefined,
         layout: 'qr-with-caption-beside',
-        caption: customText || boxLabelCaption,
+        caption: resolvedCaption,
         postPrintDelayMs: 3000,
         onStatus: (statusText: string) => console.log(`[Brother Box Label] ${statusText}`),
       });
 
       Alert.alert(
         'Direct Print Sent',
-        `Box label for ${customText || instanceReference || 'this box'} was sent to ${connectedPrinter.modelName}.`
+        `Box label for ${resolvedCaption || instanceReference || 'this box'} was sent to ${connectedPrinter.modelName}.`
       );
     } catch (e: any) {
       console.error('Error printing box label with Brother SDK:', e);
@@ -409,7 +439,21 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
           <View className="flex-row gap-2 items-center">
             {hasPortal && (
               <TouchableOpacity
-                onPress={() => setCustomPrintModalVisible(true)}
+                onPress={async () => {
+                  // Pre-fetch live qty so the modal initialText is already correct
+                  let caption = boxLabelCaption;
+                  if (isCustomBox && orderPkgInstanceId) {
+                    try {
+                      const { db } = await import('../../../../utils/api/supabase');
+                      const { qty } = await db.getInstancePackedItemQty(orderPkgInstanceId);
+                      caption = buildBoxLabelCaption(qty > 0 ? qty : null);
+                    } catch {
+                      // fall back to sync caption
+                    }
+                  }
+                  setResolvedModalCaption(caption);
+                  setCustomPrintModalVisible(true);
+                }}
                 disabled={previewingBoxLabel || printingBoxLabel}
                 className="px-3 py-1.5 rounded-lg border border-teal-700 bg-teal-50 flex-row items-center justify-center"
               >
@@ -546,13 +590,14 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
 
       <CustomPrintModal
         visible={customPrintModalVisible}
-        onClose={() => setCustomPrintModalVisible(false)}
+        onClose={() => { setCustomPrintModalVisible(false); setResolvedModalCaption(null); }}
         title="Print Box Label"
         subtitle={`Box #${packageNumber}`}
-        initialText={boxLabelCaption}
+        initialText={resolvedModalCaption ?? boxLabelCaption}
         onPreview={handlePreviewBoxLabel}
         onPrint={handlePrintBoxLabel}
       />
+      {/* Note: live QTY for custom box labels is pre-fetched when the print modal opens */}
       {/* Media Manager Modal */}
       <Modal
         visible={mediaModalVisible}
