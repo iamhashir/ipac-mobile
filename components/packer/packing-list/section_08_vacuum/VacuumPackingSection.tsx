@@ -82,4 +82,5 @@ const VacuumPackingSection: React.FC<VacuumPackingSectionProps> = ({
   );
 };
 
-export default VacuumPackingSection;
+// Memoized: primitive props — skips re-render when parent rebuilds tab JSX.
+export default React.memo(VacuumPackingSection);

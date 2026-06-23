@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Modal, FlatList, TextInput, Alert, SafeAreaView, KeyboardAvoidingView, Platform, Animated, Pressable, TouchableWithoutFeedback } from 'react-native';
 import { X, Search, Package, Plus } from 'lucide-react-native';
 import { db } from '../../../../../utils/api/supabase';
+import RequestMoreModal from './RequestMoreModal';
 
 interface CatalogBrowserModalProps {
   visible: boolean;
@@ -12,6 +13,8 @@ interface CatalogBrowserModalProps {
   orderPkgInstanceId?: string | null;
   onAssigned: () => void;
   destination?: string | null;
+  /** Standard box: draw items from the destination allocation pool, not the full catalog. */
+  isStandardBox?: boolean;
 }
 
 const toFiniteNumberOrNull = (value: unknown): number | null => {
@@ -38,13 +41,15 @@ const AnimatedItemRow = ({
   assigningId,
   openQuantityModal,
   openPackedInfoModal,
-  destination
+  destination,
+  allocationMode
 }: {
   item: any;
   assigningId: string | null;
   openQuantityModal: (item: any) => void;
   openPackedInfoModal: (item: any, locations: string[]) => void;
   destination: string | null;
+  allocationMode: boolean;
 }) => {
   const isAssigning = assigningId === item.id;
   const categoryLabel = item.pkg_category?.label;
@@ -57,8 +62,14 @@ const AnimatedItemRow = ({
   const hasDest = !!destination;
   const hasLoc = !!item.warehouse_location;
 
-  const isMatch = !isFullyPacked && hasDest && hasLoc && locLower === destLower;
-  const isDiffLoc = !isFullyPacked && hasDest && locLower !== destLower;
+  // In allocation mode every listed item already belongs to this box's destination, so it is
+  // a match by construction; otherwise fall back to the (legacy) warehouse_location compare.
+  const isMatch = allocationMode
+    ? !isFullyPacked
+    : !isFullyPacked && hasDest && hasLoc && locLower === destLower;
+  const isDiffLoc = allocationMode
+    ? false
+    : !isFullyPacked && hasDest && locLower !== destLower;
 
   const pulseAnim = React.useRef(new Animated.Value(0)).current;
 
@@ -222,7 +233,8 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
   orderPackageId,
   orderPkgInstanceId = null,
   onAssigned,
-  destination
+  destination,
+  isStandardBox = false
 }) => {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -232,9 +244,17 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
   const [quantityInput, setQuantityInput] = useState('1');
   const [hiddenPackedCount, setHiddenPackedCount] = useState(0);
   const [packedInfoModal, setPackedInfoModal] = useState<{ visible: boolean; item: any | null; locations: string[] }>({ visible: false, item: null, locations: [] });
+  const [requestVisible, setRequestVisible] = useState(false);
+  const [requestSubmitting, setRequestSubmitting] = useState(false);
+  // Item targeted by a "Request more" raised from the fully-packed info modal (where there
+  // is no selectedItem). Falls back to selectedItem for the in-assign-modal request path.
+  const [requestItem, setRequestItem] = useState<any | null>(null);
 
   const selectedItemStatus = useMemo(() => {
-    if (!selectedItem || !destination) return 'none';
+    if (!selectedItem) return 'none';
+    // Allocation-pool items are all for this destination -> always a match.
+    if (isStandardBox) return 'match';
+    if (!destination) return 'none';
     const destLower = destination.toLowerCase();
     const locLower = selectedItem.warehouse_location?.toLowerCase();
 
@@ -242,13 +262,38 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
     if (!locLower || locLower !== destLower) return 'diff';
 
     return 'match';
-  }, [selectedItem, destination]);
+  }, [selectedItem, destination, isStandardBox]);
 
   const loadItems = useCallback(async (currentSearch?: string) => {
     if (!visible || !clientId) return;
 
     setLoading(true);
     try {
+      // Standard boxes draw from the destination's allocation pool (only the items meant for
+      // this order + destination). The pool is small, so search is applied client-side.
+      if (isStandardBox && destination) {
+        const { data, error } = await db.getStandardBoxAllocationItems(orderId, destination);
+        if (error) {
+          console.error('Error fetching allocation pool:', error);
+          Alert.alert('Error', 'Failed to load destination items');
+        } else {
+          const mapped = (data || [])
+            .map((row: any) => {
+              const item = Array.isArray(row.items_db) ? row.items_db[0] : row.items_db;
+              return item
+                ? { ...item, expected_qty: row.expected_qty, packed_qty: row.packed_qty }
+                : null;
+            })
+            .filter(Boolean) as any[];
+          // Keep fully-packed items visible for SB pools: a packer whose allocation is
+          // exhausted must still be able to open the item to send a "Request more" ticket.
+          // (filteredItems sorts packed rows to the bottom.)
+          setItems(mapped);
+          setHiddenPackedCount(0);
+        }
+        return;
+      }
+
       const { data, error } = await db.getUnassignedCatalogItems(clientId, orderId, currentSearch);
       if (error) {
         console.error('Error fetching catalog items:', error);
@@ -273,7 +318,7 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [visible, clientId, orderId]);
+  }, [visible, clientId, orderId, isStandardBox, destination]);
 
   useEffect(() => {
     if (visible) {
@@ -300,7 +345,20 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
   }, [searchQuery, visible, loadItems]);
 
   const filteredItems = useMemo(() => {
-    let sorted = [...items];
+    // In allocation mode the pool is loaded whole, so apply the search filter client-side.
+    let base = items;
+    if (isStandardBox) {
+      const q = searchQuery.trim().toLowerCase();
+      if (q) {
+        base = items.filter((item) =>
+          [item.description, item.item_num, item.reference].some((field) =>
+            String(field || '').toLowerCase().includes(q),
+          ),
+        );
+      }
+    }
+
+    const sorted = [...base];
     const destLower = destination?.toLowerCase();
 
     sorted.sort((a, b) => {
@@ -311,7 +369,8 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
         return aPacked - bPacked; // packed items go to the end
       }
 
-      if (destLower) {
+      // Legacy warehouse_location sort only applies outside allocation mode.
+      if (!isStandardBox && destLower) {
         const aMatches = a.warehouse_location?.toLowerCase() === destLower ? 1 : 0;
         const bMatches = b.warehouse_location?.toLowerCase() === destLower ? 1 : 0;
         return bMatches - aMatches;
@@ -320,7 +379,36 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
     });
 
     return sorted;
-  }, [items, destination]);
+  }, [items, destination, isStandardBox, searchQuery]);
+
+  const handleSendRequest = async (delta: number, reason: string) => {
+    const target = requestItem ?? selectedItem;
+    if (!target) return;
+    setRequestSubmitting(true);
+    try {
+      const { error } = await db.createAllocationIncreaseRequest({
+        orderId,
+        itemsDbId: target.id,
+        destination: destination ?? null,
+        requestedDelta: delta,
+        reason,
+        orderPackageId,
+      });
+      if (error) {
+        Alert.alert('Error', (error as any)?.message || 'Failed to send request');
+        return;
+      }
+      setRequestVisible(false);
+      setRequestItem(null);
+      setSelectedItem(null);
+      Alert.alert('Request sent', 'An admin will review your request for more of this item.');
+    } catch (e) {
+      console.error('Error sending allocation-increase request:', e);
+      Alert.alert('Error', 'An unexpected error occurred');
+    } finally {
+      setRequestSubmitting(false);
+    }
+  };
 
   const handleAssignItem = async (itemId: string, quantity: number) => {
     try {
@@ -397,6 +485,7 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
         openQuantityModal={openQuantityModal}
         openPackedInfoModal={(item, locations) => setPackedInfoModal({ visible: true, item, locations })}
         destination={destination || null}
+        allocationMode={isStandardBox}
       />
     );
   };
@@ -565,6 +654,15 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
               </View>
 
               <View className="p-3 bg-slate-50 border-t border-slate-100 flex-row justify-end gap-2">
+                {isStandardBox && (
+                  <TouchableOpacity
+                    onPress={() => setRequestVisible(true)}
+                    className="px-4 py-2 rounded-lg bg-amber-50 border border-amber-300 mr-auto"
+                    disabled={!!assigningId}
+                  >
+                    <Text className="text-amber-800 font-bold text-xs">Request more</Text>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity
                   onPress={() => setSelectedItem(null)}
                   className="px-5 py-2 rounded-lg bg-white border border-slate-200"
@@ -592,6 +690,18 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
           </TouchableWithoutFeedback>
         </Pressable>
       </Modal>
+
+      <RequestMoreModal
+        visible={requestVisible}
+        itemName={(requestItem ?? selectedItem)?.description || 'Selected item'}
+        suggestedDelta={Number(quantityInput) || 1}
+        submitting={requestSubmitting}
+        onClose={() => {
+          setRequestVisible(false);
+          setRequestItem(null);
+        }}
+        onSubmit={handleSendRequest}
+      />
 
       <Modal
         visible={packedInfoModal.visible}
@@ -638,7 +748,21 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
                   )}
                 </View>
               </View>
-              <View className="p-3 bg-slate-50 border-t border-slate-100 flex-row justify-end">
+              <View className="p-3 bg-slate-50 border-t border-slate-100 flex-row justify-end gap-2">
+                {isStandardBox && (
+                  <TouchableOpacity
+                    className="px-4 py-2 rounded-lg bg-amber-50 border border-amber-300 mr-auto"
+                    onPress={() => {
+                      const item = packedInfoModal.item;
+                      setPackedInfoModal({ visible: false, item: null, locations: [] });
+                      setRequestItem(item);
+                      setQuantityInput('1');
+                      setRequestVisible(true);
+                    }}
+                  >
+                    <Text className="text-amber-800 font-bold text-xs">Request more</Text>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity
                   className="bg-blue-600 px-6 py-2 rounded-lg"
                   onPress={() => setPackedInfoModal({ visible: false, item: null, locations: [] })}

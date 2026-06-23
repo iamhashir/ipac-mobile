@@ -637,4 +637,29 @@ const hasFieldValue = (value: unknown) => {
   );
 };
 
-export default ManufacturingSection;
+// Memoized with a value comparison for internalDimensions: the parent
+// packing-list rebuilds that object literal on every pkgInfoMap change, so a
+// reference check alone would never skip re-renders.
+const dimsTripleEqual = (
+  a: DimensionTriple | null | undefined,
+  b: DimensionTriple | null | undefined,
+) => (a?.length ?? null) === (b?.length ?? null)
+  && (a?.width ?? null) === (b?.width ?? null)
+  && (a?.height ?? null) === (b?.height ?? null);
+
+const manufacturingPropsEqual = (
+  prev: ManufacturingSectionProps,
+  next: ManufacturingSectionProps,
+) => {
+  const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+  for (const key of keys) {
+    if (key === 'internalDimensions') continue;
+    if ((prev as any)[key] !== (next as any)[key]) return false;
+  }
+  return (
+    dimsTripleEqual(prev.internalDimensions?.original, next.internalDimensions?.original) &&
+    dimsTripleEqual(prev.internalDimensions?.final, next.internalDimensions?.final)
+  );
+};
+
+export default React.memo(ManufacturingSection, manufacturingPropsEqual);

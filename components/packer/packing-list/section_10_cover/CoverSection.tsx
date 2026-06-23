@@ -39,4 +39,5 @@ const CoverSection: React.FC<CoverSectionProps> = ({
   );
 };
 
-export default CoverSection;
+// Memoized: primitive props — skips re-render when parent rebuilds tab JSX.
+export default React.memo(CoverSection);

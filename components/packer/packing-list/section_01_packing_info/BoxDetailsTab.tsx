@@ -576,14 +576,15 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
 
       {clientId && !hidePackingItems && (
         <View className="mt-4">
-          <OrderItemsSection 
+          <OrderItemsSection
             orderId={orderId}
-            orderPackageId={orderPackageId} 
+            orderPackageId={orderPackageId}
             orderPkgInstanceId={orderPkgInstanceId}
             clientId={clientId}
             editable={isEditable}
             detectedPrinter={detectedPrinter}
             destination={destination}
+            isStandardBox={!isCustomBox}
           />
         </View>
       )}

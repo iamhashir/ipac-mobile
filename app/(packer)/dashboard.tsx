@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Alert, useWindowDimensions, Modal, TextInput, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -167,6 +167,14 @@ export default function PackerDashboard() {
     loadOrderTeamLeads();
   }, [selectedOrder, profile?.id]);
 
+  // Read allPackers through a ref: it is only needed for the empty-assignment
+  // fallback, and keeping it in the deps re-ran this effect (refetch + selection
+  // reset) every time the packers list refreshed.
+  const allPackersRef = useRef(allPackers);
+  useEffect(() => {
+    allPackersRef.current = allPackers;
+  }, [allPackers]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -191,7 +199,7 @@ export default function PackerDashboard() {
         if (assignedIds.length > 0) {
           setSelectedPackers(assignedIds);
         } else if (profile?.id) {
-          const currentUser = allPackers.find((packer) => packer.id === profile.id);
+          const currentUser = allPackersRef.current.find((packer) => packer.id === profile.id);
           if (currentUser?.is_available) {
             setSelectedPackers([profile.id]);
           } else {
@@ -212,7 +220,7 @@ export default function PackerDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [selectedOrder, allPackers, profile?.id]);
+  }, [selectedOrder, profile?.id]);
 
   const restoreSessionState = async () => {
     if (!session || !session.order_id) return;

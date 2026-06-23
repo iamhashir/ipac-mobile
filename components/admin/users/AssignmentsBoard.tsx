@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, ScrollView, Text, View } from "react-native";
 import { createPortal } from "react-dom";
 import { db } from "../../../utils/api/supabase";
@@ -44,31 +44,36 @@ export default function AssignmentsBoard() {
           client_name: o.client_name,
         })) as OrderLaneModel[];
 
-        // Fetch team members and leads for each order
-        const withTeams = await Promise.all(
-          ordersBase.map(async (o) => {
-            const [{ data: members }, { data: leads }] = await Promise.all([
-              db.getOrderPackers(o.id),
-              teamLeadApi.getOrderTeamLeads(o.id),
-            ]);
-            const packersForOrder: PackerRow[] = ((members as any) || []).map(
-              (m: any) => ({
-                id: m.packer_id || m.id,
-                full_name: m.full_name || m.profiles?.full_name || "",
-                username: m.username || null,
-                packer_status: "busy",
-              })
-            );
-            const teamLeadIds = ((leads as any) || []).map((l: any) => l.packer_id);
-            const teamLeadId = teamLeadIds.length > 0 ? teamLeadIds[0] : null; // for backward compatibility
-            return {
-              ...o,
-              packers: packersForOrder,
-              teamLeadId,
-              teamLeadIds,
-            } as OrderLaneModel;
-          })
+        // Fetch team members + lead flags for all orders in one batch query
+        const { data: teamRows } = await db.getTeamMembersForOrders(
+          ordersBase.map((o) => o.id)
         );
+        const membersByOrder = new Map<string, any[]>();
+        ((teamRows as any) || []).forEach((row: any) => {
+          const list = membersByOrder.get(row.order_id) || [];
+          list.push(row);
+          membersByOrder.set(row.order_id, list);
+        });
+
+        const withTeams = ordersBase.map((o) => {
+          const rows = membersByOrder.get(o.id) || [];
+          const packersForOrder: PackerRow[] = rows.map((m: any) => ({
+            id: m.packer_id,
+            full_name: m.profiles?.full_name || "",
+            username: m.profiles?.username || null,
+            packer_status: "busy",
+          }));
+          const teamLeadIds = rows
+            .filter((m: any) => m.is_team_lead)
+            .map((m: any) => m.packer_id);
+          const teamLeadId = teamLeadIds.length > 0 ? teamLeadIds[0] : null; // for backward compatibility
+          return {
+            ...o,
+            packers: packersForOrder,
+            teamLeadId,
+            teamLeadIds,
+          } as OrderLaneModel;
+        });
 
         setOrders(withTeams);
       } catch (e: any) {
@@ -85,6 +90,52 @@ export default function AssignmentsBoard() {
     orders.forEach((o) => o.packers.forEach((p) => assignedIds.add(p.id)));
     return allPackers.filter((p) => !assignedIds.has(p.id));
   }, [orders, allPackers]);
+
+  const moveOptions = useMemo(
+    () => orders.map((o) => ({ id: o.id, label: o.order_name })),
+    [orders]
+  );
+
+  const openProfile = useCallback(
+    (id: string) => router.push(`/(admin)/users/${id}`),
+    [router]
+  );
+
+  const handleMakeLead = useCallback(async (orderId: string, packerId: string) => {
+    const { error } = await teamLeadApi.addTeamLead(orderId, packerId);
+    if (error) setError(error.message || "Failed to add lead");
+    else
+      setOrders((prev) =>
+        prev.map((ord) =>
+          ord.id === orderId
+            ? {
+                ...ord,
+                teamLeadIds: [...(ord.teamLeadIds || []), packerId],
+                teamLeadId: ord.teamLeadId || packerId,
+              }
+            : ord
+        )
+      );
+  }, []);
+
+  const handleRemoveLead = useCallback(async (orderId: string, packerId: string) => {
+    const { error } = await teamLeadApi.removeTeamLead(orderId, packerId);
+    if (error) setError(error.message || "Failed to remove lead");
+    else
+      setOrders((prev) =>
+        prev.map((ord) => {
+          if (ord.id === orderId) {
+            const newLeadIds = (ord.teamLeadIds || []).filter((id) => id !== packerId);
+            return {
+              ...ord,
+              teamLeadIds: newLeadIds,
+              teamLeadId: newLeadIds.length > 0 ? newLeadIds[0] : null,
+            };
+          }
+          return ord;
+        })
+      );
+  }, []);
 
   const requestAssign = (
     orderId: string,
@@ -365,8 +416,8 @@ export default function AssignmentsBoard() {
                 <PackerCard
                   key={p.id}
                   packer={p}
-                  onPress={(id) => router.push(`/(admin)/users/${id}`)}
-                  moveOptions={orders.map(o => ({ id: o.id, label: o.order_name }))}
+                  onPress={openProfile}
+                  moveOptions={moveOptions}
                   onMoveTo={(destId) => requestAssign(destId, p.id, p.full_name, null)}
                 />
               ))}
@@ -400,49 +451,9 @@ export default function AssignmentsBoard() {
                   order={o}
                   allOrders={orders}
                   onDropPacker={requestAssign}
-                  onOpenProfile={(id) => router.push(`/(admin)/users/${id}`)}
-                  onMakeLead={async (orderId, packerId) => {
-                    const { error } = await teamLeadApi.addTeamLead(
-                      orderId,
-                      packerId
-                    );
-                    if (error)
-                      setError(error.message || "Failed to add lead");
-                    else
-                      setOrders((prev) =>
-                        prev.map((ord) =>
-                          ord.id === orderId
-                            ? { 
-                                ...ord, 
-                                teamLeadIds: [...(ord.teamLeadIds || []), packerId],
-                                teamLeadId: ord.teamLeadId || packerId
-                              }
-                            : ord
-                        )
-                      );
-                  }}
-                  onRemoveLead={async (orderId, packerId) => {
-                    const { error } = await teamLeadApi.removeTeamLead(
-                      orderId,
-                      packerId
-                    );
-                    if (error)
-                      setError(error.message || "Failed to remove lead");
-                    else
-                      setOrders((prev) =>
-                        prev.map((ord) => {
-                          if (ord.id === orderId) {
-                            const newLeadIds = (ord.teamLeadIds || []).filter(id => id !== packerId);
-                            return {
-                              ...ord,
-                              teamLeadIds: newLeadIds,
-                              teamLeadId: newLeadIds.length > 0 ? newLeadIds[0] : null
-                            };
-                          }
-                          return ord;
-                        })
-                      );
-                  }}
+                  onOpenProfile={openProfile}
+                  onMakeLead={handleMakeLead}
+                  onRemoveLead={handleRemoveLead}
                 />
               ))}
             </div>
@@ -454,49 +465,9 @@ export default function AssignmentsBoard() {
                   order={o}
                   allOrders={orders}
                   onDropPacker={requestAssign}
-                  onOpenProfile={(id) => router.push(`/(admin)/users/${id}`)}
-                  onMakeLead={async (orderId, packerId) => {
-                    const { error } = await teamLeadApi.addTeamLead(
-                      orderId,
-                      packerId
-                    );
-                    if (error)
-                      setError(error.message || "Failed to add lead");
-                    else
-                      setOrders((prev) =>
-                        prev.map((ord) =>
-                          ord.id === orderId
-                            ? { 
-                                ...ord, 
-                                teamLeadIds: [...(ord.teamLeadIds || []), packerId],
-                                teamLeadId: ord.teamLeadId || packerId
-                              }
-                            : ord
-                        )
-                      );
-                  }}
-                  onRemoveLead={async (orderId, packerId) => {
-                    const { error } = await teamLeadApi.removeTeamLead(
-                      orderId,
-                      packerId
-                    );
-                    if (error)
-                      setError(error.message || "Failed to remove lead");
-                    else
-                      setOrders((prev) =>
-                        prev.map((ord) => {
-                          if (ord.id === orderId) {
-                            const newLeadIds = (ord.teamLeadIds || []).filter(id => id !== packerId);
-                            return {
-                              ...ord,
-                              teamLeadIds: newLeadIds,
-                              teamLeadId: newLeadIds.length > 0 ? newLeadIds[0] : null
-                            };
-                          }
-                          return ord;
-                        })
-                      );
-                  }}
+                  onOpenProfile={openProfile}
+                  onMakeLead={handleMakeLead}
+                  onRemoveLead={handleRemoveLead}
                 />
               ))}
             </View>

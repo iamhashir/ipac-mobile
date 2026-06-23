@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, SafeAreaView, Platform, ScrollView, Image } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
@@ -20,6 +20,8 @@ interface OrderItemsSectionProps {
   editable?: boolean;
   detectedPrinter?: DetectedBrotherPrinter | null;
   destination?: string | null;
+  /** Standard box: the catalog picker draws from the destination allocation pool. */
+  isStandardBox?: boolean;
 }
 
 const normalizePortalBaseUrl = (value: string) => {
@@ -136,6 +138,10 @@ const DimensionInputs: React.FC<DimensionInputsProps> = ({
   const [h, setH] = useState(initialHeight ? String(initialHeight) : '');
   const [saving, setSaving] = useState(false);
 
+  // Focus chaining: L → W → H
+  const wInputRef = useRef<TextInput>(null);
+  const hInputRef = useRef<TextInput>(null);
+
   const handleBlur = async () => {
     const nextL = toFiniteNumberOrNull(l);
     const nextW = toFiniteNumberOrNull(w);
@@ -163,11 +169,15 @@ const DimensionInputs: React.FC<DimensionInputsProps> = ({
           placeholder="0"
           keyboardType="numeric"
           placeholderTextColor="#cbd5e1"
+          returnKeyType="next"
+          blurOnSubmit={false}
+          onSubmitEditing={() => wInputRef.current?.focus()}
         />
       </View>
       <View className="flex-row items-center mr-4">
         <Text className="text-[10px] font-bold text-gray-400 mr-1">W</Text>
         <TextInput
+          ref={wInputRef}
           className="w-12 text-xs text-slate-800 p-0 border-b border-gray-300 font-medium"
           value={w}
           onChangeText={setW}
@@ -175,11 +185,15 @@ const DimensionInputs: React.FC<DimensionInputsProps> = ({
           placeholder="0"
           keyboardType="numeric"
           placeholderTextColor="#cbd5e1"
+          returnKeyType="next"
+          blurOnSubmit={false}
+          onSubmitEditing={() => hInputRef.current?.focus()}
         />
       </View>
       <View className="flex-row items-center mr-4">
         <Text className="text-[10px] font-bold text-gray-400 mr-1">H</Text>
         <TextInput
+          ref={hInputRef}
           className="w-12 text-xs text-slate-800 p-0 border-b border-gray-300 font-medium"
           value={h}
           onChangeText={setH}
@@ -187,6 +201,7 @@ const DimensionInputs: React.FC<DimensionInputsProps> = ({
           placeholder="0"
           keyboardType="numeric"
           placeholderTextColor="#cbd5e1"
+          returnKeyType="done"
         />
       </View>
       {saving && <ActivityIndicator size="small" color="#0ea5e9" className="ml-auto" />}
@@ -201,7 +216,8 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
   orderPkgInstanceId = null,
   editable = true,
   detectedPrinter: propDetectedPrinter = null,
-  destination = null
+  destination = null,
+  isStandardBox = false
 }) => {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -230,6 +246,9 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
   const [manualItemLength, setManualItemLength] = useState('');
   const [manualItemWidth, setManualItemWidth] = useState('');
   const [manualItemHeight, setManualItemHeight] = useState('');
+  // Focus chaining for the manual-item dimensions row
+  const manualWidthRef = useRef<TextInput>(null);
+  const manualHeightRef = useRef<TextInput>(null);
 
   const [itemMediaModalVisible, setItemMediaModalVisible] = useState(false);
   const [selectedItemForMedia, setSelectedItemForMedia] = useState<any | null>(null);
@@ -1146,6 +1165,7 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
         orderPkgInstanceId={orderPkgInstanceId}
         onAssigned={loadItems}
         destination={destination}
+        isStandardBox={isStandardBox}
       />
 
 
@@ -1408,26 +1428,35 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
                       placeholder="L"
                       value={manualItemLength}
                       onChangeText={setManualItemLength}
+                      returnKeyType="next"
+                      blurOnSubmit={false}
+                      onSubmitEditing={() => manualWidthRef.current?.focus()}
                     />
                   </View>
                   <View className="flex-1">
                     <Text className="text-[10px] font-bold text-slate-500 uppercase">Width</Text>
                     <TextInput
+                      ref={manualWidthRef}
                       className="border border-slate-200 rounded-xl px-3 py-2.5 text-slate-900 bg-slate-50"
                       keyboardType="numeric"
                       placeholder="W"
                       value={manualItemWidth}
                       onChangeText={setManualItemWidth}
+                      returnKeyType="next"
+                      blurOnSubmit={false}
+                      onSubmitEditing={() => manualHeightRef.current?.focus()}
                     />
                   </View>
                   <View className="flex-1">
                     <Text className="text-[10px] font-bold text-slate-500 uppercase">Height</Text>
                     <TextInput
+                      ref={manualHeightRef}
                       className="border border-slate-200 rounded-xl px-3 py-2.5 text-slate-900 bg-slate-50"
                       keyboardType="numeric"
                       placeholder="H"
                       value={manualItemHeight}
                       onChangeText={setManualItemHeight}
+                      returnKeyType="done"
                     />
                   </View>
                 </View>

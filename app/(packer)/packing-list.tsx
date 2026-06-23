@@ -181,14 +181,18 @@ export default function PackingListPage() {
         const brotherPrintModule = require('../../utils/printing/brotherDirectPrint');
         if (brotherPrintModule?.getDetectedBrotherPrinter) {
           const printer = brotherPrintModule.getDetectedBrotherPrinter();
-          setDetectedPrinter(printer);
+          setDetectedPrinter((prev: any) =>
+            prev?.address === printer?.address && prev?.connectionType === printer?.connectionType
+              ? prev
+              : printer
+          );
         }
       } catch (e) {
         // Module might not be available
       }
     };
     checkPrinter();
-    const interval = setInterval(checkPrinter, 5000);
+    const interval = setInterval(checkPrinter, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -626,12 +630,11 @@ export default function PackingListPage() {
         setSelectedInstanceByOverview({});
       }
 
-      // Ensure securing rows exist for FINAL for all packages (packers edit final)
-      for (const p of sorted) {
-        try {
-          await db.ensureFinalSecuringForPackage(p.id);
-        } catch (_) {}
-      }
+      // Ensure securing rows exist for FINAL for all packages (packers edit final).
+      // Parallel: serial awaits here added one round-trip per box to every load.
+      await Promise.allSettled(
+        sorted.map((p) => db.ensureFinalSecuringForPackage(p.id))
+      );
 
       // Load original and final package_info rows
       const finalInfoIds = Array.from(
@@ -659,20 +662,23 @@ export default function PackingListPage() {
             (infos || []).map((i: any) => i.packing_type_id).filter(Boolean)
           )
         );
-        if (boxTypeIds.length) {
-          const { data: boxes } = await db.getBoxTypesByIds(boxTypeIds);
+        // Independent lookups — fetch in parallel
+        const [boxesRes, typesRes] = await Promise.all([
+          boxTypeIds.length ? db.getBoxTypesByIds(boxTypeIds) : Promise.resolve({ data: null }),
+          packingIds.length ? db.getPackingTypesByIds(packingIds) : Promise.resolve({ data: null }),
+        ]);
+        if (boxesRes.data) {
           const m: Record<string, string> = {};
-          (boxes || []).forEach((mt: any) => {
+          (boxesRes.data || []).forEach((mt: any) => {
             m[mt.id] = mt.name;
           });
           setBoxTypes(m);
         }
-        if (packingIds.length) {
-          const { data: types } = await db.getPackingTypesByIds(packingIds);
+        if (typesRes.data) {
           const pMap: Record<string, string> = {};
           const vMap: Record<string, boolean> = {};
           const gMap: Record<string, boolean> = {};
-          (types || []).forEach((t: any) => {
+          (typesRes.data || []).forEach((t: any) => {
             pMap[t.id] = t.code;
             vMap[t.id] = !!t.includes_vacuum_protection;
             gMap[t.id] = !!t.includes_gas_protection;
@@ -690,10 +696,20 @@ export default function PackingListPage() {
         const hasPortal = !!(orderData?.client as any)?.portal_settings_id;
         
         const em: Record<string, string> = {};
-        
+
+        // Equipment labels and started-task check are independent — run in parallel
+        const [itemsRes, taskPackagesRes] = await Promise.all([
+          hasPortal && orderData?.client_id
+            ? db.getOrderItemsForPackages(opIds, orderData.client_id)
+            : db.getPackageItemsByOrderPackageIds(opIds),
+          supabase
+            .from("task_packages")
+            .select("order_package_id")
+            .in("order_package_id", opIds),
+        ]);
+
         if (hasPortal && orderData?.client_id) {
-          const { data: maintItems } = await db.getOrderItemsForPackages(opIds, orderData.client_id);
-          (maintItems || []).forEach((it: any) => {
+          (itemsRes.data || []).forEach((it: any) => {
             const key = it.order_package_id;
             // Use description, or item_num, or reference as the label
             const label = it.item_details?.description || it.item_details?.item_num || it.item_details?.reference || "";
@@ -701,8 +717,7 @@ export default function PackingListPage() {
             else if (label) em[key] = `${em[key]}, ${label}`;
           });
         } else {
-          const { data: items } = await db.getPackageItemsByOrderPackageIds(opIds);
-          (items || []).forEach((it: any) => {
+          (itemsRes.data || []).forEach((it: any) => {
             const key = it.order_package_id;
             const label = it.designation || "";
             if (!em[key]) em[key] = label;
@@ -711,15 +726,8 @@ export default function PackingListPage() {
         }
         setEquipmentMap(em);
 
-        // Check which boxes have started tasks (any task_packages entries)
-        const { supabase } = await import("../../utils/api/supabase");
-        const { data: taskPackages } = await supabase
-          .from("task_packages")
-          .select("order_package_id")
-          .in("order_package_id", opIds);
-
         const startedMap: Record<string, boolean> = {};
-        (taskPackages || []).forEach((tp: any) => {
+        (taskPackagesRes.data || []).forEach((tp: any) => {
           startedMap[tp.order_package_id] = true;
         });
         setBoxStartedMap(startedMap);

@@ -128,6 +128,17 @@ export default function AttendanceScreen() {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const processedAfternoonAutoCloseDateRef = useRef<string | null>(null);
 
+  // Latest attendance/packersData for the auto-mark interval, so the effect
+  // doesn't tear down and immediately re-run on every attendance tap
+  const attendanceRef = useRef<AttendanceRecord>({});
+  useEffect(() => {
+    attendanceRef.current = attendance;
+  }, [attendance]);
+  const packersDataRef = useRef<OrderPackerSummary[]>([]);
+  useEffect(() => {
+    packersDataRef.current = packersData;
+  }, [packersData]);
+
   // Parse parameters - get from session if not in params
   const orderId: string = (typeof params.orderId === 'string' ? params.orderId.trim() : '') || session?.order_id || '';
 
@@ -148,14 +159,14 @@ export default function AttendanceScreen() {
 
       if (hour >= 12) {
         for (const name of packers) {
-          const packerAttendance = attendance[name];
+          const packerAttendance = attendanceRef.current[name];
 
           if (
             packerAttendance?.morning.present === true &&
             packerAttendance?.morning.startTime &&
             !packerAttendance?.morning.endTime
           ) {
-            const packerData = packersData.find(p => p.full_name === name);
+            const packerData = packersDataRef.current.find(p => p.full_name === name);
             if (!packerData) continue;
             const packerIdentifier = getPackerIdentifier(packerData);
             if (!packerIdentifier) continue;
@@ -204,7 +215,7 @@ export default function AttendanceScreen() {
       let hadError = false;
 
       for (const name of packers) {
-        const packerData = packersData.find(p => p.full_name === name);
+        const packerData = packersDataRef.current.find(p => p.full_name === name);
         if (!packerData) continue;
         const packerIdentifier = getPackerIdentifier(packerData);
         if (!packerIdentifier) continue;
@@ -259,7 +270,7 @@ export default function AttendanceScreen() {
     const interval = setInterval(checkAndAutoMarkShifts, 60000);
 
     return () => clearInterval(interval);
-  }, [orderId, packers, packersData, attendance]);
+  }, [orderId, packers]);
 
   const logAttendance = db.logAttendance as LogAttendanceFn;
 

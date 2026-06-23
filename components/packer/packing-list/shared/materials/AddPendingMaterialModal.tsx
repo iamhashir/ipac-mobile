@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, Modal, TouchableOpacity, TextInput, ScrollView, Alert } from 'react-native';
 import { X, Plus, Minus, Tag, ChevronDown } from 'lucide-react-native';
 import { db } from '../../../../../utils/api/supabase';
@@ -44,6 +44,11 @@ export const AddPendingMaterialModal: React.FC<AddPendingMaterialModalProps> = (
   const [width, setWidth] = useState('');
   const [thickness, setThickness] = useState('');
   const [weightPerUnit, setWeightPerUnit] = useState('');
+
+  // Focus chaining: Length → Width → Thickness → Weight
+  const widthInputRef = useRef<TextInput>(null);
+  const thicknessInputRef = useRef<TextInput>(null);
+  const weightInputRef = useRef<TextInput>(null);
   
   // Attributes
   const [attributes, setAttributes] = useState<{key: string, value: string}[]>([{ key: '', value: '' }]);
@@ -119,6 +124,10 @@ export const AddPendingMaterialModal: React.FC<AddPendingMaterialModalProps> = (
       }
     } catch (error) {
       console.error('Error loading data:', error);
+      Alert.alert(
+        'Loading failed',
+        'Could not load materials, tags or units. Close the dialog and try again.'
+      );
     }
   };
 
@@ -559,37 +568,50 @@ export const AddPendingMaterialModal: React.FC<AddPendingMaterialModalProps> = (
                       placeholder="Length"
                       keyboardType="decimal-pad"
                       className="border border-gray-300 rounded-lg px-2 py-2 text-gray-900"
+                      returnKeyType="next"
+                      blurOnSubmit={false}
+                      onSubmitEditing={() => widthInputRef.current?.focus()}
                     />
                   </View>
                   <View className="flex-1">
                     <Text className="text-xs text-gray-600 mb-1">Width</Text>
                     <TextInput
+                      ref={widthInputRef}
                       value={width}
                       onChangeText={setWidth}
                       placeholder="Width"
                       keyboardType="decimal-pad"
                       className="border border-gray-300 rounded-lg px-2 py-2 text-gray-900"
+                      returnKeyType="next"
+                      blurOnSubmit={false}
+                      onSubmitEditing={() => thicknessInputRef.current?.focus()}
                     />
                   </View>
                   <View className="flex-1">
                     <Text className="text-xs text-gray-600 mb-1">Thickness</Text>
                     <TextInput
+                      ref={thicknessInputRef}
                       value={thickness}
                       onChangeText={setThickness}
                       placeholder="Thickness"
                       keyboardType="decimal-pad"
                       className="border border-gray-300 rounded-lg px-2 py-2 text-gray-900"
+                      returnKeyType="next"
+                      blurOnSubmit={false}
+                      onSubmitEditing={() => weightInputRef.current?.focus()}
                     />
                   </View>
                 </View>
                 <View>
                   <Text className="text-xs text-gray-600 mb-1">Weight Per Unit</Text>
                   <TextInput
+                    ref={weightInputRef}
                     value={weightPerUnit}
                     onChangeText={setWeightPerUnit}
                     placeholder="Weight per unit"
                     keyboardType="decimal-pad"
                     className="border border-gray-300 rounded-lg px-2 py-2 text-gray-900"
+                    returnKeyType="done"
                   />
                 </View>
               </View>

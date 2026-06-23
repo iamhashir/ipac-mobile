@@ -121,6 +121,7 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
     init();
 
     // Realtime: subscribe to task_logs changes for live updates
+    let realtimeConnected = false;
     const channel = supabase
       .channel('task-logs-realtime')
       .on('postgres_changes', {
@@ -133,15 +134,17 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
           await refreshBusyStatus();
         }
       })
-      .subscribe();
+      .subscribe((status) => {
+        realtimeConnected = status === 'SUBSCRIBED';
+      });
 
-    // Fallback polling every 5s in case websocket can't connect
+    // Fallback polling only while the websocket is not connected
     const poll = setInterval(async () => {
-      if (isMountedRef.current) {
+      if (isMountedRef.current && !realtimeConnected) {
         await refreshLogs();
         await refreshBusyStatus();
       }
-    }, 5000);
+    }, 10000);
 
     return () => {
       isMountedRef.current = false; // Mark as unmounted
@@ -1251,4 +1254,20 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
   );
 };
 
-export default OrderTasksManagement;
+// Memoized with a value comparison for orderPackages: the parent packing-list
+// builds that array inline on every render, so reference equality never holds.
+const tasksPropsEqual = (
+  prev: OrderTasksManagementProps,
+  next: OrderTasksManagementProps,
+) =>
+  prev.orderId === next.orderId &&
+  prev.readOnly === next.readOnly &&
+  prev.requirePhotoForFinish === next.requirePhotoForFinish &&
+  prev.orderPackages.length === next.orderPackages.length &&
+  prev.orderPackages.every(
+    (pkg, idx) =>
+      pkg.id === next.orderPackages[idx]?.id &&
+      pkg.package_number === next.orderPackages[idx]?.package_number,
+  );
+
+export default React.memo(OrderTasksManagement, tasksPropsEqual);

@@ -91,6 +91,8 @@ const OrderPackageMaterialsSectionHeaderAndAddRow: React.FC<
   onSave,
   isSaving,
 }) => {
+  // Focus chaining: Length → Width
+  const widthInputRef = React.useRef<TextInput>(null);
   return (
     <>
       <View
@@ -213,14 +215,15 @@ const OrderPackageMaterialsSectionHeaderAndAddRow: React.FC<
                   keyboardType="numeric"
                   className="border border-gray-300 rounded p-2 bg-white text-sm"
                   placeholder="Len"
-                  returnKeyType="done"
-                  blurOnSubmit
-                  onSubmitEditing={() => Keyboard.dismiss()}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => widthInputRef.current?.focus()}
                   autoCorrect={false}
                 />
               </View>
               <View style={{ flex: flexMap.width }} className="px-1">
                 <TextInput
+                  ref={widthInputRef}
                   value={formWidth}
                   onChangeText={onWidthChange}
                   keyboardType="numeric"

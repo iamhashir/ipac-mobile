@@ -56,9 +56,12 @@ export default function OrderDetailsPage() {
   const load = async () => {
     try {
       setLoading(true);
-      const { data: ord } = await db.getOrderById(orderId);
+      // Order header and packages are independent — fetch in parallel
+      const [{ data: ord }, { data: pkgs }] = await Promise.all([
+        db.getOrderById(orderId),
+        db.getOrderPackages(orderId),
+      ]);
       setOrder(ord);
-      const { data: pkgs } = await db.getOrderPackages(orderId);
       const list = (pkgs || []).sort((a: any, b: any) => (a.package_number || 0) - (b.package_number || 0));
       setPackages(list);
 
@@ -67,11 +70,14 @@ export default function OrderDetailsPage() {
         setActiveTab(list[0].id);
       }
 
-      // Ensure securing rows exist for original/final for all packages
-      for (const p of list) {
-        try { await db.ensureOriginalSecuringForPackage(p.id); } catch (_) {}
-        try { await db.ensureFinalSecuringForPackage(p.id); } catch (_) {}
-      }
+      // Ensure securing rows exist for original/final for all packages.
+      // Parallel: serial awaits here added two round-trips per box to every load.
+      await Promise.allSettled(
+        list.flatMap((p: any) => [
+          db.ensureOriginalSecuringForPackage(p.id),
+          db.ensureFinalSecuringForPackage(p.id),
+        ])
+      );
 
       // Load package info for originals
       const originalIds = list.map((p: any) => p.original_pkg_info).filter(Boolean);

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput } from 'react-native';
 
 export interface DimensionsTriple {
@@ -40,6 +40,15 @@ const TripleRowReadOnly: React.FC<{ title: string; dims: DimensionsTriple | null
   </View>
 );
 
+const DIM_FIELDS: (keyof DimensionsTriple)[] = ['length', 'width', 'height'];
+
+const toNumberOrNull = (s: string) => {
+  const t = s.trim();
+  if (t.length === 0) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+};
+
 const TripleRowEditable: React.FC<{
   title: string;
   value: DimensionsTriple | null | undefined;
@@ -48,66 +57,107 @@ const TripleRowEditable: React.FC<{
   onInputFocus?: () => void;
   onInputBlur?: () => void;
 }> = ({ title, value, onChange, editable = true, onInputFocus, onInputBlur }) => {
-  const pick = (field: keyof DimensionsTriple): string => {
-    const v = value?.[field];
-    return v === null || v === undefined ? '' : String(v);
+  // Local string drafts so typing isn't round-tripped through the parent on
+  // every keystroke (which collapsed "1." to "1" and lost fast keystrokes).
+  const fromProps = () => ({
+    length: value?.length === null || value?.length === undefined ? '' : String(value.length),
+    width: value?.width === null || value?.width === undefined ? '' : String(value.width),
+    height: value?.height === null || value?.height === undefined ? '' : String(value.height),
+  });
+  const [draft, setDraft] = useState<Record<keyof DimensionsTriple, string>>(fromProps);
+  const focusedFieldRef = useRef<keyof DimensionsTriple | null>(null);
+  const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingPatchRef = useRef<Partial<DimensionsTriple> | null>(null);
+
+  // Sync drafts from props only while the user isn't typing in this row
+  useEffect(() => {
+    if (focusedFieldRef.current || pendingPatchRef.current) return;
+    setDraft(fromProps());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value?.length, value?.width, value?.height]);
+
+  const flushCommit = () => {
+    if (commitTimerRef.current) {
+      clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = null;
+    }
+    const pending = pendingPatchRef.current;
+    pendingPatchRef.current = null;
+    if (pending && Object.keys(pending).length > 0) onChange(pending);
   };
-  const toNumberOrNull = (s: string) => {
-    const t = s.trim();
-    if (t.length === 0) return null;
-    const n = Number(t);
-    return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+
+  const scheduleCommit = (field: keyof DimensionsTriple, text: string) => {
+    pendingPatchRef.current = { ...pendingPatchRef.current, [field]: toNumberOrNull(text) };
+    if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = setTimeout(flushCommit, 600);
   };
-  
+
+  // Commit anything still pending if the row unmounts mid-typing.
+  // Read through a ref so the unmount cleanup uses the latest onChange closure.
+  const flushCommitRef = useRef(flushCommit);
+  useEffect(() => {
+    flushCommitRef.current = flushCommit;
+  });
+  useEffect(() => {
+    return () => flushCommitRef.current();
+  }, []);
+
+  // Refs for Length → Width → Height focus chaining
+  const inputRefs = {
+    length: useRef<TextInput>(null),
+    width: useRef<TextInput>(null),
+    height: useRef<TextInput>(null),
+  };
+
   const inputClass = `border border-gray-300 rounded py-1 text-center ${!editable ? 'bg-gray-200 text-gray-500' : 'bg-white'}`;
   const titleClass =
     title === 'Final'
       ? 'text-[10px] text-green-900 mb-1 bg-green-100 text-center w-full'
       : 'text-[10px] text-amber-900 mb-1 bg-amber-100 text-center w-full';
+  const fieldLabel: Record<keyof DimensionsTriple, string> = {
+    length: 'Length',
+    width: 'Width',
+    height: 'Height',
+  };
 
   return (
     <View className="bg-gray-50 border border-indigo-200 rounded-lg px-2 py-2 mb-2 items-center justify-center">
       <Text className={titleClass}>{title}</Text>
       <View className="flex-row items-center justify-between" style={{ width: '75%' }}>
-        <View className="items-center">
-          <Text className="text-[10px] text-gray-500">Length</Text>
-          <TextInput
-            className={inputClass}
-            value={pick('length')}
-            onChangeText={(t) => onChange({ length: toNumberOrNull(t) })}
-            keyboardType="numeric"
-            style={{ width: 70 }}
-            editable={editable}
-            onFocus={onInputFocus}
-            onBlur={onInputBlur}
-          />
-        </View>
-        <View className="items-center">
-          <Text className="text-[10px] text-gray-500">Width</Text>
-          <TextInput
-            className={inputClass}
-            value={pick('width')}
-            onChangeText={(t) => onChange({ width: toNumberOrNull(t) })}
-            keyboardType="numeric"
-            style={{ width: 70 }}
-            editable={editable}
-            onFocus={onInputFocus}
-            onBlur={onInputBlur}
-          />
-        </View>
-        <View className="items-center">
-          <Text className="text-[10px] text-gray-500">Height</Text>
-          <TextInput
-            className={inputClass}
-            value={pick('height')}
-            onChangeText={(t) => onChange({ height: toNumberOrNull(t) })}
-            keyboardType="numeric"
-            style={{ width: 70 }}
-            editable={editable}
-            onFocus={onInputFocus}
-            onBlur={onInputBlur}
-          />
-        </View>
+        {DIM_FIELDS.map((field, idx) => {
+          const nextField = DIM_FIELDS[idx + 1];
+          return (
+            <View className="items-center" key={field}>
+              <Text className="text-[10px] text-gray-500">{fieldLabel[field]}</Text>
+              <TextInput
+                ref={inputRefs[field]}
+                className={inputClass}
+                value={draft[field]}
+                onChangeText={(t) => {
+                  setDraft((d) => ({ ...d, [field]: t }));
+                  scheduleCommit(field, t);
+                }}
+                keyboardType="numeric"
+                style={{ width: 70 }}
+                editable={editable}
+                returnKeyType={nextField ? 'next' : 'done'}
+                blurOnSubmit={!nextField}
+                onSubmitEditing={() => {
+                  if (nextField) inputRefs[nextField].current?.focus();
+                }}
+                onFocus={() => {
+                  focusedFieldRef.current = field;
+                  onInputFocus?.();
+                }}
+                onBlur={() => {
+                  if (focusedFieldRef.current === field) focusedFieldRef.current = null;
+                  flushCommit();
+                  onInputBlur?.();
+                }}
+              />
+            </View>
+          );
+        })}
       </View>
     </View>
   );

@@ -208,4 +208,5 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({ orderPackageId
 };
 
 
-export default CommentsSection;
+// Memoized: primitive props — skips re-render when parent rebuilds tab JSX.
+export default React.memo(CommentsSection);

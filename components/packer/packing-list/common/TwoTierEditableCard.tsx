@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Keyboard } from 'react-native';
 import SimpleSelect from '../section_04_tasks/subcomponents/SimpleSelect';
 
@@ -21,6 +21,10 @@ interface TwoTierEditableCardProps {
   draftValue?: any; // optional externally-provided draft value to display (from parent pending state)
   commitDebounceMs?: number; // optional debounce for text/number commit
   highlightChanges?: boolean;
+  /** Ref attached to the editable TextInput, for cross-card focus chaining */
+  inputRef?: React.RefObject<TextInput | null>;
+  /** When set, the keyboard shows "next" and submit focuses this input */
+  nextInputRef?: React.RefObject<TextInput | null>;
 }
 
 const formatValue = (v: any) => {
@@ -33,7 +37,7 @@ const formatValue = (v: any) => {
   return String(v);
 };
 
-const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, original, final, type, onChange, selectItems, width, flex, finalSelectValue, defaultSelectValue, compact = false, editTarget = 'final', editable = true, draftValue, commitDebounceMs = 600, highlightChanges = false }) => {
+const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, original, final, type, onChange, selectItems, width, flex, finalSelectValue, defaultSelectValue, compact = false, editTarget = 'final', editable = true, draftValue, commitDebounceMs = 600, highlightChanges = false, inputRef, nextInputRef }) => {
   const [activeEditTarget, setActiveEditTarget] = useState<'original' | 'final'>(editTarget);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const isEditingOriginal = activeEditTarget === 'original';
@@ -51,8 +55,15 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
     }
   }, [editTarget, isInputFocused]);
 
-  // Keep internal state in sync when props or draft change, but don't commit on programmatic sync
+  // Pending debounced commit for text/number typing
+  const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingCommitRef = useRef<{ val: any; tier: 'original' | 'final' } | null>(null);
+
+  // Keep internal state in sync when props or draft change, but don't commit on programmatic sync.
+  // Never clobber the value while the user is typing or a commit is still pending —
+  // the save→refetch echo arriving mid-typing is what turned "100" into "10".
   useEffect(() => {
+    if (isInputFocused || pendingCommitRef.current) return;
     let next: any;
     if (draftValue !== undefined) {
       next = draftValue;
@@ -63,10 +74,9 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
     }
     setVal(next);
     setTouched(false); // reset touched so programmatic changes don't trigger commits
-  }, [original, final, finalSelectValue, defaultSelectValue, type, editTarget, draftValue, isEditingOriginal]);
+  }, [original, final, finalSelectValue, defaultSelectValue, type, editTarget, draftValue, isEditingOriginal, isInputFocused]);
 
-  // Immediate stage: propagate on each user change so Save always sees latest drafts
-  // For numbers, parse into number|null; for text, pass string|null on empty
+  // Propagate a value to the parent. For numbers, parse into number|null.
   const stageImmediate = async (nextVal: any, tier: 'original' | 'final') => {
     if (!editable) return;
     if (type === 'number') {
@@ -77,6 +87,39 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
       await onChange(nextVal, tier);
     }
   };
+
+  // Debounced commit while typing: one save per pause instead of one per keystroke
+  const scheduleCommit = (nextVal: any, tier: 'original' | 'final') => {
+    pendingCommitRef.current = { val: nextVal, tier };
+    if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = setTimeout(() => {
+      commitTimerRef.current = null;
+      const pending = pendingCommitRef.current;
+      pendingCommitRef.current = null;
+      if (pending) stageImmediate(pending.val, pending.tier);
+    }, commitDebounceMs);
+  };
+
+  const flushCommit = () => {
+    if (commitTimerRef.current) {
+      clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = null;
+    }
+    const pending = pendingCommitRef.current;
+    pendingCommitRef.current = null;
+    if (pending) stageImmediate(pending.val, pending.tier);
+  };
+
+  // Commit any in-flight value if the component unmounts mid-typing.
+  // The flush is read through a ref so the unmount cleanup calls the LATEST
+  // closure (latest onChange/state), not the one captured on first render.
+  const flushCommitRef = useRef(flushCommit);
+  useEffect(() => {
+    flushCommitRef.current = flushCommit;
+  });
+  useEffect(() => {
+    return () => flushCommitRef.current();
+  }, []);
 
   // Check if final value was modified from original
   const hasChanged = !isEditingOriginal && final !== null && final !== undefined && original !== final;
@@ -111,15 +154,16 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
             <View style={{ width: compact ? '90%' : '85%' }}>
               <TextInput
                 className="border border-gray-200 bg-white rounded px-1 py-1 text-center"
+                ref={inputRef}
                 value={val === null || val === undefined ? '' : String(val)}
-                onChangeText={async (t) => { setVal(t); setTouched(true); await stageImmediate(t, 'original'); }}
+                onChangeText={(t) => { setVal(t); setTouched(true); scheduleCommit(t, 'original'); }}
                 keyboardType={type === 'number' ? 'numeric' : 'default'}
                 style={{ width: '100%', textAlign: 'center' }}
-                returnKeyType="done"
-                blurOnSubmit
+                returnKeyType={nextInputRef ? 'next' : 'done'}
+                blurOnSubmit={!nextInputRef}
                 onFocus={() => setIsInputFocused(true)}
-                onBlur={() => setIsInputFocused(false)}
-                onSubmitEditing={() => Keyboard.dismiss()}
+                onBlur={() => { setIsInputFocused(false); flushCommit(); }}
+                onSubmitEditing={() => { if (nextInputRef) nextInputRef.current?.focus(); else Keyboard.dismiss(); }}
               />
             </View>
           )
@@ -148,15 +192,16 @@ const TwoTierEditableCard: React.FC<TwoTierEditableCardProps> = ({ label, origin
             <View style={{ width: compact ? '90%' : '85%' }}>
               <TextInput
                 className="border border-gray-200 bg-white rounded px-1 py-1 text-center"
+                ref={inputRef}
                 value={val === null || val === undefined ? '' : String(val)}
-                onChangeText={async (t) => { setVal(t); setTouched(true); await stageImmediate(t, 'final'); }}
+                onChangeText={(t) => { setVal(t); setTouched(true); scheduleCommit(t, 'final'); }}
                 keyboardType={type === 'number' ? 'numeric' : 'default'}
                 style={{ width: '100%', textAlign: 'center' }}
-                returnKeyType="done"
-                blurOnSubmit
+                returnKeyType={nextInputRef ? 'next' : 'done'}
+                blurOnSubmit={!nextInputRef}
                 onFocus={() => setIsInputFocused(true)}
-                onBlur={() => setIsInputFocused(false)}
-                onSubmitEditing={() => Keyboard.dismiss()}
+                onBlur={() => { setIsInputFocused(false); flushCommit(); }}
+                onSubmitEditing={() => { if (nextInputRef) nextInputRef.current?.focus(); else Keyboard.dismiss(); }}
               />
             </View>
           )

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import { Alert } from 'react-native';
 import { db } from './api/supabase';
 import { useAuth } from './AuthContext';
@@ -70,18 +70,18 @@ export const PackerSessionProvider: React.FC<PackerSessionProviderProps> = ({ ch
   const [isRetrospectiveMode, setRetrospectiveMode] = useState<boolean>(false);
   const [retrospectiveDate, setRetrospectiveDate] = useState<Date | null>(null);
 
-  const getRetrospectiveTimestamp = () => {
+  const getRetrospectiveTimestamp = useCallback(() => {
     if (!isRetrospectiveMode || !retrospectiveDate) {
       return new Date().toISOString();
     }
-    
+
     // Increment the retrospective date by 1 minute on each call so things happen chronologically
     const current = new Date(retrospectiveDate);
     const next = new Date(current.getTime() + 60000); // add 1 minute
     setRetrospectiveDate(next);
-    
+
     return current.toISOString();
-  };
+  }, [isRetrospectiveMode, retrospectiveDate]);
 
   // Only load session for packer role users
   useEffect(() => {
@@ -165,7 +165,7 @@ export const PackerSessionProvider: React.FC<PackerSessionProviderProps> = ({ ch
     }
   };
 
-  const createSession = async (orderId: string, orderData: any): Promise<boolean> => {
+  const createSession = useCallback(async (orderId: string, orderData: any): Promise<boolean> => {
     if (!profile?.id) {
       Alert.alert('Error', 'User not authenticated');
       return false;
@@ -220,9 +220,9 @@ export const PackerSessionProvider: React.FC<PackerSessionProviderProps> = ({ ch
       Alert.alert('Error', 'An unexpected error occurred');
       return false;
     }
-  };
+  }, [profile?.id]);
 
-  const updateSession = async (updates: Partial<PackerSession>): Promise<boolean> => {
+  const updateSession = useCallback(async (updates: Partial<PackerSession>): Promise<boolean> => {
     if (!session?.id) {
       console.error('No active session to update');
       return false;
@@ -243,9 +243,9 @@ export const PackerSessionProvider: React.FC<PackerSessionProviderProps> = ({ ch
       console.error('Error in updateSession:', error);
       return false;
     }
-  };
+  }, [session]);
 
-  const completeSession = async (): Promise<boolean> => {
+  const completeSession = useCallback(async (): Promise<boolean> => {
     if (!session?.id) return false;
 
     try {
@@ -266,37 +266,37 @@ export const PackerSessionProvider: React.FC<PackerSessionProviderProps> = ({ ch
       console.error('Error in completeSession:', error);
       return false;
     }
-  };
+  }, [session?.id]);
 
-  const clearSession = () => {
+  const clearSession = useCallback(() => {
     setSession(null);
-  };
+  }, []);
 
   // Progress tracking helpers
-  const markTeamSelected = async (): Promise<boolean> => {
+  const markTeamSelected = useCallback(async (): Promise<boolean> => {
     return await updateSession({ team_selected: true });
-  };
+  }, [updateSession]);
 
-  const markAttendanceCompleted = async (): Promise<boolean> => {
+  const markAttendanceCompleted = useCallback(async (): Promise<boolean> => {
     return await updateSession({ attendance_completed: true });
-  };
+  }, [updateSession]);
 
-  const markPackagingStarted = async (): Promise<boolean> => {
+  const markPackagingStarted = useCallback(async (): Promise<boolean> => {
     return await updateSession({ packaging_started: true });
-  };
+  }, [updateSession]);
 
   // Validation helpers
-  const canAccessAttendance = (): boolean => {
+  const canAccessAttendance = useCallback((): boolean => {
     return session?.team_selected === true;
-  };
+  }, [session?.team_selected]);
 
-  const canAccessPackaging = (): boolean => {
+  const canAccessPackaging = useCallback((): boolean => {
     // Allow all packers to access packing list after team selection
     // Only team leaders need to complete attendance marking
     return session?.team_selected === true;
-  };
+  }, [session?.team_selected]);
 
-  const value: PackerSessionContextType = {
+  const value: PackerSessionContextType = useMemo(() => ({
     session,
     loading,
     createSession,
@@ -313,7 +313,22 @@ export const PackerSessionProvider: React.FC<PackerSessionProviderProps> = ({ ch
     setRetrospectiveMode,
     setRetrospectiveDate,
     getRetrospectiveTimestamp
-  };
+  }), [
+    session,
+    loading,
+    createSession,
+    updateSession,
+    completeSession,
+    clearSession,
+    markTeamSelected,
+    markAttendanceCompleted,
+    markPackagingStarted,
+    canAccessAttendance,
+    canAccessPackaging,
+    isRetrospectiveMode,
+    retrospectiveDate,
+    getRetrospectiveTimestamp
+  ]);
 
   return (
     <PackerSessionContext.Provider value={value}>

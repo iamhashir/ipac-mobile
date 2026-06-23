@@ -790,6 +790,25 @@ const baseDb = {
     return { data, error };
   },
 
+  // Batch: team members (with lead flag) for many orders in one query
+  getTeamMembersForOrders: async (orderIds: UUID[]) => {
+    const { data, error } = await supabase
+      .from('order_team_members')
+      .select(`
+        order_id,
+        packer_id,
+        is_team_lead,
+        profiles (
+          id,
+          full_name,
+          username
+        )
+      `)
+      .in('order_id', orderIds);
+
+    return { data, error };
+  },
+
   // Get packers assigned to an order (using new JSON structure)
   getOrderPackers: async (orderId: UUID) => {
     const { data, error } = await supabase
@@ -2033,6 +2052,100 @@ const baseDb = {
     return await query;
   },
 
+  // Standard-box destination pool: items allocated to this order + destination for standard
+  // boxes (order_item_allocation.is_standard_box = true). The packer SB picker uses this so
+  // only the right-destination items are offered — replacing the old warehouse_location match.
+  // expected_qty/packed_qty come from the ALLOCATION row (the per-destination amount).
+  getStandardBoxAllocationItems: async (
+    orderId: UUID,
+    destination: string | null
+  ) => {
+    const code =
+      String(destination || '')
+        .replace(/[\r\n\t]+/g, '')
+        .trim()
+        .toUpperCase() || 'UNASSIGNED';
+
+    const { data: dest, error: destErr } = await supabase
+      .from('destinations')
+      .select('id')
+      .eq('code', code)
+      .maybeSingle();
+    if (destErr) return { data: null, error: destErr };
+    if (!dest?.id) return { data: [], error: null };
+
+    return await supabase
+      .from('order_item_allocation')
+      .select(`
+        expected_qty,
+        packed_qty,
+        items_db:items_db(
+          id, client_id, category_id, reference, ipac_comments, item_num, description,
+          length, width, height, net_weight, warehouse_location,
+          pkg_category:pkg_category(
+            id, label,
+            category_tag_map(tag:project_tags(id, name))
+          ),
+          pkd_item:pkd_item(
+            id, quantity,
+            instance:order_pkg_instance(
+              id, ipac_reference,
+              package:order_packages(
+                id, package_number,
+                order:orders(id, order_name)
+              )
+            )
+          )
+        )
+      `)
+      .eq('order_id', orderId)
+      .eq('destination_id', dest.id)
+      .eq('is_standard_box', true);
+  },
+
+  // Packer "request more": raise an allocation-increase ticket for an admin to review.
+  // Resolves the box's destination text to destinations.id and stamps requested_by from auth.
+  createAllocationIncreaseRequest: async (params: {
+    orderId: UUID;
+    itemsDbId: UUID;
+    destination: string | null;
+    requestedDelta: number;
+    reason?: string | null;
+    orderPackageId?: UUID | null;
+  }) => {
+    const { data: { user }, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !user) {
+      return { data: null, error: authErr ?? new Error('Not authenticated') };
+    }
+    const code =
+      String(params.destination || '')
+        .replace(/[\r\n\t]+/g, '')
+        .trim()
+        .toUpperCase() || 'UNASSIGNED';
+    const { data: dest, error: destErr } = await supabase
+      .from('destinations')
+      .select('id')
+      .eq('code', code)
+      .maybeSingle();
+    if (destErr) return { data: null, error: destErr };
+    if (!dest?.id) {
+      return { data: null, error: new Error(`Unknown destination "${code}"`) };
+    }
+    return supabase
+      .from('allocation_increase_requests')
+      .insert({
+        order_id: params.orderId,
+        items_db_id: params.itemsDbId,
+        destination_id: dest.id,
+        requested_delta: params.requestedDelta,
+        reason: params.reason ?? null,
+        requested_by: user.id,
+        order_package_context: params.orderPackageId ?? null,
+      })
+      .select('id')
+      .single();
+  },
+
   updateItemDimensions: async (
     itemId: UUID,
     dims: { length: number | null; width: number | null; height: number | null }
@@ -2333,31 +2446,14 @@ const baseDb = {
       };
     }
 
-    const expectedQty = Number(catalogItem.expected_qty);
-    const packedQty = Number(catalogItem.packed_qty);
-    if (Number.isFinite(expectedQty) && expectedQty > 0) {
-      const safePackedQty = Number.isFinite(packedQty) ? packedQty : 0;
-      const remainingQty = Math.max(0, expectedQty - safePackedQty);
-      const itemLabel =
-        catalogItem.item_num ||
-        catalogItem.reference ||
-        catalogItem.description ||
-        'Selected item';
-
-      if (remainingQty <= 0) {
-        return {
-          data: null,
-          error: { message: `${itemLabel} is already fully packed and cannot be assigned again.` },
-        };
-      }
-
-      if (parsedQty > remainingQty) {
-        return {
-          data: null,
-          error: { message: `Only ${remainingQty} remaining for ${itemLabel}. Reduce quantity to continue.` },
-        };
-      }
-    }
+    const itemLabel =
+      catalogItem.item_num ||
+      catalogItem.reference ||
+      catalogItem.description ||
+      'Selected item';
+    // NOTE: the quota cap is enforced further down, AFTER the target instance is resolved,
+    // so it can use the per-destination order_item_allocation (the authoritative cap) and
+    // only fall back to the global items_db rollup for items with no allocation row.
 
     const normalizeInstanceStatus = (
       statusValue: unknown
@@ -2541,6 +2637,107 @@ const baseDb = {
       };
     }
 
+    // Per-destination quota cap. Prefer this box's order_item_allocation (kept in sync by
+    // DB triggers) — the authoritative cap. Fall back to the global items_db rollup only
+    // when the item has no allocation row (e.g. ad-hoc / non-allocation packing).
+    {
+      const { data: capInstance, error: capInstanceError } = await supabase
+        .from('order_pkg_instance')
+        .select('destination, order_pkg_overview_id')
+        .eq('id', targetInstanceId)
+        .maybeSingle();
+      if (capInstanceError) {
+        return { data: null, error: capInstanceError };
+      }
+
+      let capOrderId: UUID | null = null;
+      if (capInstance?.order_pkg_overview_id) {
+        const { data: capOverview } = await supabase
+          .from('order_pkg_overview')
+          .select('order_id')
+          .eq('id', capInstance.order_pkg_overview_id)
+          .maybeSingle();
+        capOrderId = (capOverview?.order_id as UUID) || null;
+      }
+
+      let allocExpectedQty: number | null = null;
+      let allocRemaining = 0;
+      if (capOrderId) {
+        const destCode =
+          String(capInstance?.destination || '')
+            .replace(/[\r\n\t]+/g, '')
+            .trim()
+            .toUpperCase() || 'UNASSIGNED';
+        const { data: destRow } = await supabase
+          .from('destinations')
+          .select('id')
+          .eq('code', destCode)
+          .maybeSingle();
+        let destId: UUID | null = (destRow?.id as UUID) || null;
+        if (!destId) {
+          const { data: fallbackDest } = await supabase
+            .from('destinations')
+            .select('id')
+            .eq('code', 'UNASSIGNED')
+            .maybeSingle();
+          destId = (fallbackDest?.id as UUID) || null;
+        }
+        if (destId) {
+          const { data: allocRow } = await supabase
+            .from('order_item_allocation')
+            .select('expected_qty, packed_qty')
+            .eq('order_id', capOrderId)
+            .eq('items_db_id', maintenanceDbId)
+            .eq('destination_id', destId)
+            .maybeSingle();
+          if (allocRow) {
+            const ae = Number(allocRow.expected_qty);
+            const ap = Number(allocRow.packed_qty);
+            allocExpectedQty = Number.isFinite(ae) ? ae : 0;
+            allocRemaining = Math.max(0, allocExpectedQty - (Number.isFinite(ap) ? ap : 0));
+          }
+        }
+      }
+
+      if (allocExpectedQty !== null) {
+        // Per-destination allocation cap (authoritative).
+        if (allocExpectedQty > 0) {
+          if (allocRemaining <= 0) {
+            return {
+              data: null,
+              error: { message: `${itemLabel} is fully packed for this destination. Use "Request more" to raise the allocation.` },
+            };
+          }
+          if (parsedQty > allocRemaining) {
+            return {
+              data: null,
+              error: { message: `Only ${allocRemaining} remaining for ${itemLabel} at this destination.` },
+            };
+          }
+        }
+      } else {
+        // No allocation row: fall back to the global items_db rollup cap.
+        const expectedQty = Number(catalogItem.expected_qty);
+        const packedQty = Number(catalogItem.packed_qty);
+        if (Number.isFinite(expectedQty) && expectedQty > 0) {
+          const safePackedQty = Number.isFinite(packedQty) ? packedQty : 0;
+          const remainingQty = Math.max(0, expectedQty - safePackedQty);
+          if (remainingQty <= 0) {
+            return {
+              data: null,
+              error: { message: `${itemLabel} is already fully packed and cannot be assigned again.` },
+            };
+          }
+          if (parsedQty > remainingQty) {
+            return {
+              data: null,
+              error: { message: `Only ${remainingQty} remaining for ${itemLabel}. Reduce quantity to continue.` },
+            };
+          }
+        }
+      }
+    }
+
     const { data: existing, error: existingError } = await supabase
       .from('pkd_item')
       .select('id, quantity')
@@ -2563,12 +2760,12 @@ const baseDb = {
         .single();
 
       if (!error) {
-        // Sync items_db packed_qty
-        const currentPacked = Number(catalogItem.packed_qty || 0);
-        await supabase
-          .from('items_db')
-          .update({ packed_qty: currentPacked + parsedQty })
-          .eq('id', maintenanceDbId);
+        // Atomically bump the items_db rollup packed_qty (avoids the lost-update race of a
+        // client-side read-modify-write under concurrent packers).
+        await supabase.rpc('increment_item_packed_qty', {
+          item_id: maintenanceDbId,
+          amount: parsedQty,
+        });
       }
 
       return { data, error };
@@ -2585,12 +2782,12 @@ const baseDb = {
       .single();
 
     if (!error) {
-      // Sync items_db packed_qty
-      const currentPacked = Number(catalogItem.packed_qty || 0);
-      await supabase
-        .from('items_db')
-        .update({ packed_qty: currentPacked + parsedQty })
-        .eq('id', maintenanceDbId);
+      // Atomically bump the items_db rollup packed_qty (avoids the lost-update race of a
+      // client-side read-modify-write under concurrent packers).
+      await supabase.rpc('increment_item_packed_qty', {
+        item_id: maintenanceDbId,
+        amount: parsedQty,
+      });
     }
 
     return { data, error };
@@ -2623,20 +2820,11 @@ const baseDb = {
 
       if (deleteError) return { data: null, error: deleteError };
 
-      // 3. Decrement packed_qty in master catalog
-      const { data: catalogItem } = await supabase
-        .from('items_db')
-        .select('packed_qty')
-        .eq('id', itemData.maintenance_db_id)
-        .single();
-
-      if (catalogItem) {
-        const newPacked = Math.max(0, Number(catalogItem.packed_qty || 0) - Number(itemData.quantity || 0));
-        await supabase
-          .from('items_db')
-          .update({ packed_qty: newPacked })
-          .eq('id', itemData.maintenance_db_id);
-      }
+      // 4. Atomically decrement the items_db rollup packed_qty (clamped at 0 in the RPC).
+      await supabase.rpc('decrement_item_packed_qty', {
+        item_id: itemData.maintenance_db_id,
+        amount: Number(itemData.quantity || 0),
+      });
 
       return { data: { success: true }, error: null };
     } catch (e: any) {
@@ -2758,13 +2946,6 @@ const baseDb = {
     });
 
     return { data: mediaWithUrls, error: null };
-  },
-
-  deleteMedia: async (mediaId: UUID) => {
-    // 1. Get path from URL if possible, or just delete the row first
-    // For simplicity, we delete the row. Ideally we'd also delete from storage.
-    const { error } = await supabase.from('media').delete().eq('id', mediaId);
-    return { error };
   },
 
   // ===== Box Creation Flow Helpers =====
@@ -2922,6 +3103,55 @@ const baseDb = {
       .eq('id', instanceId);
 
     return { error };
+  },
+
+  /**
+   * Resolves the default destination and category for new boxes in an order,
+   * inherited from the order's most recently created instance that has them set.
+   */
+  getOrderBoxDefaults: async (
+    orderId: UUID
+  ): Promise<{ destination: string | null; categoryId: UUID | null }> => {
+    const { data, error } = await supabase
+      .from('order_pkg_instance')
+      .select('destination, category_id, created_at, order_pkg_overview!inner(order_id)')
+      .eq('order_pkg_overview.order_id', orderId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (error || !data?.length) return { destination: null, categoryId: null };
+
+    const rows = data as any[];
+    const destRow = rows.find((r) => String(r.destination || '').trim());
+    const catRow = rows.find((r) => r.category_id);
+
+    return {
+      destination: destRow ? String(destRow.destination).trim().toUpperCase() : null,
+      categoryId: catRow?.category_id ?? null,
+    };
+  },
+
+  /**
+   * Comma-separated project tag names for a category, in tag_order sequence.
+   * Stored on order_pkg_instance.tag so report tag filters can match by name.
+   */
+  getCategoryTagNames: async (categoryId: UUID): Promise<string | null> => {
+    const { data, error } = await supabase
+      .from('category_tag_map')
+      .select('tag_order, tag:project_tags(name)')
+      .eq('category_id', categoryId)
+      .order('tag_order', { ascending: true });
+
+    if (error || !data?.length) return null;
+
+    const names = (data as any[])
+      .map((row) => {
+        const tag = Array.isArray(row.tag) ? row.tag[0] : row.tag;
+        return String(tag?.name || '').trim();
+      })
+      .filter(Boolean);
+
+    return names.length ? names.join(', ') : null;
   },
 };
 

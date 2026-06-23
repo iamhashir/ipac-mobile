@@ -56,4 +56,5 @@ const AccessoriesSection: React.FC<AccessoriesSectionProps> = ({
   );
 };
 
-export default AccessoriesSection;
+// Memoized: primitive props — skips re-render when parent rebuilds tab JSX.
+export default React.memo(AccessoriesSection);

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Alert, Text } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../utils/api/supabase";
+import { useToast } from "../../components/ui/Toast";
 
 // Import our inventory API functions
 import {
@@ -31,6 +32,7 @@ import {
 type TabType = "materials" | "suppliers" | "tags" | "settings";
 
 export default function InventoryPage() {
+  const toast = useToast();
   // State management
   const [activeTab, setActiveTab] = useState<TabType>("materials");
   const [searchQuery, setSearchQuery] = useState("");
@@ -120,7 +122,7 @@ export default function InventoryPage() {
 
       if (error) throw error;
 
-      Alert.alert("Success", "Price alert settings saved successfully");
+      toast.success("Price alert settings saved");
       setShowPriceAlerts(false);
     } catch (error) {
       console.error("Error saving price settings:", error);
@@ -152,7 +154,10 @@ export default function InventoryPage() {
         tagsResult.error ||
         unitsResult.error
       ) {
-        Alert.alert("Error", "Failed to load inventory data");
+        Alert.alert("Error", "Failed to load inventory data", [
+          { text: "Retry", onPress: () => loadData(true) },
+          { text: "Dismiss", style: "cancel" },
+        ]);
         return;
       }
 
@@ -167,7 +172,10 @@ export default function InventoryPage() {
       setUnits(u);
     } catch (error) {
       console.error("Error loading data:", error);
-      Alert.alert("Error", "Failed to load inventory data");
+      Alert.alert("Error", "Failed to load inventory data", [
+        { text: "Retry", onPress: () => loadData(true) },
+        { text: "Dismiss", style: "cancel" },
+      ]);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -195,7 +203,7 @@ export default function InventoryPage() {
         }
       }
 
-      Alert.alert("Success", "Material created successfully");
+      toast.success("Material created");
       setShowMaterialForm(false);
       setSelectedMaterial(null);
       loadData(false);
@@ -249,7 +257,7 @@ export default function InventoryPage() {
         }
       }
 
-      Alert.alert("Success", "Material updated successfully");
+      toast.success("Material updated");
       setShowMaterialForm(false);
       setSelectedMaterial(null);
       loadData(false);
@@ -298,7 +306,7 @@ export default function InventoryPage() {
         Alert.alert("Error", "Failed to create supplier");
         return;
       }
-      Alert.alert("Success", "Supplier created successfully");
+      toast.success("Supplier created");
       setShowSupplierForm(false);
       setSelectedSupplier(null);
       loadData(false);
@@ -320,7 +328,7 @@ export default function InventoryPage() {
         Alert.alert("Error", "Failed to update supplier");
         return;
       }
-      Alert.alert("Success", "Supplier updated successfully");
+      toast.success("Supplier updated");
       setShowSupplierForm(false);
       setSelectedSupplier(null);
       loadData(false);
@@ -337,7 +345,7 @@ export default function InventoryPage() {
         Alert.alert("Error", "Failed to delete supplier");
         return;
       }
-      Alert.alert("Success", "Supplier deleted successfully");
+      toast.success("Supplier deleted");
       loadData(false);
     } catch (error) {
       console.error("Error deleting supplier:", error);
@@ -353,7 +361,7 @@ export default function InventoryPage() {
         Alert.alert("Error", "Failed to create tag");
         return;
       }
-      Alert.alert("Success", "Tag created successfully");
+      toast.success("Tag created");
       loadData(false);
     } catch (error) {
       console.error("Error creating tag:", error);
@@ -368,7 +376,7 @@ export default function InventoryPage() {
         Alert.alert("Error", "Failed to update tag");
         return;
       }
-      Alert.alert("Success", "Tag updated successfully");
+      toast.success("Tag updated");
       loadData(false);
     } catch (error) {
       console.error("Error updating tag:", error);
@@ -383,7 +391,7 @@ export default function InventoryPage() {
         Alert.alert("Error", "Failed to delete tag");
         return;
       }
-      Alert.alert("Success", "Tag deleted successfully");
+      toast.success("Tag deleted");
       loadData(false);
     } catch (error) {
       console.error("Error deleting tag:", error);
@@ -418,7 +426,7 @@ export default function InventoryPage() {
         setNewUnitName("");
         setNewUnitDescription("");
         setShowUnitModal(false);
-        Alert.alert("Success", "Unit added");
+        toast.success("Unit added");
       }
     } catch (e) {
       console.error("Error creating unit:", e);

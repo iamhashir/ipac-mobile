@@ -123,4 +123,5 @@ const GasPackingSection: React.FC<GasPackingSectionProps> = ({
   );
 };
 
-export default GasPackingSection;
+// Memoized: primitive props — skips re-render when parent rebuilds tab JSX.
+export default React.memo(GasPackingSection);

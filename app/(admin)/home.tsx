@@ -97,7 +97,7 @@ const generateChartData = async (period: TimePeriod): Promise<ChartData> => {
 
     const { data: orders, error } = await supabase
       .from('orders')
-      .select('id, created_at')
+      .select('created_at')
       .gte('created_at', startDate.toISOString())
       .order('created_at', { ascending: true });
 

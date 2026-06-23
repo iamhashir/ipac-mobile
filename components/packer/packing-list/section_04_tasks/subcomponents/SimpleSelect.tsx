@@ -81,6 +81,10 @@ const SimpleSelect: React.FC<SimpleSelectProps> = ({ label, items, value, onChan
               data={filtered}
               keyExtractor={(it) => it.value}
               keyboardShouldPersistTaps="handled"
+              initialNumToRender={15}
+              maxToRenderPerBatch={20}
+              windowSize={7}
+              removeClippedSubviews
               renderItem={({ item }) => (
                 <TouchableOpacity
                   className="px-3 py-3 border-b border-gray-100"

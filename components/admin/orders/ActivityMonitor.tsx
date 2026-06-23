@@ -48,7 +48,7 @@ export default function ActivityMonitor({ orderId, orderPackages }: ActivityMoni
 
     const interval = setInterval(() => {
       loadActivities();
-    }, 10000);
+    }, 30000);
 
     return () => clearInterval(interval);
   }, [orderId, selectedDate]);
@@ -99,8 +99,11 @@ export default function ActivityMonitor({ orderId, orderPackages }: ActivityMoni
 
   const loadActivities = async () => {
     try {
-      // Get all packers for this order
-      const { data: packersData } = await db.getOrderPackers(orderId);
+      // Packers and packages are independent — fetch in parallel
+      const [{ data: packersData }, { data: allPackages }] = await Promise.all([
+        db.getOrderPackers(orderId),
+        db.getOrderPackages(orderId),
+      ]);
       if (!packersData || packersData.length === 0) {
         setTaskActivities([]);
         setIdlePackers([]);
@@ -108,10 +111,8 @@ export default function ActivityMonitor({ orderId, orderPackages }: ActivityMoni
         return;
       }
 
-      // Get ALL task logs for the entire order (not just current packages)
-      const { data: allPackages } = await db.getOrderPackages(orderId);
       const allPackageIds = (allPackages || []).map((p: any) => p.id);
-      
+
       if (allPackageIds.length === 0) {
         setTaskActivities([]);
         setIdlePackers([]);
@@ -119,7 +120,11 @@ export default function ActivityMonitor({ orderId, orderPackages }: ActivityMoni
         return;
       }
 
-      const { data: taskLogs } = await db.getTaskLogsByOrderPackageIds(allPackageIds);
+      // Task logs and busy-packer lookup are independent — fetch in parallel
+      const [{ data: taskLogs }, { data: busyPackerIds }] = await Promise.all([
+        db.getTaskLogsByOrderPackageIds(allPackageIds),
+        db.getBusyPackerIds(),
+      ]);
 
       // Filter tasks by selected date
       const filteredTasks = (taskLogs || []).filter((log: any) => {
@@ -128,8 +133,6 @@ export default function ActivityMonitor({ orderId, orderPackages }: ActivityMoni
         return taskDate === selectedDate;
       });
 
-      // Get busy packer IDs
-      const { data: busyPackerIds } = await db.getBusyPackerIds();
       const busySet = new Set(busyPackerIds || []);
 
       // Group by task logs

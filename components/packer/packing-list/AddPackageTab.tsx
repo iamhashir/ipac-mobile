@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -168,9 +168,20 @@ export default function AddPackageTab({
 
   // Pre-draft form fields
   const [description, setDescription] = useState('');
+
+  // Focus chaining across the six dimension cards: internal L→W→H → external L→W→H
+  const internalWidthRef = useRef<TextInput>(null);
+  const internalHeightRef = useRef<TextInput>(null);
+  const externalLengthRef = useRef<TextInput>(null);
+  const externalWidthRef = useRef<TextInput>(null);
+  const externalHeightRef = useRef<TextInput>(null);
   const [destination, setDestination] = useState('');
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [selectedBoxTypeId, setSelectedBoxTypeId] = useState<string | null>(null);
+
+  // Order-level defaults (inherited by new boxes, editable by the user)
+  const [defaultsLoaded, setDefaultsLoaded] = useState(false);
+  const [autoCreateTried, setAutoCreateTried] = useState(false);
 
   // Picker data
   const [boxTypes, setBoxTypes] = useState<BoxTypeOption[]>([]);
@@ -187,10 +198,11 @@ export default function AddPackageTab({
   // ── Load picker data ────────────────────────────────────────────────────────
   useEffect(() => {
     const load = async () => {
-      const [boxTypesRes, catsRes, packingTypesRes] = await Promise.all([
+      const [boxTypesRes, catsRes, packingTypesRes, orderDefaults] = await Promise.all([
         db.getAllBoxTypes(),
         db.getOrderCategories(orderId),
         db.getAllPackingTypes(),
+        db.getOrderBoxDefaults(orderId),
       ]);
 
       if (boxTypesRes.data) {
@@ -211,6 +223,15 @@ export default function AddPackageTab({
         );
       }
       if (packingTypesRes.data) setPackingTypes(packingTypesRes.data);
+
+      // Inherit the order's defaults; user can still edit before creating
+      if (orderDefaults.destination) {
+        setDestination((prev) => (prev.trim() ? prev : orderDefaults.destination!));
+      }
+      if (orderDefaults.categoryId) {
+        setSelectedCategoryId((prev) => prev ?? orderDefaults.categoryId);
+      }
+      setDefaultsLoaded(true);
     };
     load();
   }, [orderId]);
@@ -227,6 +248,15 @@ export default function AddPackageTab({
 
   // ── Create draft ─────────────────────────────────────────────────────────────
   const handleCreateDraft = async () => {
+    const effectiveDestination = destination.trim().toUpperCase();
+    if (!effectiveDestination) {
+      Alert.alert('Destination required', 'Enter a destination for this box (e.g. ALD).');
+      return;
+    }
+    if (!selectedCategoryId) {
+      Alert.alert('Category required', 'Select a category so the box gets its tags.');
+      return;
+    }
     try {
       setCreating(true);
 
@@ -325,6 +355,8 @@ export default function AddPackageTab({
 
       const nextInstanceNumber = Math.max(1, Number(lastInstanceRow?.instance_number || 0) + 1);
 
+      const tagNames = await db.getCategoryTagNames(selectedCategoryId);
+
       const { data: newInstance, error: createInstanceErr } = await supabase
         .from('order_pkg_instance')
         .insert({
@@ -333,12 +365,26 @@ export default function AddPackageTab({
           instance_number: nextInstanceNumber,
           status: normalizedInstanceStatus,
           packed_at: normalizedInstanceStatus === 'packed' ? new Date().toISOString() : null,
-          destination: destination.trim() || null,
-          category_id: selectedCategoryId || null,
+          destination: effectiveDestination,
+          category_id: selectedCategoryId,
+          tag: tagNames,
         })
         .select('id, instance_number')
         .single();
       if (createInstanceErr || !newInstance?.id) throw createInstanceErr || new Error('Failed to create instance');
+
+      // Maintenance flow skips the catalog step, so generate the IPAC reference
+      // here instead (e.g. "ALD-W-NAC-#03" from destination + tags + box number)
+      if (isMaintenanceFlow) {
+        const tagAbbrev = await db.buildCategoryTagAbbreviation(selectedCategoryId);
+        const refParts = [effectiveDestination];
+        if (tagAbbrev) refParts.push(tagAbbrev);
+        refParts.push(`#${String(packageNumberToCreate).padStart(2, '0')}`);
+        await supabase
+          .from('order_pkg_instance')
+          .update({ ipac_reference: refParts.join('-') })
+          .eq('id', newInstance.id);
+      }
 
       if (!Number.isFinite(overviewQuantity) || overviewQuantity < nextInstanceNumber) {
         await supabase
@@ -436,12 +482,17 @@ export default function AddPackageTab({
     onSaved(draftPackageId);
   };
 
-  // Auto-run for maintenance flow
+  // Auto-run for maintenance flow — only once defaults are known. If the order
+  // has no destination/category to inherit, fall through to the pre-draft form
+  // so the box is never created without them.
   useEffect(() => {
-    if (!isMaintenanceFlow) return;
+    if (!isMaintenanceFlow || !defaultsLoaded || autoCreateTried) return;
     if (draftPackageId || creating) return;
-    handleCreateDraft();
-  }, [isMaintenanceFlow, draftPackageId, creating]);
+    setAutoCreateTried(true);
+    if (destination.trim() && selectedCategoryId) {
+      handleCreateDraft();
+    }
+  }, [isMaintenanceFlow, defaultsLoaded, autoCreateTried, draftPackageId, creating, destination, selectedCategoryId]);
 
   // ── Box type picker options (adapted for InlinePicker) ─────────────────────
   const boxTypeOptions = boxTypes.map((bt) => ({
@@ -462,9 +513,9 @@ export default function AddPackageTab({
           <Text className="text-blue-800 text-xs font-semibold text-center">Internal Dimensions</Text>
         </View>
         <View className="flex-row" style={{ flexWrap: 'nowrap' }}>
-          <TwoTierEditableCard editTarget="original" editable label="Length" original={internalDimensions.length} final={null} type="number" onChange={(v) => saveOriginalDimension('internal', 'length', v)} flex={1} />
-          <TwoTierEditableCard editTarget="original" editable label="Width" original={internalDimensions.width} final={null} type="number" onChange={(v) => saveOriginalDimension('internal', 'width', v)} flex={1} />
-          <TwoTierEditableCard editTarget="original" editable label="Height" original={internalDimensions.height} final={null} type="number" onChange={(v) => saveOriginalDimension('internal', 'height', v)} flex={1} />
+          <TwoTierEditableCard editTarget="original" editable label="Length" original={internalDimensions.length} final={null} type="number" onChange={(v) => saveOriginalDimension('internal', 'length', v)} flex={1} nextInputRef={internalWidthRef} />
+          <TwoTierEditableCard editTarget="original" editable label="Width" original={internalDimensions.width} final={null} type="number" onChange={(v) => saveOriginalDimension('internal', 'width', v)} flex={1} inputRef={internalWidthRef} nextInputRef={internalHeightRef} />
+          <TwoTierEditableCard editTarget="original" editable label="Height" original={internalDimensions.height} final={null} type="number" onChange={(v) => saveOriginalDimension('internal', 'height', v)} flex={1} inputRef={internalHeightRef} nextInputRef={externalLengthRef} />
         </View>
       </View>
       <View className="bg-blue-50 rounded-xl border border-indigo-200 p-2">
@@ -472,9 +523,9 @@ export default function AddPackageTab({
           <Text className="text-blue-800 text-xs font-semibold text-center">External Dimensions</Text>
         </View>
         <View className="flex-row" style={{ flexWrap: 'nowrap' }}>
-          <TwoTierEditableCard editTarget="original" editable label="Length" original={externalDimensions.length} final={null} type="number" onChange={(v) => saveOriginalDimension('external', 'length', v)} flex={1} />
-          <TwoTierEditableCard editTarget="original" editable label="Width" original={externalDimensions.width} final={null} type="number" onChange={(v) => saveOriginalDimension('external', 'width', v)} flex={1} />
-          <TwoTierEditableCard editTarget="original" editable label="Height" original={externalDimensions.height} final={null} type="number" onChange={(v) => saveOriginalDimension('external', 'height', v)} flex={1} />
+          <TwoTierEditableCard editTarget="original" editable label="Length" original={externalDimensions.length} final={null} type="number" onChange={(v) => saveOriginalDimension('external', 'length', v)} flex={1} inputRef={externalLengthRef} nextInputRef={externalWidthRef} />
+          <TwoTierEditableCard editTarget="original" editable label="Width" original={externalDimensions.width} final={null} type="number" onChange={(v) => saveOriginalDimension('external', 'width', v)} flex={1} inputRef={externalWidthRef} nextInputRef={externalHeightRef} />
+          <TwoTierEditableCard editTarget="original" editable label="Height" original={externalDimensions.height} final={null} type="number" onChange={(v) => saveOriginalDimension('external', 'height', v)} flex={1} inputRef={externalHeightRef} />
         </View>
       </View>
     </View>
@@ -483,8 +534,9 @@ export default function AddPackageTab({
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <View style={{ flex: 1 }}>
-      {/* ── STEP 1: Pre-draft form ────────────────────────────────────────── */}
-      {step === 'pre-draft' && !isMaintenanceFlow && (
+      {/* ── STEP 1: Pre-draft form (maintenance flow lands here too when the
+            order has no destination/category defaults to inherit) ─────────── */}
+      {step === 'pre-draft' && (!isMaintenanceFlow || (autoCreateTried && !draftPackageId && !creating)) && (
         <ScrollView className="p-4 bg-white rounded-b-lg mb-4">
           <Text className="text-xl font-semibold mb-4 text-gray-800">
             Add New Box (Box #{nextPackageNumber})
@@ -500,7 +552,7 @@ export default function AddPackageTab({
 
           <Text className="text-gray-700 text-sm mb-1">
             Destination{' '}
-            <Text className="text-gray-400 text-xs">(optional — uses order default if blank)</Text>
+            <Text className="text-gray-400 text-xs">(required — pre-filled from order, editable)</Text>
           </Text>
           <TextInput
             value={destination}
@@ -511,11 +563,11 @@ export default function AddPackageTab({
           />
 
           <InlinePicker
-            label="Category"
+            label="Category (required — sets the box tags)"
             value={selectedCategoryId}
             options={categoryOptions}
             onChange={setSelectedCategoryId}
-            placeholder="Use order default"
+            placeholder="Select category"
           />
 
           <InlinePicker

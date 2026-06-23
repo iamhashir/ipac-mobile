@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, Modal, TextInput, ScrollView, Alert } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, Modal, TextInput, ScrollView, FlatList, Alert } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import CollapsibleCard from '../common/CollapsibleCard';
 import { db } from '../../../../utils/api/supabase';
@@ -34,6 +34,7 @@ const GasMaterialsSection: React.FC<GasMaterialsSectionProps> = ({ orderPackageI
   const [formVariant, setFormVariant] = useState<string | null>(null);
   const [formQuantity, setFormQuantity] = useState<string>(''); // cylinders
   const [formQuantityUsed, setFormQuantityUsed] = useState<string>(''); // gas used
+  const quantityUsedInputRef = useRef<TextInput>(null);
   const [formUnit, setFormUnit] = useState<string | null>(null);
   const [formComment, setFormComment] = useState<string>('');
 
@@ -244,19 +245,23 @@ const GasMaterialsSection: React.FC<GasMaterialsSectionProps> = ({ orderPackageI
             </TouchableOpacity>
             {errors.variant ? (<Text className="text-red-600 text-xs mb-2">{errors.variant}</Text>) : <View className="mb-1" />}
             {varOpen && (
-              <View className="max-h-40 border border-gray-200 rounded mb-2 bg-white"><ScrollView>{variants.map((opt) => (
-                <TouchableOpacity key={opt.value} onPress={() => { setFormVariant(opt.value); setErrors(e => ({ ...e, variant: undefined })); setFormUnit(opt.unit_id || null); setVarOpen(false); }} className="px-3 py-2"><View className="flex-row justify-between items-center"><Text className="text-gray-800">{opt.label}</Text>{opt.unit_name ? (<View className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200"><Text className="text-[10px] text-slate-700">{opt.unit_name}</Text></View>) : null}</View></TouchableOpacity>
-              ))}</ScrollView></View>
+              <View className="max-h-40 border border-gray-200 rounded mb-2 bg-white"><FlatList
+                data={variants}
+                keyExtractor={(opt) => opt.value}
+                renderItem={({ item: opt }) => (
+                  <TouchableOpacity onPress={() => { setFormVariant(opt.value); setErrors(e => ({ ...e, variant: undefined })); setFormUnit(opt.unit_id || null); setVarOpen(false); }} className="px-3 py-2"><View className="flex-row justify-between items-center"><Text className="text-gray-800">{opt.label}</Text>{opt.unit_name ? (<View className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200"><Text className="text-[10px] text-slate-700">{opt.unit_name}</Text></View>) : null}</View></TouchableOpacity>
+                )}
+              /></View>
             )}
 
             {/* Quantity of cylinders */}
             <Text className="text-sm text-gray-700 mb-1">Quantity of cylinder<Text className="text-red-600">*</Text></Text>
-            <TextInput value={formQuantity} onChangeText={(t) => { setFormQuantity(t); setErrors((e) => ({ ...e, quantity: undefined })); }} keyboardType="numeric" className="border border-gray-300 rounded p-2 mb-1 bg-white" placeholder="e.g. 1" />
+            <TextInput value={formQuantity} onChangeText={(t) => { setFormQuantity(t); setErrors((e) => ({ ...e, quantity: undefined })); }} keyboardType="numeric" className="border border-gray-300 rounded p-2 mb-1 bg-white" placeholder="e.g. 1" returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => quantityUsedInputRef.current?.focus()} />
             {errors.quantity ? (<Text className="text-red-600 text-xs mb-2">{errors.quantity}</Text>) : <View className="mb-1" />}
 
             {/* Quantity of gas used */}
             <Text className="text-sm text-gray-700 mb-1">Quantity of Gas Used<Text className="text-red-600">*</Text></Text>
-            <TextInput value={formQuantityUsed} onChangeText={(t) => { setFormQuantityUsed(t); setErrors((e) => ({ ...e, quantity_used: undefined })); }} keyboardType="numeric" className="border border-gray-300 rounded p-2 mb-1 bg-white" placeholder="e.g. 10" />
+            <TextInput ref={quantityUsedInputRef} value={formQuantityUsed} onChangeText={(t) => { setFormQuantityUsed(t); setErrors((e) => ({ ...e, quantity_used: undefined })); }} keyboardType="numeric" className="border border-gray-300 rounded p-2 mb-1 bg-white" placeholder="e.g. 10" returnKeyType="done" />
             {errors.quantity_used ? (<Text className="text-red-600 text-xs mb-2">{errors.quantity_used}</Text>) : <View className="mb-1" />}
 
             {/* Unit */}
@@ -279,7 +284,7 @@ const GasMaterialsSection: React.FC<GasMaterialsSectionProps> = ({ orderPackageI
             <Text className="text-sm text-gray-700 mb-1">Comment</Text>
             <TextInput value={formComment} onChangeText={setFormComment} className="border border-gray-300 rounded p-2 mb-3" placeholder="Optional notes" />
 
-            <View className="flex-row justify-end gap-2"><TouchableOpacity onPress={() => { setOpen(false); resetForm(); }} className="px-3 py-2 rounded bg-red-50 border border-red-600"><Text className="text-red-800">Cancel</Text></TouchableOpacity><TouchableOpacity onPress={saveNew} className="px-3 py-2 rounded bg-blue-50 border border-blue-600"><Text className="text-blue-700">{saving ? 'Saving...' : 'Save'}</Text></TouchableOpacity></View>
+            <View className="flex-row justify-end gap-2"><TouchableOpacity onPress={() => { setOpen(false); resetForm(); }} className="px-3 py-2 rounded bg-red-50 border border-red-600"><Text className="text-red-800">Cancel</Text></TouchableOpacity><TouchableOpacity onPress={saveNew} disabled={saving} className={`px-3 py-2 rounded border ${saving ? 'bg-gray-100 border-gray-300' : 'bg-blue-50 border-blue-600'}`}><Text className={saving ? 'text-gray-500' : 'text-blue-700'}>{saving ? 'Saving...' : 'Save'}</Text></TouchableOpacity></View>
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>

@@ -20,4 +20,6 @@ const SecuringSection: React.FC<SecuringSectionProps> = (props) => (
   />
 );
 
-export default SecuringSection;
+// Memoized: parent packing-list rebuilds tab JSX on every pkgInfoMap change;
+// props here are primitives, so memo skips re-rendering the whole section.
+export default React.memo(SecuringSection);
