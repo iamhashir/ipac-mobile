@@ -124,61 +124,83 @@ const OrderPackingDimensions: React.FC<OrderPackingDimensionsProps> = ({
       return;
     }
 
-    // Final tier updates
-    setCurrentFinal((prev) => {
-      const base = (prev as any)[scope] || { length: null, width: null, height: null };
-      const next = { ...base, ...normalizedPatch } as DimensionsTriple;
-      // Fire-and-forget upsert (auto-save behavior)
-      void db
-        .upsertFinalDimensions({
+    // Final tier updates. A box usually has NO final package_info row yet. If we write
+    // before one exists, upsertFinalDimensions falls back to the ORIGINAL row (corrupting
+    // it) and never creates/links a final row — so the edit vanishes on reload. Fix: ensure
+    // a real, linked final row FIRST, then write the dimensions to it.
+    const base = (currentFinal as any)[scope] || { length: null, width: null, height: null };
+    const next = { ...base, ...normalizedPatch } as DimensionsTriple;
+
+    // Optimistic local update keeps the input responsive while we persist.
+    setCurrentFinal((prev) => ({ ...prev, [scope]: next }) as any);
+
+    const finalFields =
+      scope === 'internal'
+        ? {
+            internal_length: next.length ?? null,
+            internal_width: next.width ?? null,
+            internal_height: next.height ?? null,
+          }
+        : {
+            external_length: next.length ?? null,
+            external_width: next.width ?? null,
+            external_height: next.height ?? null,
+          };
+
+    try {
+      // Guarantee a real final package_info row (creates it + links order_packages
+      // .final_pkg_info if missing) so the write never lands on the original row.
+      let targetFinalId = finalId;
+      if (!targetFinalId) {
+        const ensured: any = await db.ensureFinalPackageInfo({
           orderPackageId,
           finalInfoId: finalId,
           originalInfoId,
-          scope,
-          length: next.length,
-          width: next.width,
-          height: next.height,
-        })
-        .then((res: any) => {
-          if (res?.error) {
-            console.error('Error saving dimensions:', res.error);
-            const { Alert } = require('react-native');
-            const errorMsg = res.error?.message || res.error?.details || 'Failed to save dimensions';
-            Alert.alert('Error', `Failed to save: ${errorMsg}`);
-          } else if (!finalId && res?.data?.final_pkg_info) {
-            setFinalId(res.data.final_pkg_info);
-          }
-          const targetInfoId = res?.data?.final_pkg_info || finalId;
-          if (targetInfoId) {
-            onChange?.({
-              infoId: targetInfoId,
-              fields:
-                scope === 'internal'
-                  ? {
-                      internal_length: next.length ?? null,
-                      internal_width: next.width ?? null,
-                      internal_height: next.height ?? null,
-                    }
-                  : {
-                      external_length: next.length ?? null,
-                      external_width: next.width ?? null,
-                      external_height: next.height ?? null,
-                    },
-              orderPackageId,
-              isFinal: true,
-              updatedFinalInfoId: targetInfoId,
-              scope,
-              source: 'dimensions',
-            });
-          }
-        })
-        .catch((err: any) => {
-          console.error('Unexpected error saving dimensions:', err);
-          const { Alert } = require('react-native');
-          Alert.alert('Error', 'Unexpected error while saving dimensions');
         });
-      return { ...prev, [scope]: next } as any;
-    });
+        if (ensured?.error || !ensured?.data?.id) {
+          console.error('Error creating final package info:', ensured?.error);
+          const { Alert } = require('react-native');
+          Alert.alert(
+            'Error',
+            `Failed to save: ${ensured?.error?.message || 'could not create final dimensions'}`,
+          );
+          return;
+        }
+        targetFinalId = ensured.data.id;
+        setFinalId(targetFinalId);
+      }
+
+      const res: any = await db.upsertFinalDimensions({
+        orderPackageId,
+        finalInfoId: targetFinalId,
+        originalInfoId,
+        scope,
+        length: next.length,
+        width: next.width,
+        height: next.height,
+      });
+      if (res?.error) {
+        console.error('Error saving dimensions:', res.error);
+        const { Alert } = require('react-native');
+        const errorMsg = res.error?.message || res.error?.details || 'Failed to save dimensions';
+        Alert.alert('Error', `Failed to save: ${errorMsg}`);
+        return;
+      }
+
+      onChange?.({
+        infoId: targetFinalId as string,
+        fields: finalFields,
+        orderPackageId,
+        isFinal: true,
+        updatedFinalInfoId: targetFinalId as string,
+        scope,
+        source: 'dimensions',
+      });
+    } catch (err: any) {
+      console.error('Unexpected error saving dimensions:', err);
+      const { Alert } = require('react-native');
+      Alert.alert('Error', 'Unexpected error while saving dimensions');
+    }
   };
 
   const internalTarget: 'original' | 'final' = editTarget;
