@@ -162,13 +162,16 @@ export const auth = {
   // Get user by username (for username-based login)
   getUserByUsername: async (username: string) => {
     try {
-      console.log('🔍 Looking up username:', username);
-      
+      // Normalize: lowercase + strip ALL whitespace so a lookup never misses on
+      // casing or stray spaces, regardless of how the caller passed it in.
+      const lookupUsername = (username || '').toLowerCase().replace(/\s/g, '');
+      console.log('🔍 Looking up username:', lookupUsername);
+
       // Use a stored function to lookup username securely
       // This bypasses RLS policies since it runs with elevated privileges
       const { data, error } = await supabase
         .rpc('get_user_email_by_username', {
-          lookup_username: username
+          lookup_username: lookupUsername
         });
       
       console.log('🔍 Username lookup result:', { 

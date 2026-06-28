@@ -35,20 +35,23 @@ export default function LoginScreen() {
   }, [user, profile, authLoading, router]);
 
   const handleLogin = async () => {
-    if (!username || !password) {
+    // Usernames/emails are case-insensitive and must not carry stray whitespace.
+    // (Password is left untouched — it is case-sensitive and may contain spaces.)
+    const cleanUsername = username.toLowerCase().replace(/\s/g, '');
+    if (!cleanUsername || !password) {
       toast.error('Please enter both username and password');
       return;
     }
 
     setLoading(true);
-    
+
     try {
       let authResult;
       // Check if input looks like an email
-      if (username.includes('@')) {
-        authResult = await signIn(username, password);
+      if (cleanUsername.includes('@')) {
+        authResult = await signIn(cleanUsername, password);
       } else {
-        authResult = await auth.signInWithUsername(username, password);
+        authResult = await auth.signInWithUsername(cleanUsername, password);
       }
       const { data, error } = authResult;
       if (error) {

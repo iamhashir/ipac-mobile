@@ -825,6 +825,20 @@ export default function PackerDashboard() {
         return;
       }
 
+      // The packer joining is ALWAYS a team lead by default — prevents the
+      // "joined but not a lead → locked out" problem and removes the need to
+      // self-promote via the add/remove-packer button. Other packers still
+      // follow the explicit projectLeads selection; we only force-add the
+      // current user when they are actually part of the selected team.
+      const currentUserId = profile?.id;
+      const effectiveLeadIds = Array.from(
+        new Set(
+          currentUserId && selectedPackers.includes(currentUserId)
+            ? [...projectLeads, currentUserId]
+            : projectLeads,
+        ),
+      );
+
       if (isActiveSession) {
         // For active sessions, handle additions and removals
   const { data: currentPackers } = await db.getOrderPackers(selectedOrder);
@@ -873,15 +887,15 @@ export default function PackerDashboard() {
           }
         }
         
-        // Update team leads
+        // Update team leads (effectiveLeadIds always includes the joining packer)
         await teamLead.removeAllTeamLeads(selectedOrder);
-        for (const leadId of projectLeads) {
+        for (const leadId of effectiveLeadIds) {
           await teamLead.addTeamLead(selectedOrder, leadId);
         }
-        
+
         // Update order.project_lead_id
-        if (projectLeads.length > 0) {
-          await db.updateProjectLead(selectedOrder, projectLeads[0]);
+        if (effectiveLeadIds.length > 0) {
+          await db.updateProjectLead(selectedOrder, effectiveLeadIds[0]);
         } else {
           await db.clearProjectLead(selectedOrder);
         }
@@ -925,12 +939,13 @@ export default function PackerDashboard() {
           return;
         }
 
-        // Assign team leads using the new multi-lead system
+        // Assign team leads using the new multi-lead system. effectiveLeadIds always
+        // includes the joining packer, so a solo joiner is a team lead by default.
         await teamLead.removeAllTeamLeads(selectedOrder);
 
-        if (projectLeads.length > 0) {
+        if (effectiveLeadIds.length > 0) {
           // Add each selected lead
-          for (const leadId of projectLeads) {
+          for (const leadId of effectiveLeadIds) {
             const { error: teamLeadError } = await teamLead.addTeamLead(selectedOrder, leadId);
             if (teamLeadError) {
               console.error('Error assigning team lead:', leadId, teamLeadError);
@@ -940,7 +955,7 @@ export default function PackerDashboard() {
           }
 
           // Update order.project_lead_id with the first lead (for backward compatibility)
-          const { error: updateLeadError } = await db.updateProjectLead(selectedOrder, projectLeads[0]);
+          const { error: updateLeadError } = await db.updateProjectLead(selectedOrder, effectiveLeadIds[0]);
           if (updateLeadError) {
             console.warn('Project lead update (orders table) failed:', updateLeadError);
           } else {
