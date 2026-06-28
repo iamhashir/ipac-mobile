@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { AuthProvider } from '../utils/AuthContext';
 import { PackerSessionProvider } from '../utils/PackerSessionContext';
 import { TextSizeProvider, useTextSize } from '../utils/TextSizeContext';
+import { ImmersiveProvider } from '../utils/ImmersiveContext';
 import { ToastProvider } from '../components/ui/Toast';
 import { Text, View, ActivityIndicator } from 'react-native';
 import { useFonts } from 'expo-font';
@@ -77,7 +78,9 @@ export default function RootLayout() {
       <TextSizeProvider>
         <PackerSessionProvider>
           <ToastProvider>
-            <AppStack />
+            <ImmersiveProvider>
+              <AppStack />
+            </ImmersiveProvider>
           </ToastProvider>
         </PackerSessionProvider>
       </TextSizeProvider>

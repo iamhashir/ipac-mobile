@@ -299,7 +299,27 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
         console.error('Error fetching catalog items:', error);
         Alert.alert('Error', 'Failed to load catalog items');
       } else {
-        const catalogItems = data || [];
+        let catalogItems = data || [];
+
+        // Overlay this box destination's allocation qty (the order plan) so the card shows
+        // expected/packed for THIS destination (e.g. 2 for AIN), not the global items_db rollup.
+        if (destination && catalogItems.length > 0) {
+          const { data: allocs } = await db.getOrderAllocationsForDestination(orderId, destination);
+          if (allocs && allocs.length > 0) {
+            const allocByItem = new Map<string, { expected: number; packed: number }>();
+            allocs.forEach((a: any) =>
+              allocByItem.set(String(a.items_db_id), {
+                expected: Number(a.expected_qty),
+                packed: Number(a.packed_qty),
+              }),
+            );
+            catalogItems = catalogItems.map((item: any) => {
+              const a = allocByItem.get(String(item.id));
+              return a ? { ...item, expected_qty: a.expected, packed_qty: a.packed } : item;
+            });
+          }
+        }
+
         const isSearching = currentSearch && currentSearch.trim() !== '';
 
         if (isSearching) {
@@ -521,6 +541,7 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
             <View className="flex-row items-center bg-gray-100 rounded-lg px-3 py-2">
               <Search size={18} color="#94a3b8" />
               <TextInput
+                disableFullscreenUI
                 className="flex-1 ml-2 text-base text-slate-800"
                 placeholder="Search description, item #, or ref..."
                 placeholderTextColor="#94a3b8"
@@ -636,6 +657,7 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
                 <View>
                   <Text className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Quantity to add</Text>
                   <TextInput
+                    disableFullscreenUI
                     className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-slate-900 font-medium"
                     value={quantityInput}
                     onChangeText={setQuantityInput}

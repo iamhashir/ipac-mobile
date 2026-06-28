@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, SafeAreaView, Platform, ScrollView, Image } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, SafeAreaView, Platform, ScrollView, Image, KeyboardAvoidingView } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
 import { Inbox, Trash2, Plus, RefreshCw, FileText, Printer, Eye, ScanQrCode, X, Share2, Info, Camera } from 'lucide-react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { db } from '../../../../../utils/api/supabase';
+import QtyAllocationModal from './QtyAllocationModal';
 import CatalogBrowserModal from './CatalogBrowserModal';
 import { chooseQrPrintSizePreset } from './qrPrintPresets';
 import CustomPrintModal from '../../common/CustomPrintModal';
@@ -162,6 +163,7 @@ const DimensionInputs: React.FC<DimensionInputsProps> = ({
       <View className="flex-row items-center mr-4">
         <Text className="text-[10px] font-bold text-gray-400 mr-1">L</Text>
         <TextInput
+          disableFullscreenUI
           className="w-12 text-xs text-slate-800 p-0 border-b border-gray-300 font-medium"
           value={l}
           onChangeText={setL}
@@ -178,6 +180,7 @@ const DimensionInputs: React.FC<DimensionInputsProps> = ({
         <Text className="text-[10px] font-bold text-gray-400 mr-1">W</Text>
         <TextInput
           ref={wInputRef}
+          disableFullscreenUI
           className="w-12 text-xs text-slate-800 p-0 border-b border-gray-300 font-medium"
           value={w}
           onChangeText={setW}
@@ -194,6 +197,7 @@ const DimensionInputs: React.FC<DimensionInputsProps> = ({
         <Text className="text-[10px] font-bold text-gray-400 mr-1">H</Text>
         <TextInput
           ref={hInputRef}
+          disableFullscreenUI
           className="w-12 text-xs text-slate-800 p-0 border-b border-gray-300 font-medium"
           value={h}
           onChangeText={setH}
@@ -263,6 +267,14 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const [itemMediaCounts, setItemMediaCounts] = useState<Record<string, number>>({});
 
+  // Compact quantity pop-up ([input]/max with a request-more morph). 'edit' sets a row's
+  // quantity; 'confirm' flips a planned shadow (is_confirmed=false) to packed. Both share
+  // QtyAllocationModal so the max display + request-more flow live in one place.
+  const [qtyModalItem, setQtyModalItem] = useState<any | null>(null);
+  const [qtyModalMode, setQtyModalMode] = useState<'edit' | 'confirm'>('edit');
+  // pkd_item id currently being confirmed via the one-tap CONFIRM PACKED button.
+  const [confirmingItemId, setConfirmingItemId] = useState<string | null>(null);
+
   useEffect(() => {
     if (clientId) {
       db.getClientQrLogoUrl(clientId).then(({ data }) => {
@@ -318,6 +330,37 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
   useEffect(() => {
     loadItems();
   }, [loadItems]);
+
+  // Open the compact qty pop-up: 'edit' to set the quantity, 'confirm' to pack a shadow.
+  const openQtyModal = (item: any, mode: 'edit' | 'confirm') => {
+    setQtyModalMode(mode);
+    setQtyModalItem(item);
+  };
+
+  // One-tap confirm: pack a shadow at its CURRENT quantity (already set via the QTY cell)
+  // without re-prompting. confirmPackedItem caps server-side and returns a guiding error
+  // when over the destination cap — adjust via the QTY cell (which has the request-more flow).
+  const handleConfirmPacked = async (item: any) => {
+    if (!item?.id || confirmingItemId) return;
+    setConfirmingItemId(item.id);
+    try {
+      const { error } = await db.confirmPackedItem(item.id);
+      if (error) {
+        Alert.alert(
+          'Could not confirm',
+          (error as any)?.message ||
+            'Failed to confirm. Tap the QTY box to adjust the amount or request more.',
+        );
+        return;
+      }
+      await loadItems();
+    } catch (e) {
+      console.error('Confirm packed error:', e);
+      Alert.alert('Error', 'An unexpected error occurred while confirming.');
+    } finally {
+      setConfirmingItemId(null);
+    }
+  };
 
   const prepareScannedItemForAssignment = useCallback((catalogItem: any) => {
     const remainingQty = getRemainingExpectedQty(catalogItem);
@@ -1010,20 +1053,35 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
             const itemName = maintenanceItem?.description || 'Unknown Item';
             const isLegacyItem = !!item?.is_legacy_package_item;
             const canPrintOrPreview = !!maintenanceItem?.id;
-            
+            // "Shadow": planned at order-create but not yet confirmed as physically packed.
+            const isShadow = item?.is_confirmed === false && !isLegacyItem;
+
             return (
-              <View 
-                key={item.id} 
-                className="flex-row bg-white border border-gray-300 rounded-md mb-3 overflow-hidden shadow-sm"
+              <View
+                key={item.id}
+                className={`flex-row rounded-md mb-3 overflow-hidden shadow-sm border ${
+                  isShadow
+                    ? 'bg-amber-50/40 border-amber-300 border-dashed opacity-90'
+                    : 'bg-white border-gray-300'
+                }`}
               >
                 {/* 1. NO. Column */}
                 <View className="w-10 items-center justify-center border-r border-gray-300 bg-gray-100/50">
                   <Text className="text-[10px] font-bold text-gray-500">{index + 1}</Text>
                 </View>
 
-                {/* 2. QTY Column */}
+                {/* 2. QTY Column — tap to open the compact qty pop-up ([input]/max). */}
                 <View className="w-14 items-center justify-center border-r border-gray-300">
-                  <Text className="text-base font-bold text-slate-900">{item.quantity}</Text>
+                  {editable && !isLegacyItem ? (
+                    <TouchableOpacity
+                      onPress={() => openQtyModal(item, 'edit')}
+                      className="px-2 py-1 bg-blue-50/70 border border-blue-200 rounded items-center"
+                    >
+                      <Text className="text-base font-bold text-slate-900 text-center">{item.quantity}</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text className="text-base font-bold text-slate-900">{item.quantity}</Text>
+                  )}
                   <Text className="text-[8px] text-gray-500 uppercase font-black">Qty</Text>
                 </View>
 
@@ -1050,6 +1108,11 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
                           {itemName}
                         </Text>
                       </TouchableOpacity>
+                      {isShadow && (
+                        <View className="bg-amber-100 px-1.5 py-0.5 rounded border border-amber-300 self-end mb-0.5">
+                          <Text className="text-amber-800 text-[8px] font-black">PLANNED · NOT PACKED</Text>
+                        </View>
+                      )}
                       {categoryLabel && (
                         <View className="bg-blue-50 px-1 py-0.5 rounded border border-blue-100 self-end mb-0.5">
                           <Text className="text-blue-700 text-[8px] font-bold">{categoryLabel}</Text>
@@ -1085,6 +1148,21 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
                     </View>
 
                     <View className="flex-row items-center gap-x-2">
+                      {isShadow && editable && (
+                        <TouchableOpacity
+                          onPress={() => handleConfirmPacked(item)}
+                          disabled={confirmingItemId === item.id}
+                          className={`px-3 py-1.5 rounded flex-row items-center ${
+                            confirmingItemId === item.id ? 'bg-amber-300' : 'bg-amber-500'
+                          }`}
+                        >
+                          {confirmingItemId === item.id ? (
+                            <ActivityIndicator size="small" color="#ffffff" />
+                          ) : (
+                            <Text className="text-[10px] font-bold text-white">CONFIRM PACKED</Text>
+                          )}
+                        </TouchableOpacity>
+                      )}
                       {canPrintOrPreview && (
                         <TouchableOpacity
                           onPress={() => {
@@ -1166,6 +1244,17 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
         onAssigned={loadItems}
         destination={destination}
         isStandardBox={isStandardBox}
+      />
+
+      {/* Confirm-packed modal for shadow (planned) items */}
+      {/* Compact qty pop-up shared by the QTY cell (edit) + CONFIRM PACKED (confirm). */}
+      <QtyAllocationModal
+        visible={!!qtyModalItem}
+        item={qtyModalItem}
+        mode={qtyModalMode}
+        orderPackageId={orderPackageId}
+        onClose={() => setQtyModalItem(null)}
+        onSaved={loadItems}
       />
 
 
@@ -1336,6 +1425,7 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
             <View className="mt-4">
               <Text className="text-xs text-gray-600 mb-1 font-medium">Quantity for this box</Text>
               <TextInput
+                disableFullscreenUI
                 className="border border-gray-300 rounded-lg px-3 py-2 text-slate-900"
                 value={scanQuantityInput}
                 onChangeText={setScanQuantityInput}
@@ -1386,6 +1476,11 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
         onRequestClose={() => setManualItemModalVisible(false)}
       >
         <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.45)', justifyContent: 'center', paddingHorizontal: 20 }}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 80}
+            style={{ width: '100%' }}
+          >
           <View className="bg-white rounded-2xl p-5 shadow-xl">
             <View className="flex-row justify-between items-center mb-4">
               <Text className="text-xl font-bold text-slate-900">Add Manual Item</Text>
@@ -1394,11 +1489,12 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
               </TouchableOpacity>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
               <View className="space-y-4">
                 <View>
                   <Text className="text-sm font-semibold text-slate-700 mb-1">Item Name / Designation</Text>
                   <TextInput
+                    disableFullscreenUI
                     className="border border-slate-200 rounded-xl px-4 py-3 text-slate-900 bg-slate-50"
                     placeholder="e.g. Spare Parts Box"
                     value={manualItemDesignation}
@@ -1410,6 +1506,7 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
                   <View className="flex-1">
                     <Text className="text-sm font-semibold text-slate-700 mb-1">Quantity</Text>
                     <TextInput
+                      disableFullscreenUI
                       className="border border-slate-200 rounded-xl px-4 py-3 text-slate-900 bg-slate-50"
                       keyboardType="numeric"
                       value={manualItemQty}
@@ -1423,6 +1520,7 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
                   <View className="flex-1">
                     <Text className="text-[10px] font-bold text-slate-500 uppercase">Length</Text>
                     <TextInput
+                      disableFullscreenUI
                       className="border border-slate-200 rounded-xl px-3 py-2.5 text-slate-900 bg-slate-50"
                       keyboardType="numeric"
                       placeholder="L"
@@ -1437,6 +1535,7 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
                     <Text className="text-[10px] font-bold text-slate-500 uppercase">Width</Text>
                     <TextInput
                       ref={manualWidthRef}
+                      disableFullscreenUI
                       className="border border-slate-200 rounded-xl px-3 py-2.5 text-slate-900 bg-slate-50"
                       keyboardType="numeric"
                       placeholder="W"
@@ -1451,6 +1550,7 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
                     <Text className="text-[10px] font-bold text-slate-500 uppercase">Height</Text>
                     <TextInput
                       ref={manualHeightRef}
+                      disableFullscreenUI
                       className="border border-slate-200 rounded-xl px-3 py-2.5 text-slate-900 bg-slate-50"
                       keyboardType="numeric"
                       placeholder="H"
@@ -1484,6 +1584,7 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
               </TouchableOpacity>
             </View>
           </View>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
 

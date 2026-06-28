@@ -1892,6 +1892,7 @@ const baseDb = {
       .select(`
         id,
         quantity,
+        is_confirmed,
         pkg_instance_id,
         order_pkg_instance!inner(
           id,
@@ -2021,19 +2022,6 @@ const baseDb = {
           category_tag_map(
             tag:project_tags(id, name)
           )
-        ),
-        pkd_item:pkd_item(
-          id,
-          quantity,
-          instance:order_pkg_instance(
-            id,
-            ipac_reference,
-            package:order_packages(
-              id,
-              package_number,
-              order:orders(id, order_name)
-            )
-          )
         )
       `)
       .eq('client_id', clientId)
@@ -2074,33 +2062,80 @@ const baseDb = {
     if (destErr) return { data: null, error: destErr };
     if (!dest?.id) return { data: [], error: null };
 
-    return await supabase
-      .from('order_item_allocation')
-      .select(`
-        expected_qty,
-        packed_qty,
-        items_db:items_db(
-          id, client_id, category_id, reference, ipac_comments, item_num, description,
-          length, width, height, net_weight, warehouse_location,
-          pkg_category:pkg_category(
-            id, label,
-            category_tag_map(tag:project_tags(id, name))
-          ),
-          pkd_item:pkd_item(
-            id, quantity,
-            instance:order_pkg_instance(
-              id, ipac_reference,
-              package:order_packages(
-                id, package_number,
-                order:orders(id, order_name)
-              )
+    // One destination can hold >1000 allocations; PostgREST caps an uncapped select at
+    // 1000 rows. Page through with .range(), ordered by the unique items_db_id tiebreaker
+    // (per order+destination one row per item) so paging is deterministic.
+    const pageSize = 1000;
+    let from = 0;
+    const all: any[] = [];
+    while (true) {
+      const { data, error } = await supabase
+        .from('order_item_allocation')
+        .select(`
+          expected_qty,
+          packed_qty,
+          items_db:items_db(
+            id, client_id, category_id, reference, ipac_comments, item_num, description,
+            length, width, height, net_weight, warehouse_location,
+            pkg_category:pkg_category(
+              id, label,
+              category_tag_map(tag:project_tags(id, name))
             )
           )
-        )
-      `)
-      .eq('order_id', orderId)
-      .eq('destination_id', dest.id)
-      .eq('is_standard_box', true);
+        `)
+        .eq('order_id', orderId)
+        .eq('destination_id', dest.id)
+        .eq('is_standard_box', true)
+        .order('items_db_id', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) return { data: null, error };
+      const rows = data || [];
+      all.push(...rows);
+      if (rows.length < pageSize) break;
+      from += pageSize;
+    }
+    return { data: all, error: null };
+  },
+
+  // All per-destination allocation quantities for an order (ANY is_standard_box). Lets the
+  // m2m catalog show this box destination's expected/packed (the order plan) instead of the
+  // global items_db rollup.
+  getOrderAllocationsForDestination: async (
+    orderId: UUID,
+    destination: string | null
+  ) => {
+    const code =
+      String(destination || '')
+        .replace(/[\r\n\t]+/g, '')
+        .trim()
+        .toUpperCase() || 'UNASSIGNED';
+    const { data: dest, error: destErr } = await supabase
+      .from('destinations')
+      .select('id')
+      .eq('code', code)
+      .maybeSingle();
+    if (destErr) return { data: null, error: destErr };
+    if (!dest?.id) return { data: [], error: null };
+    // AUH-scale destinations exceed the 1000-row PostgREST cap; page through with
+    // .range() ordered by the unique items_db_id (one allocation per item+dest).
+    const pageSize = 1000;
+    let from = 0;
+    const all: any[] = [];
+    while (true) {
+      const { data, error } = await supabase
+        .from('order_item_allocation')
+        .select('items_db_id, expected_qty, packed_qty, is_standard_box')
+        .eq('order_id', orderId)
+        .eq('destination_id', dest.id)
+        .order('items_db_id', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) return { data: null, error };
+      const rows = data || [];
+      all.push(...rows);
+      if (rows.length < pageSize) break;
+      from += pageSize;
+    }
+    return { data: all, error: null };
   },
 
   // Packer "request more": raise an allocation-increase ticket for an admin to review.
@@ -2637,6 +2672,28 @@ const baseDb = {
       };
     }
 
+    // Look up any existing pkd_item on this instance BEFORE the cap, because confirming an
+    // order-create shadow (is_confirmed=false) by re-assigning the same item adds the whole
+    // row to confirmed packed_qty, not just parsedQty — the cap and the rollup must use that.
+    const { data: existing, error: existingError } = await supabase
+      .from('pkd_item')
+      .select('id, quantity, is_confirmed')
+      .eq('maintenance_db_id', maintenanceDbId)
+      .eq('pkg_instance_id', targetInstanceId)
+      .maybeSingle();
+    if (existingError) {
+      return { data: null, error: existingError };
+    }
+    const existingWasConfirmed = !!existing?.is_confirmed;
+    // Quantity this operation NEWLY adds to confirmed packed_qty:
+    //  - existing confirmed row → parsedQty (its old qty already counts)
+    //  - existing shadow row    → whole row + parsedQty (none of it counted yet)
+    //  - no existing row        → parsedQty (new, default-confirmed row)
+    const effectiveNewQty =
+      existing?.id && !existingWasConfirmed
+        ? Number(existing.quantity || 0) + parsedQty
+        : parsedQty;
+
     // Per-destination quota cap. Prefer this box's order_item_allocation (kept in sync by
     // DB triggers) — the authoritative cap. Fall back to the global items_db rollup only
     // when the item has no allocation row (e.g. ad-hoc / non-allocation packing).
@@ -2708,7 +2765,7 @@ const baseDb = {
               error: { message: `${itemLabel} is fully packed for this destination. Use "Request more" to raise the allocation.` },
             };
           }
-          if (parsedQty > allocRemaining) {
+          if (effectiveNewQty > allocRemaining) {
             return {
               data: null,
               error: { message: `Only ${allocRemaining} remaining for ${itemLabel} at this destination.` },
@@ -2728,7 +2785,7 @@ const baseDb = {
               error: { message: `${itemLabel} is already fully packed and cannot be assigned again.` },
             };
           }
-          if (parsedQty > remainingQty) {
+          if (effectiveNewQty > remainingQty) {
             return {
               data: null,
               error: { message: `Only ${remainingQty} remaining for ${itemLabel}. Reduce quantity to continue.` },
@@ -2738,33 +2795,23 @@ const baseDb = {
       }
     }
 
-    const { data: existing, error: existingError } = await supabase
-      .from('pkd_item')
-      .select('id, quantity')
-      .eq('maintenance_db_id', maintenanceDbId)
-      .eq('pkg_instance_id', targetInstanceId)
-      .maybeSingle();
-
-
-    if (existingError) {
-      return { data: null, error: existingError };
-    }
-
     if (existing?.id) {
       const nextQty = Number(existing.quantity || 0) + parsedQty;
       const { data, error } = await supabase
         .from('pkd_item')
-        .update({ quantity: nextQty })
+        // A packer assigning from the catalog/pool IS packing it → confirmed.
+        .update({ quantity: nextQty, is_confirmed: true })
         .eq('id', existing.id)
         .select()
         .single();
 
       if (!error) {
-        // Atomically bump the items_db rollup packed_qty (avoids the lost-update race of a
-        // client-side read-modify-write under concurrent packers).
+        // Bump the items_db rollup by what was NEWLY confirmed: a shadow row was never
+        // counted, so confirming it adds the whole nextQty; an already-confirmed row adds
+        // only parsedQty. Keeps items_db consistent with the trigger-computed allocation.
         await supabase.rpc('increment_item_packed_qty', {
           item_id: maintenanceDbId,
-          amount: parsedQty,
+          amount: existingWasConfirmed ? parsedQty : nextQty,
         });
       }
 
@@ -2798,7 +2845,7 @@ const baseDb = {
       // 1. Get item details before deletion to know how much to decrement
       const { data: itemData, error: fetchError } = await supabase
         .from('pkd_item')
-        .select('maintenance_db_id, quantity')
+        .select('maintenance_db_id, quantity, is_confirmed')
         .eq('id', maintenancePackageItemId)
         .single();
 
@@ -2820,16 +2867,185 @@ const baseDb = {
 
       if (deleteError) return { data: null, error: deleteError };
 
-      // 4. Atomically decrement the items_db rollup packed_qty (clamped at 0 in the RPC).
-      await supabase.rpc('decrement_item_packed_qty', {
-        item_id: itemData.maintenance_db_id,
-        amount: Number(itemData.quantity || 0),
-      });
+      // 4. Decrement the items_db rollup ONLY for confirmed (packed) items. Unconfirmed
+      // shadows never bumped the rollup, so removing one must not decrement it.
+      if (itemData.is_confirmed) {
+        await supabase.rpc('decrement_item_packed_qty', {
+          item_id: itemData.maintenance_db_id,
+          amount: Number(itemData.quantity || 0),
+        });
+      }
 
       return { data: { success: true }, error: null };
     } catch (e: any) {
       return { data: null, error: e };
     }
+  },
+
+  // Confirm a "shadow" (unconfirmed) pkd_item as actually packed: flips is_confirmed and
+  // sets the packed quantity, capped at the box destination's allocation (expected −
+  // confirmed-packed). Bumps the items_db rollup once. The packed_qty trigger then
+  // recomputes the allocation from confirmed items.
+  confirmPackedItem: async (pkdItemId: UUID, quantity?: number) => {
+    const { data: pkd, error: fetchErr } = await supabase
+      .from('pkd_item')
+      .select('id, maintenance_db_id, pkg_instance_id, quantity, is_confirmed')
+      .eq('id', pkdItemId)
+      .maybeSingle();
+    if (fetchErr) return { data: null, error: fetchErr };
+    if (!pkd?.id) return { data: null, error: { message: 'Item not found.' } };
+
+    const requested =
+      quantity != null ? Number(quantity) : Number(pkd.quantity || 1);
+    if (!Number.isFinite(requested) || requested <= 0) {
+      return { data: null, error: { message: 'Quantity must be greater than 0.' } };
+    }
+
+    // Resolve the per-destination allocation cap for this box.
+    const { expected: allocExpected, packed: allocPacked } =
+      await resolvePkdAllocation(pkd.pkg_instance_id, pkd.maintenance_db_id);
+
+    // packed_qty counts only confirmed items. A shadow isn't counted yet; an already-
+    // confirmed row's own qty IS in allocPacked, so exclude it — this keeps the cap equal
+    // to getPkdAllocationContext.remaining for every row state (no UI/server desync).
+    const selfPacked = pkd.is_confirmed ? Number(pkd.quantity || 0) : 0;
+    if (allocExpected !== null && allocExpected > 0) {
+      const remaining = Math.max(0, allocExpected - Math.max(0, allocPacked - selfPacked));
+      if (remaining <= 0) {
+        return {
+          data: null,
+          error: {
+            message:
+              'Already fully packed for this destination. Use "Request more" to raise the allocation.',
+          },
+        };
+      }
+      if (requested > remaining) {
+        return {
+          data: null,
+          error: {
+            message: `Only ${remaining} remaining for this destination. Reduce the quantity or use "Request more".`,
+          },
+        };
+      }
+    }
+
+    const wasConfirmed = !!pkd.is_confirmed;
+    const { data, error } = await supabase
+      .from('pkd_item')
+      .update({ is_confirmed: true, quantity: requested })
+      .eq('id', pkdItemId)
+      .select()
+      .single();
+    if (error) return { data: null, error };
+
+    // Shadows never bumped the global rollup — do it once on first confirmation.
+    if (!wasConfirmed) {
+      await supabase.rpc('increment_item_packed_qty', {
+        item_id: pkd.maintenance_db_id,
+        amount: requested,
+      });
+    }
+    return { data, error: null };
+  },
+
+  // Edit a box item's quantity in place — works for both confirmed (packed) items and
+  // unconfirmed shadows. Caps the new qty at the destination allocation's remaining
+  // headroom and keeps the global items_db rollup in step (confirmed rows only).
+  updatePkdItemQuantity: async (pkdItemId: UUID, newQty: number) => {
+    const requested = Math.round(Number(newQty));
+    if (!Number.isFinite(requested) || requested <= 0) {
+      return { data: null, error: { message: 'Quantity must be a whole number greater than 0.' } };
+    }
+
+    const { data: pkd, error: fetchErr } = await supabase
+      .from('pkd_item')
+      .select('id, maintenance_db_id, pkg_instance_id, quantity, is_confirmed')
+      .eq('id', pkdItemId)
+      .maybeSingle();
+    if (fetchErr) return { data: null, error: fetchErr };
+    if (!pkd?.id) return { data: null, error: { message: 'Item not found.' } };
+
+    const oldQty = Number(pkd.quantity || 0);
+    if (requested === oldQty) return { data: pkd, error: null };
+
+    const { expected: allocExpected, packed: allocPacked } =
+      await resolvePkdAllocation(pkd.pkg_instance_id, pkd.maintenance_db_id);
+
+    // packed_qty already includes THIS row's qty only when it is confirmed, so the
+    // headroom is expected − (packed minus our own confirmed contribution).
+    if (allocExpected !== null && allocExpected > 0) {
+      const otherPacked = pkd.is_confirmed ? Math.max(0, allocPacked - oldQty) : allocPacked;
+      const maxAllowed = allocExpected - otherPacked;
+      if (requested > maxAllowed) {
+        return {
+          data: null,
+          error: {
+            message: `Only ${Math.max(0, maxAllowed)} allowed for this destination. Use "Request more" to raise the allocation.`,
+          },
+        };
+      }
+    }
+
+    const { data, error } = await supabase
+      .from('pkd_item')
+      .update({ quantity: requested })
+      .eq('id', pkdItemId)
+      .select()
+      .single();
+    if (error) return { data: null, error };
+
+    // Only confirmed rows feed the global items_db rollup; adjust it by the delta.
+    if (pkd.is_confirmed) {
+      const delta = requested - oldQty;
+      if (delta > 0) {
+        await supabase.rpc('increment_item_packed_qty', {
+          item_id: pkd.maintenance_db_id,
+          amount: delta,
+        });
+      } else if (delta < 0) {
+        await supabase.rpc('decrement_item_packed_qty', {
+          item_id: pkd.maintenance_db_id,
+          amount: -delta,
+        });
+      }
+    }
+    return { data, error: null };
+  },
+
+  // Allocation context for a pkd_item: per-destination expected/packed, the remaining
+  // headroom (excluding this row's own confirmed contribution), and the ids needed to
+  // file a "request more". Powers the confirm modal's remaining display + morph button.
+  getPkdAllocationContext: async (pkdItemId: UUID) => {
+    const { data: pkd, error } = await supabase
+      .from('pkd_item')
+      .select('id, maintenance_db_id, pkg_instance_id, quantity, is_confirmed')
+      .eq('id', pkdItemId)
+      .maybeSingle();
+    if (error) return { data: null, error };
+    if (!pkd?.id) return { data: null, error: { message: 'Item not found.' } };
+
+    const { expected, packed, orderId, destination } = await resolvePkdAllocation(
+      pkd.pkg_instance_id,
+      pkd.maintenance_db_id,
+    );
+    const oldQty = Number(pkd.quantity || 0);
+    // For a confirmed row its own qty is already inside `packed`; exclude it so the
+    // headroom reflects what OTHER boxes have packed for this destination.
+    const otherPacked = pkd.is_confirmed ? Math.max(0, packed - oldQty) : packed;
+    const remaining = expected !== null ? Math.max(0, expected - otherPacked) : null;
+
+    return {
+      data: {
+        orderId,
+        itemsDbId: pkd.maintenance_db_id as UUID,
+        destination,
+        expected,
+        packed,
+        remaining,
+      },
+      error: null,
+    };
   },
 
   getOrCreateQrToken: async (entityType: 'package' | 'item' | 'pkd_item', entityId: UUID) => {
@@ -3153,6 +3369,278 @@ const baseDb = {
 
     return names.length ? names.join(', ') : null;
   },
+
+  /**
+   * Duplicates an existing order_pkg_instance, creating a new sibling instance
+   * under the same overview/package. The new instance always gets a fresh
+   * status='design', packed_at=null, and a unique ipac_reference.
+   *
+   * Steps:
+   *   a. Load source instance
+   *   b. Compute nextInstanceNumber for the overview
+   *   c. Insert new order_pkg_instance (destination/category_id/tag copied)
+   *   d. Generate unique ipac_reference via generateAndSaveIpacReference
+   *   e. Bump order_pkg_overview.quantity if needed (mirrors AddPackageTab)
+   *   f. Re-seed pkd_item rows from source
+   *      - default: shadow rows (is_confirmed=false) — packed state reset
+   *      - includeFinalValues=true: copy is_confirmed/quantity verbatim,
+   *        clamping confirmed rows to remaining allocation cap
+   */
+  duplicateBoxInstance: async (
+    sourceInstanceId: UUID,
+    options: { includeFinalValues?: boolean } = {}
+  ): Promise<{
+    data: { newInstanceId: string; instanceNumber: number; ipacReference: string | null } | null;
+    error: any;
+    warning?: string;
+  }> => {
+    const { includeFinalValues = false } = options;
+
+    // ── a. Load source instance ────────────────────────────────────────────
+    const { data: src, error: srcErr } = await supabase
+      .from('order_pkg_instance')
+      .select('id, order_pkg_overview_id, order_package_id, destination, category_id, tag, ipac_reference, status')
+      .eq('id', sourceInstanceId)
+      .maybeSingle();
+
+    if (srcErr) return { data: null, error: srcErr };
+    if (!src?.id) return { data: null, error: { message: 'Source instance not found.' } };
+
+    const overviewId: UUID = src.order_pkg_overview_id;
+    const orderPackageId: UUID = src.order_package_id;
+    const destination: string = String(src.destination || '').trim().toUpperCase();
+    const categoryId: UUID | null = src.category_id || null;
+    const tag: string | null = src.tag ?? null;
+
+    // ── b. Compute nextInstanceNumber ──────────────────────────────────────
+    const { data: lastRow, error: lastRowErr } = await supabase
+      .from('order_pkg_instance')
+      .select('instance_number')
+      .eq('order_pkg_overview_id', overviewId)
+      .order('instance_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (lastRowErr) return { data: null, error: lastRowErr };
+    const nextInstanceNumber = Math.max(1, Number(lastRow?.instance_number || 0) + 1);
+
+    // ── c. Insert new order_pkg_instance ───────────────────────────────────
+    const { data: newInst, error: insertErr } = await supabase
+      .from('order_pkg_instance')
+      .insert({
+        order_pkg_overview_id: overviewId,
+        order_package_id: orderPackageId,
+        instance_number: nextInstanceNumber,
+        status: 'design',
+        packed_at: null,
+        destination: destination || null,
+        category_id: categoryId,
+        tag,
+        ipac_reference: null, // set in step d
+      })
+      .select('id, instance_number')
+      .single();
+
+    if (insertErr || !newInst?.id) return { data: null, error: insertErr || { message: 'Failed to create duplicate instance.' } };
+
+    const newInstanceId: string = newInst.id;
+
+    // ── d. Generate a fresh, unique ipac_reference ─────────────────────────
+    // Always give the duplicate a non-null reference so it is fully operational
+    // in the report + item fetch — matching admin-panel boxes, which ALWAYS set
+    // one. Standard ops boxes were created with a null ref; that is the bug we
+    // are fixing, so we do NOT copy a null reference forward. (generateAndSave
+    // builds DEST-TAG-[ITEM]-SEQ, unique per overview via instanceSeq.)
+    let warning: string | undefined;
+    let ipacReference: string | null = null;
+    if (categoryId && destination) {
+      // Best-effort primary item number for the DEST-TAG-ITEM-SEQ reference.
+      let itemNum: string | number | null = null;
+      const { data: primaryItem } = await supabase
+        .from('pkd_item')
+        .select('items_db:items_db(item_num)')
+        .eq('pkg_instance_id', sourceInstanceId)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (primaryItem) {
+        const idb = Array.isArray((primaryItem as any).items_db)
+          ? (primaryItem as any).items_db[0]
+          : (primaryItem as any).items_db;
+        itemNum = idb?.item_num ?? null;
+      }
+
+      const refResult = await baseDb.generateAndSaveIpacReference({
+        instanceId: newInstanceId,
+        destination,
+        categoryId,
+        itemNum,
+        instanceSeq: nextInstanceNumber,
+        isCustomBox: true,
+      });
+      ipacReference = refResult.ipacReference;
+      if (refResult.error) {
+        warning =
+          'ipac_reference generation failed: ' +
+          (refResult.error.message || String(refResult.error));
+      }
+    }
+
+    // ── e. Bump overview.quantity if needed ────────────────────────────────
+    // Mirrors AddPackageTab: if overview.quantity < nextInstanceNumber, bump it.
+    const { data: ovRow } = await supabase
+      .from('order_pkg_overview')
+      .select('quantity')
+      .eq('id', overviewId)
+      .maybeSingle();
+
+    const currentQty = Number(ovRow?.quantity || 0);
+    if (!Number.isFinite(currentQty) || currentQty < nextInstanceNumber) {
+      await supabase
+        .from('order_pkg_overview')
+        .update({ quantity: nextInstanceNumber })
+        .eq('id', overviewId);
+    }
+
+    // ── f. Re-seed pkd_item rows ───────────────────────────────────────────
+    const { data: srcItems, error: srcItemsErr } = await supabase
+      .from('pkd_item')
+      .select('id, maintenance_db_id, quantity, is_confirmed, created_at')
+      .eq('pkg_instance_id', sourceInstanceId)
+      .order('created_at', { ascending: true });
+
+    if (srcItemsErr) {
+      // Non-fatal: instance was created; return with warning
+      warning = 'pkd_item re-seed failed: ' + (srcItemsErr.message || String(srcItemsErr));
+      return { data: { newInstanceId, instanceNumber: nextInstanceNumber, ipacReference }, error: null, warning };
+    }
+
+    if (srcItems && srcItems.length > 0) {
+      type PkdItemInsert = {
+        maintenance_db_id: string;
+        pkg_instance_id: string;
+        quantity: number;
+        is_confirmed: boolean;
+      };
+      const newRows: PkdItemInsert[] = [];
+
+      for (const item of srcItems as any[]) {
+        const srcQty = Number(item.quantity);
+        const safeQty = Number.isFinite(srcQty) && srcQty > 0 ? srcQty : 1;
+
+        if (includeFinalValues && item.is_confirmed) {
+          // Clamp to remaining allocation cap to avoid exceeding order targets
+          const alloc = await resolvePkdAllocation(sourceInstanceId, item.maintenance_db_id);
+          let clampedQty = safeQty;
+          if (alloc.expected !== null) {
+            const remaining = alloc.expected - alloc.packed;
+            if (remaining <= 0) {
+              // No room — insert as shadow instead
+              newRows.push({ maintenance_db_id: item.maintenance_db_id, pkg_instance_id: newInstanceId, quantity: safeQty, is_confirmed: false });
+              continue;
+            }
+            clampedQty = Math.min(safeQty, remaining);
+          }
+          newRows.push({ maintenance_db_id: item.maintenance_db_id, pkg_instance_id: newInstanceId, quantity: clampedQty, is_confirmed: true });
+        } else {
+          // Default: shadow row — planned quantity preserved, packed state reset
+          newRows.push({ maintenance_db_id: item.maintenance_db_id, pkg_instance_id: newInstanceId, quantity: safeQty, is_confirmed: false });
+        }
+      }
+
+      if (newRows.length > 0) {
+        const { error: itemsInsertErr } = await supabase
+          .from('pkd_item')
+          .insert(newRows);
+
+        if (itemsInsertErr) {
+          warning = 'pkd_item re-seed failed: ' + (itemsInsertErr.message || String(itemsInsertErr));
+        }
+      }
+    }
+
+    return {
+      data: { newInstanceId, instanceNumber: nextInstanceNumber, ipacReference },
+      error: null,
+      ...(warning ? { warning } : {}),
+    };
+  },
+};
+
+/**
+ * Resolve the per-destination allocation row (order_item_allocation) for a pkd_item's
+ * instance. `packed` counts only confirmed pkd_item rows (the recompute trigger), so
+ * callers cap a new/edited quantity against `expected − packed` for that destination.
+ * Returns expected=null when there is no allocation (ad-hoc item / no cap to enforce).
+ */
+const resolvePkdAllocation = async (
+  pkgInstanceId: UUID | null,
+  itemsDbId: UUID | null,
+): Promise<{
+  expected: number | null;
+  packed: number;
+  orderId: UUID | null;
+  destination: string | null;
+}> => {
+  if (!pkgInstanceId || !itemsDbId)
+    return { expected: null, packed: 0, orderId: null, destination: null };
+
+  const { data: inst } = await supabase
+    .from('order_pkg_instance')
+    .select('destination, order_pkg_overview_id')
+    .eq('id', pkgInstanceId)
+    .maybeSingle();
+
+  const code =
+    String(inst?.destination || '')
+      .replace(/[\r\n\t]+/g, '')
+      .trim()
+      .toUpperCase() || 'UNASSIGNED';
+
+  let orderId: UUID | null = null;
+  if (inst?.order_pkg_overview_id) {
+    const { data: ov } = await supabase
+      .from('order_pkg_overview')
+      .select('order_id')
+      .eq('id', inst.order_pkg_overview_id)
+      .maybeSingle();
+    orderId = (ov?.order_id as UUID) || null;
+  }
+  if (!orderId) return { expected: null, packed: 0, orderId: null, destination: code };
+
+  const { data: destRow } = await supabase
+    .from('destinations')
+    .select('id')
+    .eq('code', code)
+    .maybeSingle();
+  let destId: UUID | null = (destRow?.id as UUID) || null;
+  if (!destId) {
+    const { data: fb } = await supabase
+      .from('destinations')
+      .select('id')
+      .eq('code', 'UNASSIGNED')
+      .maybeSingle();
+    destId = (fb?.id as UUID) || null;
+  }
+  if (!destId) return { expected: null, packed: 0, orderId, destination: code };
+
+  const { data: alloc } = await supabase
+    .from('order_item_allocation')
+    .select('expected_qty, packed_qty')
+    .eq('order_id', orderId)
+    .eq('items_db_id', itemsDbId)
+    .eq('destination_id', destId)
+    .maybeSingle();
+  if (!alloc) return { expected: null, packed: 0, orderId, destination: code };
+
+  const ae = Number(alloc.expected_qty);
+  const ap = Number(alloc.packed_qty);
+  return {
+    expected: Number.isFinite(ae) ? ae : 0,
+    packed: Number.isFinite(ap) ? ap : 0,
+    orderId,
+    destination: code,
+  };
 };
 
 const attendanceApi = createAttendanceApi(supabase);

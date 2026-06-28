@@ -9,6 +9,25 @@ interface StartTaskInput {
   startTimeIso?: string | null;
 }
 
+/**
+ * Fetch rows for a large id list in chunks. A single `.in('col', ids)` with hundreds of
+ * ids exceeds the request URL length / 1000-row limit on big orders (300+ packages),
+ * which silently fails the query — this splits it into safe-sized requests.
+ */
+const fetchByIdChunks = async <T>(
+  ids: UUID[],
+  fetchChunk: (chunk: UUID[]) => PromiseLike<{ data: T[] | null; error: unknown }>,
+  chunkSize = 150,
+): Promise<{ data: T[]; error: unknown }> => {
+  const out: T[] = [];
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const { data, error } = await fetchChunk(ids.slice(i, i + chunkSize));
+    if (error) return { data: out, error };
+    if (data) out.push(...data);
+  }
+  return { data: out, error: null };
+};
+
 export const createTasksApi = (supabase: SupabaseClient) => ({
   getTasks: async () => {
     const { data, error } = await supabase
@@ -31,10 +50,13 @@ export const createTasksApi = (supabase: SupabaseClient) => ({
   getTaskLogsByOrderPackageIds: async (orderPackageIds: UUID[]) => {
     if (!orderPackageIds || orderPackageIds.length === 0) return { data: [], error: null };
 
-    const { data: taskPackages, error: tpErr } = await supabase
-      .from('task_packages')
-      .select('task_log_id')
-      .in('order_package_id', orderPackageIds);
+    // Chunked: a 300+ box order's full order_package_id list in one .in() blows the
+    // request URL / row limit and silently returns nothing (→ "No Tasks Assigned").
+    const { data: taskPackages, error: tpErr } = await fetchByIdChunks<{
+      task_log_id: UUID;
+    }>(orderPackageIds, (chunk) =>
+      supabase.from('task_packages').select('task_log_id').in('order_package_id', chunk),
+    );
     if (tpErr) return { data: null, error: tpErr };
 
     const taskLogIds = Array.from(new Set((taskPackages || []).map((tp: any) => tp.task_log_id).filter(Boolean)));
@@ -414,10 +436,13 @@ export const createTasksApi = (supabase: SupabaseClient) => ({
   getActiveTasksForPackages: async (orderPackageIds: UUID[]) => {
     if (!orderPackageIds || orderPackageIds.length === 0) return { data: [], error: null };
 
-    const { data: taskPackages, error: tpErr } = await supabase
-      .from('task_packages')
-      .select('task_log_id')
-      .in('order_package_id', orderPackageIds);
+    // Chunked: a 300+ box order's full order_package_id list in one .in() blows the
+    // request URL / row limit and silently returns nothing (→ "No Tasks Assigned").
+    const { data: taskPackages, error: tpErr } = await fetchByIdChunks<{
+      task_log_id: UUID;
+    }>(orderPackageIds, (chunk) =>
+      supabase.from('task_packages').select('task_log_id').in('order_package_id', chunk),
+    );
     if (tpErr) return { data: null, error: tpErr };
 
     const taskLogIds = Array.from(new Set((taskPackages || []).map((row: any) => row.task_log_id).filter(Boolean)));

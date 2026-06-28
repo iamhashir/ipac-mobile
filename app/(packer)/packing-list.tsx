@@ -1,18 +1,19 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { ArrowLeft, Search, Plus, Filter, Printer, RefreshCw, X, ScanQrCode } from "lucide-react-native";
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { 
-  View, 
-  Text, 
-  TouchableOpacity, 
-  ScrollView, 
-  Alert, 
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  ScrollView,
+  Alert,
   ActivityIndicator,
   TextInput,
   Platform,
   Dimensions,
   Modal
 } from "react-native";
+import { getOrderSnapshot, setOrderSnapshot } from "../../utils/cache/orderSnapshotCache";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useAuth } from "../../utils/AuthContext";
@@ -38,6 +39,7 @@ import CoverSection from "../../components/packer/packing-list/section_10_cover/
 import CommentsSection from "../../components/packer/packing-list/section_03_comments/CommentsSection";
 import CollapsibleCard from "../../components/packer/packing-list/common/CollapsibleCard";
 import { PackageInfoChangeEvent } from "../../components/packer/packing-list/section_01_packing_info/types";
+import DuplicateBoxModal, { DuplicateBoxResult } from "../../components/packer/packing-list/common/DuplicateBoxModal";
 
 interface Order {
   id: string;
@@ -138,6 +140,22 @@ export default function PackingListPage() {
   const sectionRefs = useRef<{ [key: string]: number }>({});
   const screenHeight = Dimensions.get("window").height;
 
+  /**
+   * Race-guard for snapshot hydration.
+   *
+   * Set to `true` as soon as ANY network data starts arriving from loadData().
+   * The hydrate path checks this flag before applying snapshot state; if the
+   * network already won the race we skip the (now stale) snapshot write.
+   */
+  const networkDataArrivedRef = useRef(false);
+
+  /**
+   * Set to `true` when a snapshot was successfully hydrated.
+   * Used by the loadData-triggering effect to call loadData(false) (no spinner)
+   * so we don't flicker back to a loading screen after the instant paint.
+   */
+  const snapshotHydratedRef = useRef(false);
+
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeKey, setActiveKey] = useState<string>("list");
@@ -169,6 +187,12 @@ export default function PackingListPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [globalScannerVisible, setGlobalScannerVisible] = useState(false);
+
+  // ── Duplicate box modal state ────────────────────────────────────────────────
+  const [duplicateTarget, setDuplicateTarget] = useState<{
+    instanceId: string;
+    label: string;
+  } | null>(null);
   const [globalScannerBusy, setGlobalScannerBusy] = useState(false);
   const [cameraPermissions, requestCameraPermission] = useCameraPermissions();
   const [detectedPrinter, setDetectedPrinter] = useState<any>(null);
@@ -526,11 +550,85 @@ export default function PackingListPage() {
     }
   }, [sessionLoading, orderId]); // Simplified dependencies to prevent infinite loops
 
-  // Load data only when orderId changes and we're not in the middle of loading
+  // ── Snapshot hydration + network load ────────────────────────────────────
+  // Single effect that orchestrates both the instant snapshot paint and the
+  // background (or foreground) network revalidation.
+  //
+  // Flow:
+  //   1. Reset race guards for this orderId.
+  //   2. Try to read the persisted snapshot from AsyncStorage.
+  //   3a. Snapshot found → hydrate all state immediately, hide spinner, then
+  //       kick off loadData(false) for a silent background revalidation.
+  //   3b. No snapshot → fall through to loadData(true) (shows full spinner,
+  //       same behaviour as before this feature was added).
+  //
+  // Race safety: networkDataArrivedRef is set to true at the top of loadData()
+  // when the first network response arrives. If AsyncStorage is unusually slow
+  // and the network wins the race, the hydration path bails out before
+  // applying any state — so we never overwrite fresher network data.
   useEffect(() => {
-    if (orderId && !sessionLoading) {
-      loadData();
-    }
+    if (!orderId || sessionLoading) return;
+
+    // Reset guards for the new orderId.
+    networkDataArrivedRef.current = false;
+    snapshotHydratedRef.current = false;
+
+    let cancelled = false;
+
+    (async () => {
+      const snapshot = await getOrderSnapshot(orderId);
+
+      if (cancelled) return; // component unmounted or orderId changed mid-read
+
+      if (networkDataArrivedRef.current) {
+        // Network won the race while we were reading AsyncStorage.
+        // loadData() was already called below and is in flight — do nothing.
+        return;
+      }
+
+      if (snapshot) {
+        // ── Instant paint from cache ────────────────────────────────────────
+        setOrder(snapshot.order as Order | null);
+        setOrderPackages(snapshot.orderPackages as OrderPackage[]);
+        setOrderPackageOverviews(snapshot.orderPackageOverviews as OrderPackageOverview[]);
+        setOverviewInstancesMap(snapshot.overviewInstancesMap as Record<string, OrderPackageInstance[]>);
+        // Derive initial instance selections from the cached instances map
+        // (same logic loadData uses for a fresh mount with no prior selection)
+        setSelectedInstanceByOverview(() => {
+          const next: Record<string, string> = {};
+          (snapshot.orderPackageOverviews as OrderPackageOverview[]).forEach((overview) => {
+            const instances =
+              (snapshot.overviewInstancesMap as Record<string, OrderPackageInstance[]>)[overview.id] || [];
+            if (!instances.length) return;
+            next[overview.id] = instances[0].id;
+          });
+          return next;
+        });
+        setPkgInfoMap(snapshot.pkgInfoMap as Record<string, PackageInfo>);
+        setBoxTypes(snapshot.boxTypes);
+        setPackingTypes(snapshot.packingTypes);
+        setPackTypeHasVacuum(snapshot.packTypeHasVacuum);
+        setPackTypeHasGas(snapshot.packTypeHasGas);
+        setEquipmentMap(snapshot.equipmentMap);
+        setBoxStartedMap(snapshot.boxStartedMap);
+
+        snapshotHydratedRef.current = true;
+        // Dismiss the full-screen spinner — the packer now sees cached data.
+        setLoading(false);
+
+        // Background revalidation — no spinner, results overwrite state when done.
+        if (!cancelled) loadData(false);
+      } else {
+        // No cached snapshot — show spinner and do a normal foreground load.
+        if (!cancelled) loadData(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  // loadData is stable (useCallback on [orderId]); include it for correctness.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderId, sessionLoading]);
 
   // Modify loadData to accept an optional parameter for the initial loading spinner
@@ -543,6 +641,25 @@ export default function PackingListPage() {
         return;
       }
 
+      // ── Snapshot accumulators ──────────────────────────────────────────────
+      // We collect the final values of each state field as we build them so we
+      // can persist a coherent snapshot at the very end of a successful load.
+      // These are declared here (not inside inner ifs) so every branch can
+      // assign into them; they default to empty and are overwritten as data
+      // arrives from Supabase.
+      let snap_order: Record<string, unknown> | null = null;
+      let snap_orderPackages: unknown[] = [];
+      let snap_orderPackageOverviews: unknown[] = [];
+      let snap_overviewInstancesMap: Record<string, unknown[]> = {};
+      let snap_pkgInfoMap: Record<string, unknown> = {};
+      let snap_boxTypes: Record<string, string> = {};
+      let snap_packingTypes: Record<string, string> = {};
+      let snap_packTypeHasVacuum: Record<string, boolean> = {};
+      let snap_packTypeHasGas: Record<string, boolean> = {};
+      let snap_equipmentMap: Record<string, string> = {};
+      let snap_boxStartedMap: Record<string, boolean> = {};
+      // ──────────────────────────────────────────────────────────────────────
+
       console.log("Loading order data for orderId:", orderId);
       const { data: orderData, error: orderErr } = await db.getOrderById(
         orderId
@@ -552,6 +669,10 @@ export default function PackingListPage() {
         Alert.alert("Error", "Failed to load order");
         return;
       }
+      // Mark that live network data is arriving — snapshot hydration must not
+      // overwrite this or any later state writes.
+      networkDataArrivedRef.current = true;
+      snap_order = orderData as Record<string, unknown>;
       setOrder(orderData);
 
       console.log("Loading order packages...");
@@ -564,6 +685,7 @@ export default function PackingListPage() {
       const sorted = (pkgs || []).sort(
         (a, b) => (a.package_number || 0) - (b.package_number || 0)
       );
+      snap_orderPackages = sorted;
       setOrderPackages(sorted);
 
       // Load overview/instance model (new pipeline). If missing, UI falls back to legacy package tabs.
@@ -581,6 +703,7 @@ export default function PackingListPage() {
           setSelectedInstanceByOverview({});
         } else {
           const overviews = (overviewsRaw || []) as OrderPackageOverview[];
+          snap_orderPackageOverviews = overviews;
           setOrderPackageOverviews(overviews);
 
           const overviewIds = overviews.map((overview) => overview.id).filter(Boolean);
@@ -604,6 +727,7 @@ export default function PackingListPage() {
                 groupedInstances[overviewId].push(instance as OrderPackageInstance);
               });
 
+              snap_overviewInstancesMap = groupedInstances;
               setOverviewInstancesMap(groupedInstances);
               setSelectedInstanceByOverview((prev) => {
                 const next: Record<string, string> = {};
@@ -652,6 +776,7 @@ export default function PackingListPage() {
         (infos || []).forEach((i: any) => {
           map[i.id] = i;
         });
+        snap_pkgInfoMap = map;
         setPkgInfoMap(map);
 
         const boxTypeIds = Array.from(
@@ -672,6 +797,7 @@ export default function PackingListPage() {
           (boxesRes.data || []).forEach((mt: any) => {
             m[mt.id] = mt.name;
           });
+          snap_boxTypes = m;
           setBoxTypes(m);
         }
         if (typesRes.data) {
@@ -683,6 +809,9 @@ export default function PackingListPage() {
             vMap[t.id] = !!t.includes_vacuum_protection;
             gMap[t.id] = !!t.includes_gas_protection;
           });
+          snap_packingTypes = pMap;
+          snap_packTypeHasVacuum = vMap;
+          snap_packTypeHasGas = gMap;
           setPackingTypes(pMap);
           setPackTypeHasVacuum(vMap);
           setPackTypeHasGas(gMap);
@@ -724,14 +853,35 @@ export default function PackingListPage() {
             else if (label) em[key] = `${em[key]}, ${label}`;
           });
         }
+        snap_equipmentMap = em;
         setEquipmentMap(em);
 
         const startedMap: Record<string, boolean> = {};
         (taskPackagesRes.data || []).forEach((tp: any) => {
           startedMap[tp.order_package_id] = true;
         });
+        snap_boxStartedMap = startedMap;
         setBoxStartedMap(startedMap);
       }
+
+      // ── Persist snapshot ──────────────────────────────────────────────────
+      // We reach here only on a fully successful load (no early return from
+      // any error branch above). Fire-and-forget — errors are swallowed inside
+      // setOrderSnapshot so the UI is never affected.
+      void setOrderSnapshot(orderId, {
+        order: snap_order,
+        orderPackages: snap_orderPackages,
+        orderPackageOverviews: snap_orderPackageOverviews,
+        overviewInstancesMap: snap_overviewInstancesMap,
+        pkgInfoMap: snap_pkgInfoMap,
+        boxTypes: snap_boxTypes,
+        packingTypes: snap_packingTypes,
+        packTypeHasVacuum: snap_packTypeHasVacuum,
+        packTypeHasGas: snap_packTypeHasGas,
+        equipmentMap: snap_equipmentMap,
+        boxStartedMap: snap_boxStartedMap,
+      });
+      // ──────────────────────────────────────────────────────────────────────
     } catch (e) {
       console.error("Packing Report load error", e);
       Alert.alert("Error", "Unexpected error while loading packing report");
@@ -1141,35 +1291,56 @@ export default function PackingListPage() {
         isStarted: tabIsStarted,
         content: (
           <View>
-            {box.instances.length > 1 && !box.overviewId.startsWith('legacy-overview-') && (
+            {!box.overviewId.startsWith('legacy-overview-') && (
               <View className="mx-4 mt-3 mb-2 bg-white rounded-lg border border-gray-200 p-3">
-                <Text className="text-xs font-semibold text-gray-600 mb-2">Instance</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  <View className="flex-row">
-                    {box.instances.map((instance) => {
-                      const isSelected = box.selectedInstanceId === instance.id;
-                      return (
-                        <TouchableOpacity
-                          key={instance.id}
-                          className={`px-3 py-1.5 rounded-full mr-2 border ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white border-gray-300'}`}
-                          onPress={() =>
-                            setSelectedInstanceByOverview((prev) => ({
-                              ...prev,
-                              [box.overviewId]: instance.id,
-                            }))
-                          }
-                        >
-                          <Text className={`text-xs font-semibold ${isSelected ? 'text-white' : 'text-gray-700'}`}>
-                            #{instance.instance_number ?? '-'}
-                            {instance.ipac_reference
-                              ? ` (${instance.ipac_reference})`
-                              : ''}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                </ScrollView>
+                <View className="flex-row items-center justify-between mb-2">
+                  <Text className="text-xs font-semibold text-gray-600">Instance</Text>
+                  {/* Duplicate button — always available on real overviews */}
+                  {box.selectedInstance && !box.selectedInstance.id.startsWith('legacy-instance-') && (
+                    <TouchableOpacity
+                      onPress={() => {
+                        const pkgNum = box.packageNumber ?? '?';
+                        const instNum = box.selectedInstance?.instance_number ?? '?';
+                        setDuplicateTarget({
+                          instanceId: box.selectedInstance!.id,
+                          label: `${pkgNum}.${instNum}`,
+                        });
+                      }}
+                      style={{ minHeight: 36, minWidth: 100 }}
+                      className="flex-row items-center px-3 py-1.5 rounded-full border border-blue-300 bg-blue-50"
+                    >
+                      <Text className="text-xs font-semibold text-blue-700">+ Duplicate</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+                {box.instances.length > 1 && (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    <View className="flex-row">
+                      {box.instances.map((instance) => {
+                        const isSelected = box.selectedInstanceId === instance.id;
+                        return (
+                          <TouchableOpacity
+                            key={instance.id}
+                            className={`px-3 py-1.5 rounded-full mr-2 border ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white border-gray-300'}`}
+                            onPress={() =>
+                              setSelectedInstanceByOverview((prev) => ({
+                                ...prev,
+                                [box.overviewId]: instance.id,
+                              }))
+                            }
+                          >
+                            <Text className={`text-xs font-semibold ${isSelected ? 'text-white' : 'text-gray-700'}`}>
+                              #{instance.instance_number ?? '-'}
+                              {instance.ipac_reference
+                                ? ` (${instance.ipac_reference})`
+                                : ''}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </ScrollView>
+                )}
               </View>
             )}
 
@@ -1410,6 +1581,7 @@ export default function PackingListPage() {
     handlePackageInfoChange,
     selectedInstanceByOverview,
     detectedPrinter,
+    duplicateTarget,
   ]);
 
   const handleBack = () => router.back();
@@ -1767,6 +1939,30 @@ export default function PackingListPage() {
           </View>
         </SafeAreaView>
       </Modal>
+
+      {/* Duplicate Box Modal */}
+      {duplicateTarget && (
+        <DuplicateBoxModal
+          visible={!!duplicateTarget}
+          boxLabel={duplicateTarget.label}
+          sourceInstanceId={duplicateTarget.instanceId}
+          onClose={() => setDuplicateTarget(null)}
+          onSuccess={(result: DuplicateBoxResult) => {
+            setDuplicateTarget(null);
+            // Light refresh — no full-screen spinner
+            void loadData(false).then(() => {
+              // Auto-select the new instance so packer lands on it
+              // We can't easily find its overviewId here without extra state,
+              // so just refresh the list and show a brief alert with the new label
+              Alert.alert(
+                'Box Duplicated',
+                `Created instance #${result.instanceNumber}${result.ipacReference ? ` (${result.ipacReference})` : ''}.`,
+                [{ text: 'OK' }]
+              );
+            });
+          }}
+        />
+      )}
     </SafeAreaView>
   );
 }

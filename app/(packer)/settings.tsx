@@ -3,11 +3,13 @@ import { View, Text, TouchableOpacity, ScrollView, TextInput, Switch, Alert } fr
 import { SafeAreaView } from "react-native-safe-area-context";
 import { NavigationButtons } from "../../components/NavigationButtons";
 import { useTextSize, TextSizeOption } from "../../utils/TextSizeContext";
+import { useImmersive } from "../../utils/ImmersiveContext";
 import { currentVersion } from "../../utils/versioning";
 import { usePackerSession } from "../../utils/PackerSessionContext";
 
 export default function PackerSettings() {
   const { size, setSize } = useTextSize();
+  const { immersive, setImmersive } = useImmersive();
   const {
     isRetrospectiveMode,
     retrospectiveDate,
@@ -202,6 +204,29 @@ export default function PackerSettings() {
                   <Text className={`text-gray-900 font-semibold ${previewTextCls}`}>120 × 80 × 60 cm</Text>
                 </View>
               </View>
+            </View>
+          </View>
+
+          <View className="mt-4 bg-white border border-gray-200 rounded-lg p-4">
+            <Text className="text-gray-800 text-base font-semibold">
+              Full-screen mode
+            </Text>
+            <Text className="text-gray-500 text-xs mt-1">
+              Hide the phone's bottom navigation bar so the whole screen is used
+              for the app.
+            </Text>
+
+            <View className="mt-4 flex-row items-center justify-between bg-blue-50 border border-blue-200 rounded-lg px-3 py-3">
+              <View className="flex-1 pr-3">
+                <Text className="text-blue-900 font-semibold">
+                  Hide system navigation bar
+                </Text>
+                <Text className="text-blue-700 text-xs mt-1">
+                  ON: the bar stays hidden (swipe up from the bottom edge to
+                  reveal it briefly). Turn OFF to keep it visible at all times.
+                </Text>
+              </View>
+              <Switch value={immersive} onValueChange={setImmersive} />
             </View>
           </View>
 

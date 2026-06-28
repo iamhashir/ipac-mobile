@@ -65,3 +65,5 @@ supabase/migrations/*
 
 # Local archive of replaced implementations
 archives/
+# Claude Code local session dir
+.claude/

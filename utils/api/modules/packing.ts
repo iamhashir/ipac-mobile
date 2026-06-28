@@ -132,6 +132,26 @@ const mapVariantRowsToOptions = (variants?: any[] | null) => {
   return Array.from(dedup.values());
 };
 
+/**
+ * Fetch rows for a large id list in chunks. A single `.in('id', ids)` with hundreds of
+ * UUIDs can exceed the request URL length and/or the 1000-row default limit, silently
+ * returning fewer rows (or failing) — which broke box-type resolution on big orders
+ * (300+ boxes → boxes mis-classified as standard). Chunking keeps every request small.
+ */
+const fetchByIdChunks = async <T>(
+  ids: UUID[],
+  fetchChunk: (chunk: UUID[]) => PromiseLike<{ data: T[] | null; error: unknown }>,
+  chunkSize = 150,
+): Promise<{ data: T[]; error: unknown }> => {
+  const out: T[] = [];
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const { data, error } = await fetchChunk(ids.slice(i, i + chunkSize));
+    if (error) return { data: out, error };
+    if (data) out.push(...data);
+  }
+  return { data: out, error: null };
+};
+
 export const createPackingApi = (supabase: SupabaseClient) => ({
   getOrderPackages: async (orderId: UUID) => {
     const { data, error } = await supabase
@@ -143,11 +163,12 @@ export const createPackingApi = (supabase: SupabaseClient) => ({
 
   getPackageInfosByIds: async (ids: UUID[]) => {
     if (!ids || ids.length === 0) return { data: [], error: null };
-    const { data, error } = await supabase
-      .from('package_info')
-      .select('id, center_of_gravity, quantity, box_type_id, packing_type_id, sei_category, sei_protection, tare, net_weight, gross_weight, internal_length, internal_width, internal_height, external_length, external_width, external_height')
-      .in('id', ids);
-    return { data, error };
+    return fetchByIdChunks(ids, (chunk) =>
+      supabase
+        .from('package_info')
+        .select('id, center_of_gravity, quantity, box_type_id, packing_type_id, sei_category, sei_protection, tare, net_weight, gross_weight, internal_length, internal_width, internal_height, external_length, external_width, external_height')
+        .in('id', chunk),
+    );
   },
 
   upsertFinalDimensions: async ({ orderPackageId, finalInfoId, originalInfoId, scope, length, width, height }: FinalDimensionInput) => {
@@ -189,29 +210,26 @@ export const createPackingApi = (supabase: SupabaseClient) => ({
 
   getMaterialsByIds: async (ids: UUID[]) => {
     if (!ids || ids.length === 0) return { data: [], error: null };
-    const { data, error } = await supabase
-      .from('materials')
-      .select('id, name, unit_id')
-      .in('id', ids);
-    return { data, error };
+    return fetchByIdChunks(ids, (chunk) =>
+      supabase.from('materials').select('id, name, unit_id').in('id', chunk),
+    );
   },
 
   getBoxTypesByIds: async (ids: UUID[]) => {
     if (!ids || ids.length === 0) return { data: [], error: null };
-    const { data, error } = await supabase
-      .from('box_type')
-      .select('id, name')
-      .in('id', ids);
-    return { data, error };
+    return fetchByIdChunks(ids, (chunk) =>
+      supabase.from('box_type').select('id, name').in('id', chunk),
+    );
   },
 
   getPackingTypesByIds: async (ids: UUID[]) => {
     if (!ids || ids.length === 0) return { data: [], error: null };
-    const { data, error } = await supabase
-      .from('packing_types')
-      .select('id, code, name, includes_gas_protection, includes_vacuum_protection')
-      .in('id', ids);
-    return { data, error };
+    return fetchByIdChunks(ids, (chunk) =>
+      supabase
+        .from('packing_types')
+        .select('id, code, name, includes_gas_protection, includes_vacuum_protection')
+        .in('id', chunk),
+    );
   },
 
   getAllBoxTypes: async () => {
