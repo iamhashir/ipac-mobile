@@ -1,6 +1,7 @@
 import React from 'react';
-import { View, Text, Image } from 'react-native';
+import { View, Text } from 'react-native';
 import { cn } from '../../utils/cn';
+import { CachedImage } from './CachedImage';
 
 interface AvatarProps {
   uri?: string | null;
@@ -21,11 +22,12 @@ export const Avatar: React.FC<AvatarProps> = ({ uri, name, size = 64, className 
   const borderRadius = size / 2;
   if (uri) {
     return (
-      <Image
-        source={{ uri: uri || undefined }}
-        style={{ width: size, height: size, borderRadius }}
+      <View
+        style={{ width: size, height: size, borderRadius, overflow: 'hidden' }}
         className={cn('bg-gray-100 border border-gray-200', className)}
-      />
+      >
+        <CachedImage uri={uri} style={{ width: '100%', height: '100%' }} contentFit="cover" />
+      </View>
     );
   }
   return (

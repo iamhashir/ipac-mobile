@@ -145,9 +145,27 @@ const fetchByIdChunks = async <T>(
 ): Promise<{ data: T[]; error: unknown }> => {
   const out: T[] = [];
   for (let i = 0; i < ids.length; i += chunkSize) {
-    const { data, error } = await fetchChunk(ids.slice(i, i + chunkSize));
-    if (error) return { data: out, error };
-    if (data) out.push(...data);
+    const chunk = ids.slice(i, i + chunkSize);
+    // Retry transient failures (a flaky tablet network is the norm on the floor).
+    // Before this, ONE failed chunk returned partial data and callers used it,
+    // silently dropping every id in that chunk — which is why box-type / packing-type
+    // names (and similar lookups) intermittently rendered blank.
+    let chunkData: T[] | null = null;
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const { data, error } = await fetchChunk(chunk);
+      if (!error) {
+        chunkData = data;
+        lastError = null;
+        break;
+      }
+      lastError = error;
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+      }
+    }
+    if (lastError) return { data: out, error: lastError };
+    if (chunkData) out.push(...chunkData);
   }
   return { data: out, error: null };
 };
