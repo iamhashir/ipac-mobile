@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Image, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { CachedImage } from '../../../ui/CachedImage';
 import * as ImagePicker from 'expo-image-picker';
 import { Camera, Plus } from 'lucide-react-native';
 
@@ -757,10 +758,11 @@ const MaintenanceTaskFlowSection: React.FC<MaintenanceTaskFlowSectionProps> = ({
                               <View className="flex-row">
                                 {mediaItems.map((media: any) => (
                                   <View key={media.id} className="mr-2">
-                                    <Image
-                                      source={{ uri: media.signedUrl || media.image_url }}
+                                    <CachedImage
+                                      uri={media.signedUrl || media.image_url}
+                                      cacheKey={media?.id != null ? String(media.id) : undefined}
                                       style={{ width: 76, height: 76, borderRadius: 8, backgroundColor: '#e5e7eb' }}
-                                      resizeMode="cover"
+                                      contentFit="cover"
                                     />
                                   </View>
                                 ))}

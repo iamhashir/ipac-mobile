@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, Modal, ScrollView, TextInput, Alert, Image } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, ScrollView, TextInput, Alert } from 'react-native';
+import { CachedImage } from '../../../ui/CachedImage';
 import * as ImagePicker from 'expo-image-picker';
 import TabLayout, { TabDefinition } from '../shared/navigation/TabLayout';
 import SimpleSelect from './subcomponents/SimpleSelect';
@@ -737,9 +738,10 @@ const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, or
               <ScrollView horizontal className="mt-3">
                 {taskPhotoUris.map((uri, index) => (
                   <View key={`${uri}-${index}`} className="mr-3 items-center">
-                    <Image
-                      source={{ uri }}
+                    <CachedImage
+                      uri={uri}
                       style={{ width: 84, height: 84, borderRadius: 8, borderWidth: 1, borderColor: '#cbd5e1' }}
+                      contentFit="cover"
                     />
                     <TouchableOpacity
                       className="mt-1 px-2 py-1 rounded border border-red-300 bg-red-50"
