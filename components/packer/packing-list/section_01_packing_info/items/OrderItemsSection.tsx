@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, SafeAreaView, Platform, ScrollView, Image, KeyboardAvoidingView } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, SafeAreaView, Platform, ScrollView, KeyboardAvoidingView } from 'react-native';
+import { CachedImage } from '../../../../ui/CachedImage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
@@ -260,7 +261,7 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
   const [loadingItemMedia, setLoadingItemMedia] = useState(false);
 
   const [rowWidths, setRowWidths] = useState<Record<string, number>>({});
-  const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
+  const [enlargedImage, setEnlargedImage] = useState<{ uri: string; cacheKey?: string } | null>(null);
   const [permissions, requestPermission] = useCameraPermissions();
   const [customPrintModalVisible, setCustomPrintModalVisible] = useState(false);
   const [selectedItemForCustomPrint, setSelectedItemForCustomPrint] = useState<{item: any, rowId: string, outerItem: any} | null>(null);
@@ -1636,14 +1637,15 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
               >
                 {itemMedia.map((media) => (
                   <View key={media.id} className="relative" style={{ width: '47%', aspectRatio: 1 }}>
-                    <Image
-                      source={{ uri: media.image_url }}
+                    <CachedImage
+                      uri={media.image_url}
+                      cacheKey={media?.id != null ? String(media.id) : undefined}
                       style={{ width: '100%', height: '100%', borderRadius: 12 }}
-                      resizeMode="cover"
+                      contentFit="cover"
                     />
                     <View className="absolute top-2 right-2 flex-row gap-2">
                       <TouchableOpacity
-                        onPress={() => setEnlargedImage(media.image_url)}
+                        onPress={() => setEnlargedImage({ uri: media.image_url, cacheKey: media?.id != null ? String(media.id) : undefined })}
                         className="bg-blue-600 w-8 h-8 rounded-full items-center justify-center shadow-lg"
                       >
                         <Eye size={16} color="white" />
@@ -1680,10 +1682,11 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
             <X size={24} color="white" />
           </TouchableOpacity>
           {enlargedImage && (
-            <Image
-              source={{ uri: enlargedImage }}
+            <CachedImage
+              uri={enlargedImage.uri}
+              cacheKey={enlargedImage.cacheKey}
               style={{ width: '100%', height: '100%' }}
-              resizeMode="contain"
+              contentFit="contain"
             />
           )}
         </View>

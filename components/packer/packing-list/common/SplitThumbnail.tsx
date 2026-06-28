@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, Image } from 'react-native';
+import { View, Text, TouchableOpacity } from 'react-native';
 import { Camera, FileText } from 'lucide-react-native';
+import { CachedImage } from '../../../ui/CachedImage';
 
 interface SplitThumbnailProps {
   media: any[];
@@ -43,10 +44,11 @@ export const SplitThumbnail: React.FC<SplitThumbnailProps> = ({
       className="bg-slate-200 rounded-lg overflow-hidden mr-2 relative"
     >
       {firstImage?.image_url && !hasError ? (
-        <Image
-          source={{ uri: firstImage.image_url }}
+        <CachedImage
+          uri={firstImage.image_url}
+          cacheKey={firstImage?.id != null ? String(firstImage.id) : undefined}
           style={{ width: '100%', height: '100%' }}
-          resizeMode="cover"
+          contentFit="cover"
           onError={() => setHasError(true)}
         />
       ) : (
