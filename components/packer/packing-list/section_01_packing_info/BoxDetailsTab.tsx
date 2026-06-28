@@ -3,7 +3,8 @@ import { View, Text, TouchableOpacity, Alert, Platform, ActivityIndicator } from
 import * as ImagePicker from 'expo-image-picker';
 import { Camera, Printer, Eye, X, Trash2, FileText } from 'lucide-react-native';
 import * as Sharing from 'expo-sharing';
-import { Modal, ScrollView, Image, SafeAreaView } from 'react-native';
+import { Modal, ScrollView, SafeAreaView } from 'react-native';
+import { CachedImage } from '../../../ui/CachedImage';
 import { SplitThumbnail } from '../common/SplitThumbnail';
 import { chooseQrPrintSizePreset } from './items/qrPrintPresets';
 import OrderPackingInfo, { BoxInfoDetails } from './order_packing_info';
@@ -139,7 +140,7 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
   const [media, setMedia] = useState<any[]>([]);
   const [loadingMedia, setLoadingMedia] = useState(false);
   const [mediaModalVisible, setMediaModalVisible] = useState(false);
-  const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
+  const [enlargedImage, setEnlargedImage] = useState<{ uri: string; cacheKey?: string } | null>(null);
 
   const loadBoxMedia = React.useCallback(async () => {
     try {
@@ -648,14 +649,15 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
               >
                 {media.map((m) => (
                   <View key={m.id} className="relative" style={{ width: '47%', aspectRatio: 1 }}>
-                    <Image
-                      source={{ uri: m.image_url }}
+                    <CachedImage
+                      uri={m.image_url}
+                      cacheKey={m?.id != null ? String(m.id) : undefined}
                       style={{ width: '100%', height: '100%', borderRadius: 12 }}
-                      resizeMode="cover"
+                      contentFit="cover"
                     />
                     <View className="absolute top-2 right-2 flex-row gap-2">
                       <TouchableOpacity
-                        onPress={() => setEnlargedImage(m.image_url)}
+                        onPress={() => setEnlargedImage({ uri: m.image_url, cacheKey: m?.id != null ? String(m.id) : undefined })}
                         className="bg-blue-600 w-8 h-8 rounded-full items-center justify-center shadow-lg"
                       >
                         <Eye size={16} color="white" />
@@ -692,10 +694,11 @@ const BoxDetailsTab: React.FC<BoxDetailsTabProps> = ({ orderId, orderPackageId, 
             <X size={24} color="white" />
           </TouchableOpacity>
           {enlargedImage && (
-            <Image
-              source={{ uri: enlargedImage }}
+            <CachedImage
+              uri={enlargedImage.uri}
+              cacheKey={enlargedImage.cacheKey}
               style={{ width: '100%', height: '100%' }}
-              resizeMode="contain"
+              contentFit="contain"
             />
           )}
         </View>

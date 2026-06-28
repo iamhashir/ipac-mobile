@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, TouchableOpacity, Modal, Alert, ScrollView, Image } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, Alert, ScrollView } from 'react-native';
+import { CachedImage } from '../../../../ui/CachedImage';
 import * as ImagePicker from 'expo-image-picker';
 import { Camera } from 'lucide-react-native';
 import { db } from '../../../../../utils/api/supabase';
@@ -419,10 +420,11 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
                         >
                           <View className="w-16 h-16 rounded-lg border border-gray-300 bg-gray-100 overflow-hidden">
                             {media.signedUrl ? (
-                              <Image
-                                source={{ uri: media.signedUrl }}
+                              <CachedImage
+                                uri={media.signedUrl}
+                                cacheKey={media.id}
                                 style={{ width: '100%', height: '100%' }}
-                                resizeMode="cover"
+                                contentFit="cover"
                               />
                             ) : (
                               <View className="flex-1 items-center justify-center">
@@ -517,10 +519,11 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
                       >
                         <View className="w-16 h-16 rounded-lg border border-gray-300 bg-gray-100 overflow-hidden">
                           {media.signedUrl ? (
-                            <Image
-                              source={{ uri: media.signedUrl }}
+                            <CachedImage
+                              uri={media.signedUrl}
+                              cacheKey={media.id}
                               style={{ width: '100%', height: '100%' }}
-                              resizeMode="cover"
+                              contentFit="cover"
                             />
                           ) : (
                             <View className="flex-1 items-center justify-center">
@@ -549,10 +552,11 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
             <Text className="text-gray-800 font-semibold mb-3 text-lg">Task Image</Text>
             <View className="w-full rounded-lg overflow-hidden bg-gray-100" style={{ height: 320 }}>
               {mediaPreview.media?.signedUrl ? (
-                <Image
-                  source={{ uri: mediaPreview.media.signedUrl }}
+                <CachedImage
+                  uri={mediaPreview.media.signedUrl}
+                  cacheKey={mediaPreview.media.id}
                   style={{ width: '100%', height: '100%' }}
-                  resizeMode="contain"
+                  contentFit="contain"
                 />
               ) : (
                 <View className="flex-1 items-center justify-center">
