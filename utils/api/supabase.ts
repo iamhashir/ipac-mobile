@@ -8,6 +8,7 @@ import { createAttendanceApi } from './modules/attendance';
 import { createPackingApi } from './modules/packing';
 import { createTasksApi } from './modules/tasks';
 import { createServicesApi } from './modules/services';
+import { getCachedSignedUrl } from '../cache/signedUrlCache';
 
 interface AttendanceWindow {
   orderId: UUID;
@@ -3123,8 +3124,8 @@ const baseDb = {
     if (error || !data) return { data, error };
 
     const mediaWithUrls = await Promise.all(data.map(async (m: any) => {
-      const { data: signedData } = await supabase.storage.from('media').createSignedUrl(m.image_url, 31536000);
-      return { ...m, image_url: signedData?.signedUrl || m.image_url };
+      const signedUrl = await getCachedSignedUrl(supabase, 'media', m.image_url);
+      return { ...m, image_url: signedUrl || m.image_url };
     }));
 
     return { data: mediaWithUrls, error: null };
@@ -3141,8 +3142,8 @@ const baseDb = {
     if (error || !data) return { data, error };
 
     const mediaWithUrls = await Promise.all(data.map(async (m: any) => {
-      const { data: signedData } = await supabase.storage.from('media').createSignedUrl(m.image_url, 31536000);
-      return { ...m, image_url: signedData?.signedUrl || m.image_url };
+      const signedUrl = await getCachedSignedUrl(supabase, 'media', m.image_url);
+      return { ...m, image_url: signedUrl || m.image_url };
     }));
 
     return { data: mediaWithUrls, error: null };
