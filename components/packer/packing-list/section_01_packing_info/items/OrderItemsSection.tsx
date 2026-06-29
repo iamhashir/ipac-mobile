@@ -12,6 +12,7 @@ import { buildPortalScanUrl } from '../../../../../utils/portalUrl';
 import { toFiniteNumberOrNull, getRemainingExpectedQty, isCatalogItemFullyPacked } from '../../../../../utils/catalogItemHelpers';
 import QtyAllocationModal from './QtyAllocationModal';
 import CatalogBrowserModal from './CatalogBrowserModal';
+import ManualItemModal from './ManualItemModal';
 import { chooseQrPrintSizePreset } from './qrPrintPresets';
 import CustomPrintModal from '../../common/CustomPrintModal';
 import { SplitThumbnail } from '../../common/SplitThumbnail';
@@ -216,15 +217,6 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
   const [clientLogoUrl, setClientLogoUrl] = useState<string | null>(null);
 
   const [manualItemModalVisible, setManualItemModalVisible] = useState(false);
-  const [manualItemSaving, setManualItemSaving] = useState(false);
-  const [manualItemDesignation, setManualItemDesignation] = useState('');
-  const [manualItemQty, setManualItemQty] = useState('1');
-  const [manualItemLength, setManualItemLength] = useState('');
-  const [manualItemWidth, setManualItemWidth] = useState('');
-  const [manualItemHeight, setManualItemHeight] = useState('');
-  // Focus chaining for the manual-item dimensions row
-  const manualWidthRef = useRef<TextInput>(null);
-  const manualHeightRef = useRef<TextInput>(null);
 
   const [itemMediaModalVisible, setItemMediaModalVisible] = useState(false);
   const [selectedItemForMedia, setSelectedItemForMedia] = useState<any | null>(null);
@@ -599,58 +591,6 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
     );
   };
 
-  const handleSaveManualItem = async () => {
-    if (!manualItemDesignation.trim()) {
-      Alert.alert('Missing Name', 'Please enter an item name/designation.');
-      return;
-    }
-
-    const qty = Number(manualItemQty);
-    if (!Number.isFinite(qty) || qty <= 0) {
-      Alert.alert('Validation', 'Please enter a quantity greater than 0.');
-      return;
-    }
-
-    try {
-      setManualItemSaving(true);
-      // 1. Create ad-hoc item in items_db
-      const { data: catalogItem, error: catalogError } = await db.createAdHocItem({
-        clientId,
-        description: manualItemDesignation.trim(),
-        quantity: qty,
-        length: Number(manualItemLength) || undefined,
-        width: Number(manualItemWidth) || undefined,
-        height: Number(manualItemHeight) || undefined,
-      });
-
-      if (catalogError || !catalogItem?.id) throw catalogError || new Error('Failed to create item');
-
-      // 2. Assign to package
-      const { error: assignError } = await db.assignItemToPackage(
-        catalogItem.id,
-        orderPackageId,
-        Number(manualItemQty) || 1,
-        orderPkgInstanceId || undefined
-      );
-
-      if (assignError) throw assignError;
-
-      setManualItemModalVisible(false);
-      // Reset form
-      setManualItemDesignation('');
-      setManualItemQty('1');
-      setManualItemLength('');
-      setManualItemWidth('');
-      setManualItemHeight('');
-
-      await loadItems();
-      Alert.alert('Success', 'Item added to box.');
-    } catch (e: any) {
-      Alert.alert('Error', e.message || 'Failed to add manual item.');
-    } finally {
-      setManualItemSaving(false);
-    }
-  };
 
   const connectPrinter = async () => {
     if (Platform.OS === 'web') {
@@ -1454,124 +1394,14 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
         </View>
       </Modal>
 
-      <Modal
+      <ManualItemModal
         visible={manualItemModalVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setManualItemModalVisible(false)}
-      >
-        <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.45)', justifyContent: 'center', paddingHorizontal: 20 }}>
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 80}
-            style={{ width: '100%' }}
-          >
-          <View className="bg-white rounded-2xl p-5 shadow-xl">
-            <View className="flex-row justify-between items-center mb-4">
-              <Text className="text-xl font-bold text-slate-900">Add Manual Item</Text>
-              <TouchableOpacity onPress={() => setManualItemModalVisible(false)}>
-                <X size={24} color="#64748b" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-              <View className="space-y-4">
-                <View>
-                  <Text className="text-sm font-semibold text-slate-700 mb-1">Item Name / Designation</Text>
-                  <TextInput
-                    disableFullscreenUI
-                    className="border border-slate-200 rounded-xl px-4 py-3 text-slate-900 bg-slate-50"
-                    placeholder="e.g. Spare Parts Box"
-                    value={manualItemDesignation}
-                    onChangeText={setManualItemDesignation}
-                  />
-                </View>
-
-                <View className="flex-row space-x-3">
-                  <View className="flex-1">
-                    <Text className="text-sm font-semibold text-slate-700 mb-1">Quantity</Text>
-                    <TextInput
-                      disableFullscreenUI
-                      className="border border-slate-200 rounded-xl px-4 py-3 text-slate-900 bg-slate-50"
-                      keyboardType="numeric"
-                      value={manualItemQty}
-                      onChangeText={setManualItemQty}
-                    />
-                  </View>
-                </View>
-
-                <Text className="text-sm font-bold text-slate-800 mt-2">Dimensions (cm) - Optional</Text>
-                <View className="flex-row space-x-2">
-                  <View className="flex-1">
-                    <Text className="text-[10px] font-bold text-slate-500 uppercase">Length</Text>
-                    <TextInput
-                      disableFullscreenUI
-                      className="border border-slate-200 rounded-xl px-3 py-2.5 text-slate-900 bg-slate-50"
-                      keyboardType="numeric"
-                      placeholder="L"
-                      value={manualItemLength}
-                      onChangeText={setManualItemLength}
-                      returnKeyType="next"
-                      blurOnSubmit={false}
-                      onSubmitEditing={() => manualWidthRef.current?.focus()}
-                    />
-                  </View>
-                  <View className="flex-1">
-                    <Text className="text-[10px] font-bold text-slate-500 uppercase">Width</Text>
-                    <TextInput
-                      ref={manualWidthRef}
-                      disableFullscreenUI
-                      className="border border-slate-200 rounded-xl px-3 py-2.5 text-slate-900 bg-slate-50"
-                      keyboardType="numeric"
-                      placeholder="W"
-                      value={manualItemWidth}
-                      onChangeText={setManualItemWidth}
-                      returnKeyType="next"
-                      blurOnSubmit={false}
-                      onSubmitEditing={() => manualHeightRef.current?.focus()}
-                    />
-                  </View>
-                  <View className="flex-1">
-                    <Text className="text-[10px] font-bold text-slate-500 uppercase">Height</Text>
-                    <TextInput
-                      ref={manualHeightRef}
-                      disableFullscreenUI
-                      className="border border-slate-200 rounded-xl px-3 py-2.5 text-slate-900 bg-slate-50"
-                      keyboardType="numeric"
-                      placeholder="H"
-                      value={manualItemHeight}
-                      onChangeText={setManualItemHeight}
-                      returnKeyType="done"
-                    />
-                  </View>
-                </View>
-              </View>
-            </ScrollView>
-
-            <View className="mt-6 flex-row space-x-3">
-              <TouchableOpacity
-                onPress={() => setManualItemModalVisible(false)}
-                className="flex-1 py-3.5 rounded-xl bg-slate-100 items-center mr-2"
-                disabled={manualItemSaving}
-              >
-                <Text className="text-slate-600 font-bold">Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handleSaveManualItem}
-                className="flex-1 py-3.5 rounded-xl bg-blue-600 items-center shadow-md shadow-blue-200"
-                disabled={manualItemSaving}
-              >
-                {manualItemSaving ? (
-                  <ActivityIndicator color="white" />
-                ) : (
-                  <Text className="text-white font-bold">Save Item</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-          </KeyboardAvoidingView>
-        </View>
-      </Modal>
+        onClose={() => setManualItemModalVisible(false)}
+        clientId={clientId}
+        orderPackageId={orderPackageId}
+        orderPkgInstanceId={orderPkgInstanceId}
+        onAdded={loadItems}
+      />
 
       <Modal
         visible={itemMediaModalVisible}
