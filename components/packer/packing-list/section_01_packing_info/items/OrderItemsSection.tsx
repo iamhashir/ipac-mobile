@@ -9,6 +9,7 @@ import { Inbox, Trash2, Plus, RefreshCw, FileText, Printer, Eye, ScanQrCode, X, 
 import QRCode from 'react-native-qrcode-svg';
 import { db } from '../../../../../utils/api/supabase';
 import { buildPortalScanUrl } from '../../../../../utils/portalUrl';
+import { toFiniteNumberOrNull, getRemainingExpectedQty, isCatalogItemFullyPacked } from '../../../../../utils/catalogItemHelpers';
 import QtyAllocationModal from './QtyAllocationModal';
 import CatalogBrowserModal from './CatalogBrowserModal';
 import { chooseQrPrintSizePreset } from './qrPrintPresets';
@@ -88,25 +89,6 @@ const parseScannedDefaultBin = (rawCode: string): string | null => {
   const fallbackSegment = segments.slice(1).join('-').trim();
   const cleaned = fallbackSegment.replace(/\s+/g, '');
   return cleaned || null;
-};
-
-const toFiniteNumberOrNull = (value: unknown): number | null => {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
-};
-
-const getRemainingExpectedQty = (catalogItem: any): number | null => {
-  const expectedQty = toFiniteNumberOrNull(catalogItem?.expected_qty);
-  if (expectedQty === null || expectedQty <= 0) return null;
-
-  const packedQty = toFiniteNumberOrNull(catalogItem?.packed_qty) ?? 0;
-  const remaining = Math.max(0, expectedQty - packedQty);
-  return Math.round(remaining * 100) / 100;
-};
-
-const isCatalogItemFullyPacked = (catalogItem: any): boolean => {
-  const remaining = getRemainingExpectedQty(catalogItem);
-  return remaining !== null && remaining <= 0;
 };
 
 interface DimensionInputsProps {
