@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, ActivityIndicator, Modal, FlatList, TextI
 import { X, Search, Package, Plus } from 'lucide-react-native';
 import { db } from '../../../../../utils/api/supabase';
 import RequestMoreModal from './RequestMoreModal';
+import { getCatalogCache, setCatalogCache } from '../../../../../utils/cache/catalogCache';
 
 interface CatalogBrowserModalProps {
   visible: boolean;
@@ -267,7 +268,17 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
   const loadItems = useCallback(async (currentSearch?: string) => {
     if (!visible || !clientId) return;
 
-    setLoading(true);
+    // Stale-while-revalidate: paint the cached list instantly on reopen (the catalog
+    // re-fetches on every open), then refresh in the background so it stays fresh.
+    const cacheKey = `${clientId}|${orderId}|${isStandardBox ? 'sb' : 'm'}|${destination || ''}|${(currentSearch || '').trim().toLowerCase()}`;
+    const cachedCatalog = getCatalogCache(cacheKey);
+    if (cachedCatalog) {
+      setItems(cachedCatalog.items as any[]);
+      setHiddenPackedCount(cachedCatalog.hiddenPackedCount);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     try {
       // Standard boxes draw from the destination's allocation pool (only the items meant for
       // this order + destination). The pool is small, so search is applied client-side.
@@ -290,6 +301,7 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
           // (filteredItems sorts packed rows to the bottom.)
           setItems(mapped);
           setHiddenPackedCount(0);
+          setCatalogCache(cacheKey, { items: mapped, hiddenPackedCount: 0 });
         }
         return;
       }
@@ -326,11 +338,14 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
           // When searching, show both packed and unpacked
           setItems(catalogItems);
           setHiddenPackedCount(0);
+          setCatalogCache(cacheKey, { items: catalogItems, hiddenPackedCount: 0 });
         } else {
           // Default view: only show available items
           const availableItems = catalogItems.filter((item) => !isCatalogItemFullyPacked(item));
+          const hidden = Math.max(0, catalogItems.length - availableItems.length);
           setItems(availableItems);
-          setHiddenPackedCount(Math.max(0, catalogItems.length - availableItems.length));
+          setHiddenPackedCount(hidden);
+          setCatalogCache(cacheKey, { items: availableItems, hiddenPackedCount: hidden });
         }
       }
     } catch (e) {
