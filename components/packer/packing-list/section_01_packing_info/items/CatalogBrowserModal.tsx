@@ -340,26 +340,30 @@ const CatalogBrowserModal: React.FC<CatalogBrowserModalProps> = ({
     }
   }, [visible, clientId, orderId, isStandardBox, destination]);
 
+  // Reset transient state when the modal opens. The fetch itself is handled by the
+  // single load effect below — calling loadItems() here too caused a DOUBLE fetch
+  // on every open (this effect + the search effect both fired on `visible`).
   useEffect(() => {
     if (visible) {
-      loadItems();
       setSearchQuery('');
       setSelectedItem(null);
       setQuantityInput('1');
     }
-  }, [visible, loadItems]);
+  }, [visible]);
 
-  // Debounced search
+  // Single load path: fetch immediately on open / when the search is cleared, but
+  // debounce (500ms) while the user is actively typing so each keystroke doesn't
+  // fire its own server query.
   useEffect(() => {
     if (!visible) return;
 
-    const handler = setTimeout(() => {
-      if (searchQuery.trim() !== '') {
-        loadItems(searchQuery);
-      } else {
-        loadItems();
-      }
-    }, 500);
+    const q = searchQuery.trim();
+    const handler = setTimeout(
+      () => {
+        loadItems(q !== '' ? q : undefined);
+      },
+      q !== '' ? 500 : 0,
+    );
 
     return () => clearTimeout(handler);
   }, [searchQuery, visible, loadItems]);
