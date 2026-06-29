@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, Modal, ScrollView, TextInput, Alert } fro
 import { CachedImage } from '../../../ui/CachedImage';
 import * as ImagePicker from 'expo-image-picker';
 import TabLayout, { TabDefinition } from '../shared/navigation/TabLayout';
+import { formatDateInput, formatTimeInput, buildTaskDateTimeIso, calculateDurationMinutes } from './taskDateTime';
 import SimpleSelect from './subcomponents/SimpleSelect';
 import TaskAssignmentHeader from './subcomponents/TaskAssignmentHeader';
 import TaskLogsTable from './subcomponents/TaskLogsTable';
@@ -17,37 +18,6 @@ interface OrderTasksManagementProps {
 
 interface TeamPacker { id: string; full_name?: string; username?: string; packer_status?: string; }
 
-const formatDateInput = (date: Date) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-
-const formatTimeInput = (date: Date) => {
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${hours}:${minutes}`;
-};
-
-const buildTaskDateTimeIso = (dateText: string, timeText: string) => {
-  const normalizedDate = dateText.trim();
-  const normalizedTime = timeText.trim();
-
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) return null;
-  if (!/^\d{2}:\d{2}$/.test(normalizedTime)) return null;
-
-  const date = new Date(`${normalizedDate}T${normalizedTime}:00`);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toISOString();
-};
-
-const calculateDurationMinutes = (startIso: string, endIso: string) => {
-  const startMs = new Date(startIso).getTime();
-  const endMs = new Date(endIso).getTime();
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return 0;
-  return Math.max(0, Math.floor((endMs - startMs) / 60000));
-};
 
 const OrderTasksManagement: React.FC<OrderTasksManagementProps> = ({ orderId, orderPackages, readOnly = false, requirePhotoForFinish = false }) => {
   const [teamPackers, setTeamPackers] = useState<TeamPacker[]>([]);
