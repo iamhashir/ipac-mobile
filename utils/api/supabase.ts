@@ -1427,14 +1427,11 @@ const baseDb = {
       // Generate signed URLs for each media item
       const mediaWithUrls = await Promise.all(
         (data || []).map(async (item: any) => {
-          const { data: signedUrlData } = await supabase
-            .storage
-            .from('media')
-            .createSignedUrl(item.image_url, 31536000); // 1 year
+          const signedUrl = await getCachedSignedUrl(supabase, 'media', item.image_url);
 
           return {
             ...item,
-            signedUrl: signedUrlData?.signedUrl || null
+            signedUrl: signedUrl || null
           };
         })
       );
@@ -1543,14 +1540,11 @@ const baseDb = {
 
     const mediaWithUrls = await Promise.all(
       (data || []).map(async (item: any) => {
-        const { data: signedUrlData } = await supabase
-          .storage
-          .from('media')
-          .createSignedUrl(item.image_url, 31536000);
+        const signedUrl = await getCachedSignedUrl(supabase, 'media', item.image_url);
 
         return {
           ...item,
-          signedUrl: signedUrlData?.signedUrl || null,
+          signedUrl: signedUrl || null,
         };
       })
     );

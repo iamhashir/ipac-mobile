@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, TouchableOpacity, Modal, Alert, ScrollView } from 'react-native';
 import { CachedImage } from '../../../../ui/CachedImage';
+import { getCachedSignedUrl } from '../../../../../utils/cache/signedUrlCache';
 import * as ImagePicker from 'expo-image-picker';
 import { Camera } from 'lucide-react-native';
 import { db } from '../../../../../utils/api/supabase';
@@ -107,15 +108,13 @@ const TaskLogsTable: React.FC<TaskLogsTableProps> = ({
 
     const withSignedUrls = await Promise.all(
       (data || []).map(async (media: any) => {
-        const { data: signed } = await db.query.storage
-          .from('media')
-          .createSignedUrl(media.image_url, 31536000);
+        const signedUrl = await getCachedSignedUrl(db.query, 'media', media.image_url);
 
         return {
           id: media.id,
           image_url: media.image_url,
           created_at: media.created_at,
-          signedUrl: signed?.signedUrl || null,
+          signedUrl: signedUrl || null,
         } as TaskMediaItem;
       })
     );
