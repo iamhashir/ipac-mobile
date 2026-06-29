@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
 import type { Json, Maybe, NullableDate, SupabaseUpdatePayload, UUID } from './types';
 import { createAttendanceApi } from './modules/attendance';
@@ -1303,6 +1304,27 @@ const baseDb = {
       }
 
       const { order_id, package_number } = packageData;
+
+      // 1b. Resize + recompress images before upload. Phone photos are 12MP/multi-MB
+      // and packer documentation photos don't need that — this cuts upload AND every
+      // future download several-fold (combined with the on-device image cache, the
+      // biggest bandwidth/data lever). Videos are skipped; best-effort: if resize fails
+      // for any reason we upload the original untouched.
+      const lowerUri = fileUri.toLowerCase();
+      const looksLikeVideo =
+        lowerUri.endsWith('.mp4') || lowerUri.endsWith('.mov') || lowerUri.endsWith('.avi');
+      if (!looksLikeVideo) {
+        try {
+          const resized = await manipulateAsync(
+            fileUri,
+            [{ resize: { width: 1600 } }],
+            { compress: 0.6, format: SaveFormat.JPEG },
+          );
+          if (resized?.uri) fileUri = resized.uri;
+        } catch (resizeError) {
+          console.warn('Image resize failed; uploading original:', resizeError);
+        }
+      }
 
       // 2. Determine file type from URI
       const uriLower = fileUri.toLowerCase();
