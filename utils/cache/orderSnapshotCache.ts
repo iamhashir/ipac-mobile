@@ -34,6 +34,41 @@ const keyFor = (orderId: string) => `pkpl:order:${orderId}:v1`;
 /** Maximum serialised size before we skip persisting (bytes, roughly chars on UTF-8 ASCII) */
 const SIZE_LIMIT_BYTES = 4 * 1024 * 1024; // 4 MB
 
+/** LRU bound — keep snapshots for the N most recently persisted orders so AsyncStorage
+ *  doesn't grow without limit over a long session/lifetime (older orders are evicted on
+ *  the next persist; hitting the storage limit would otherwise silently break caching). */
+const INDEX_KEY = 'pkpl:order:index:v1';
+const MAX_ORDERS = 15;
+
+async function readSnapshotIndex(): Promise<string[]> {
+  try {
+    const raw = await getItem(INDEX_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((id: unknown): id is string => typeof id === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Mark `orderId` most-recently-used and evict snapshots beyond MAX_ORDERS. Best-effort. */
+async function touchSnapshotIndex(orderId: string): Promise<void> {
+  try {
+    const current = await readSnapshotIndex();
+    const next = [orderId, ...current.filter((id) => id !== orderId)];
+    const kept = next.slice(0, MAX_ORDERS);
+    const evicted = next.slice(MAX_ORDERS);
+    await setItem(INDEX_KEY, JSON.stringify(kept));
+    for (const id of evicted) {
+      await removeItem(keyFor(id));
+    }
+  } catch {
+    // Eviction is best-effort — never affect the UI
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -136,6 +171,7 @@ export async function setOrderSnapshot(
       return;
     }
     await setItem(keyFor(orderId), serialised);
+    await touchSnapshotIndex(orderId);
   } catch {
     // Never propagate storage errors to the UI
   }
