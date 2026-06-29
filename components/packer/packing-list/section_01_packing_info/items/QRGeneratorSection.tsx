@@ -5,6 +5,7 @@ import QRCode from 'react-native-qrcode-svg';
 import { File, Paths } from 'expo-file-system';
 import { db } from '../../../../../utils/api/supabase';
 import { chooseQrPrintSizePreset } from './qrPrintPresets';
+import { buildPortalScanUrl } from '../../../../../utils/portalUrl';
 
 interface QRGeneratorSectionProps {
   entityType: 'package' | 'item' | 'pkd_item';
@@ -12,19 +13,6 @@ interface QRGeneratorSectionProps {
   label: string;
 }
 
-const normalizePortalBaseUrl = (value: string) => {
-  const trimmed = String(value || '').trim();
-  if (!trimmed) return 'https://ipac-admin.vercel.app';
-
-  return trimmed
-    .replace(/\/portal\/projects\/?$/i, '')
-    .replace(/\/+$/, '');
-};
-
-const PORTAL_BASE_URL = normalizePortalBaseUrl(
-  process.env.EXPO_PUBLIC_PORTAL_BASE_URL || 'https://ipac-admin.vercel.app'
-);
-const buildPortalScanUrl = (token: string) => `${PORTAL_BASE_URL}/portal/scan/${encodeURIComponent(token)}`;
 
 type DetectedBrotherPrinter = {
   modelName: string;

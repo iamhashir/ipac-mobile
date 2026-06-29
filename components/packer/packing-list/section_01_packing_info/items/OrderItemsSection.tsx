@@ -8,6 +8,7 @@ import * as Sharing from 'expo-sharing';
 import { Inbox, Trash2, Plus, RefreshCw, FileText, Printer, Eye, ScanQrCode, X, Share2, Info, Camera } from 'lucide-react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { db } from '../../../../../utils/api/supabase';
+import { buildPortalScanUrl } from '../../../../../utils/portalUrl';
 import QtyAllocationModal from './QtyAllocationModal';
 import CatalogBrowserModal from './CatalogBrowserModal';
 import { chooseQrPrintSizePreset } from './qrPrintPresets';
@@ -27,19 +28,6 @@ interface OrderItemsSectionProps {
   isStandardBox?: boolean;
 }
 
-const normalizePortalBaseUrl = (value: string) => {
-  const trimmed = String(value || '').trim();
-  if (!trimmed) return 'https://ipac-admin.vercel.app';
-
-  return trimmed
-    .replace(/\/portal\/projects\/?$/i, '')
-    .replace(/\/+$/, '');
-};
-
-const PORTAL_BASE_URL = normalizePortalBaseUrl(
-  process.env.EXPO_PUBLIC_PORTAL_BASE_URL || 'https://ipac-admin.vercel.app'
-);
-const buildPortalScanUrl = (token: string) => `${PORTAL_BASE_URL}/portal/scan/${encodeURIComponent(token)}`;
 const ACTIONS_INLINE_MIN_ROW_WIDTH = 760;
 const LONG_ITEM_NAME_THRESHOLD = 72;
 
