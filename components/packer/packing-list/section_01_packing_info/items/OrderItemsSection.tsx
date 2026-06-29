@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, SafeAreaView, Platform, ScrollView, KeyboardAvoidingView } from 'react-native';
 import { CachedImage } from '../../../../ui/CachedImage';
 import { getBoxItems, setBoxItems } from '../../../../../utils/cache/boxItemsCache';
@@ -9,10 +9,11 @@ import { Inbox, Trash2, Plus, RefreshCw, FileText, Printer, Eye, ScanQrCode, X, 
 import QRCode from 'react-native-qrcode-svg';
 import { db } from '../../../../../utils/api/supabase';
 import { buildPortalScanUrl } from '../../../../../utils/portalUrl';
-import { toFiniteNumberOrNull, getRemainingExpectedQty, isCatalogItemFullyPacked } from '../../../../../utils/catalogItemHelpers';
+import { getRemainingExpectedQty, isCatalogItemFullyPacked } from '../../../../../utils/catalogItemHelpers';
 import QtyAllocationModal from './QtyAllocationModal';
 import CatalogBrowserModal from './CatalogBrowserModal';
 import ManualItemModal from './ManualItemModal';
+import DimensionInputs from './DimensionInputs';
 import { chooseQrPrintSizePreset } from './qrPrintPresets';
 import CustomPrintModal from '../../common/CustomPrintModal';
 import { SplitThumbnail } from '../../common/SplitThumbnail';
@@ -92,101 +93,7 @@ const parseScannedDefaultBin = (rawCode: string): string | null => {
   return cleaned || null;
 };
 
-interface DimensionInputsProps {
-  itemId: string;
-  initialLength: number | null;
-  initialWidth: number | null;
-  initialHeight: number | null;
-  onUpdate: (dims: { length: number | null; width: number | null; height: number | null }) => Promise<void>;
-}
-
-const DimensionInputs: React.FC<DimensionInputsProps> = ({ 
-  itemId, 
-  initialLength, 
-  initialWidth, 
-  initialHeight, 
-  onUpdate 
-}) => {
-  const [l, setL] = useState(initialLength ? String(initialLength) : '');
-  const [w, setW] = useState(initialWidth ? String(initialWidth) : '');
-  const [h, setH] = useState(initialHeight ? String(initialHeight) : '');
-  const [saving, setSaving] = useState(false);
-
-  // Focus chaining: L → W → H
-  const wInputRef = useRef<TextInput>(null);
-  const hInputRef = useRef<TextInput>(null);
-
-  const handleBlur = async () => {
-    const nextL = toFiniteNumberOrNull(l);
-    const nextW = toFiniteNumberOrNull(w);
-    const nextH = toFiniteNumberOrNull(h);
-
-    if (nextL === initialLength && nextW === initialWidth && nextH === initialHeight) return;
-
-    setSaving(true);
-    try {
-      await onUpdate({ length: nextL, width: nextW, height: nextH });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <View className="flex-row items-center mt-1">
-      <View className="flex-row items-center mr-4">
-        <Text className="text-[10px] font-bold text-gray-400 mr-1">L</Text>
-        <TextInput
-          disableFullscreenUI
-          className="w-12 text-xs text-slate-800 p-0 border-b border-gray-300 font-medium"
-          value={l}
-          onChangeText={setL}
-          onBlur={handleBlur}
-          placeholder="0"
-          keyboardType="numeric"
-          placeholderTextColor="#cbd5e1"
-          returnKeyType="next"
-          blurOnSubmit={false}
-          onSubmitEditing={() => wInputRef.current?.focus()}
-        />
-      </View>
-      <View className="flex-row items-center mr-4">
-        <Text className="text-[10px] font-bold text-gray-400 mr-1">W</Text>
-        <TextInput
-          ref={wInputRef}
-          disableFullscreenUI
-          className="w-12 text-xs text-slate-800 p-0 border-b border-gray-300 font-medium"
-          value={w}
-          onChangeText={setW}
-          onBlur={handleBlur}
-          placeholder="0"
-          keyboardType="numeric"
-          placeholderTextColor="#cbd5e1"
-          returnKeyType="next"
-          blurOnSubmit={false}
-          onSubmitEditing={() => hInputRef.current?.focus()}
-        />
-      </View>
-      <View className="flex-row items-center mr-4">
-        <Text className="text-[10px] font-bold text-gray-400 mr-1">H</Text>
-        <TextInput
-          ref={hInputRef}
-          disableFullscreenUI
-          className="w-12 text-xs text-slate-800 p-0 border-b border-gray-300 font-medium"
-          value={h}
-          onChangeText={setH}
-          onBlur={handleBlur}
-          placeholder="0"
-          keyboardType="numeric"
-          placeholderTextColor="#cbd5e1"
-          returnKeyType="done"
-        />
-      </View>
-      {saving && <ActivityIndicator size="small" color="#0ea5e9" className="ml-auto" />}
-    </View>
-  );
-};
-
-const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({ 
+const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
   orderId,
   orderPackageId, 
   clientId, 
