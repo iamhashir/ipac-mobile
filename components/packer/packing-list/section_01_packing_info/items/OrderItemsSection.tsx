@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, SafeAreaView, Platform, ScrollView, KeyboardAvoidingView } from 'react-native';
 import { CachedImage } from '../../../../ui/CachedImage';
+import { getBoxItems, setBoxItems } from '../../../../../utils/cache/boxItemsCache';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
@@ -305,9 +306,20 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
     }
   }, [orderPackageId]);
 
+  // Box tabs unmount when you switch (TabLayout renders only the active tab), so a
+  // revisit would otherwise re-fetch. Cache items per instance + stale-while-revalidate:
+  // paint the cached list instantly, then refresh in the background.
+  const itemsCacheKey = orderPkgInstanceId || orderPackageId;
+
   const loadItems = useCallback(async () => {
     try {
-      setLoading(true);
+      const cached = getBoxItems(itemsCacheKey);
+      if (cached) {
+        setItems(cached as any[]);
+        setLoading(false); // instant paint from cache — no spinner on revisit
+      } else {
+        setLoading(true);
+      }
       // Pass the current instance ID so we only fetch pkd_items for THIS instance,
       // not all instances in the package.
       const instanceFilter = orderPkgInstanceId ? [orderPkgInstanceId] : undefined;
@@ -317,7 +329,9 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
         instanceFilter
       );
       if (error) throw error;
-      setItems(data || []);
+      const rows = data || [];
+      setItems(rows);
+      setBoxItems(itemsCacheKey, rows);
       await loadMediaCounts();
     } catch (e: any) {
       console.error('Error loading items:', e);
@@ -325,7 +339,7 @@ const OrderItemsSection: React.FC<OrderItemsSectionProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [orderPackageId, clientId, orderPkgInstanceId, loadMediaCounts]);
+  }, [orderPackageId, clientId, orderPkgInstanceId, loadMediaCounts, itemsCacheKey]);
 
 
   useEffect(() => {
