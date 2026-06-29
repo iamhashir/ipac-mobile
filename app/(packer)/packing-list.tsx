@@ -658,6 +658,11 @@ export default function PackingListPage() {
       let snap_packTypeHasGas: Record<string, boolean> = {};
       let snap_equipmentMap: Record<string, string> = {};
       let snap_boxStartedMap: Record<string, boolean> = {};
+      // Don't persist a snapshot built from an INCOMPLETE load: if a chunked lookup
+      // (package info / box types / packing types) partially failed, caching the
+      // partial maps would make box-type/text intermittently vanish on every reload
+      // until a fully-successful load. Track completeness and skip persist if false.
+      let loadComplete = true;
       // ──────────────────────────────────────────────────────────────────────
 
       console.log("Loading order data for orderId:", orderId);
@@ -771,7 +776,8 @@ export default function PackingListPage() {
         new Set([...(finalInfoIds || []), ...(originalInfoIds || [])])
       );
       if (infoIds.length > 0) {
-        const { data: infos } = await db.getPackageInfosByIds(infoIds);
+        const { data: infos, error: infosError } = await db.getPackageInfosByIds(infoIds);
+        if (infosError) loadComplete = false;
         const map: Record<string, PackageInfo> = {};
         (infos || []).forEach((i: any) => {
           map[i.id] = i;
@@ -792,6 +798,7 @@ export default function PackingListPage() {
           boxTypeIds.length ? db.getBoxTypesByIds(boxTypeIds) : Promise.resolve({ data: null }),
           packingIds.length ? db.getPackingTypesByIds(packingIds) : Promise.resolve({ data: null }),
         ]);
+        if ((boxesRes as any).error || (typesRes as any).error) loadComplete = false;
         if (boxesRes.data) {
           const m: Record<string, string> = {};
           (boxesRes.data || []).forEach((mt: any) => {
@@ -865,22 +872,24 @@ export default function PackingListPage() {
       }
 
       // ── Persist snapshot ──────────────────────────────────────────────────
-      // We reach here only on a fully successful load (no early return from
-      // any error branch above). Fire-and-forget — errors are swallowed inside
-      // setOrderSnapshot so the UI is never affected.
-      void setOrderSnapshot(orderId, {
-        order: snap_order,
-        orderPackages: snap_orderPackages,
-        orderPackageOverviews: snap_orderPackageOverviews,
-        overviewInstancesMap: snap_overviewInstancesMap,
-        pkgInfoMap: snap_pkgInfoMap,
-        boxTypes: snap_boxTypes,
-        packingTypes: snap_packingTypes,
-        packTypeHasVacuum: snap_packTypeHasVacuum,
-        packTypeHasGas: snap_packTypeHasGas,
-        equipmentMap: snap_equipmentMap,
-        boxStartedMap: snap_boxStartedMap,
-      });
+      // Only cache a COMPLETE load. If any chunked lookup partially failed
+      // (loadComplete=false) we skip persisting, so we never cache missing
+      // box-types/text. Fire-and-forget; errors are swallowed in setOrderSnapshot.
+      if (loadComplete) {
+        void setOrderSnapshot(orderId, {
+          order: snap_order,
+          orderPackages: snap_orderPackages,
+          orderPackageOverviews: snap_orderPackageOverviews,
+          overviewInstancesMap: snap_overviewInstancesMap,
+          pkgInfoMap: snap_pkgInfoMap,
+          boxTypes: snap_boxTypes,
+          packingTypes: snap_packingTypes,
+          packTypeHasVacuum: snap_packTypeHasVacuum,
+          packTypeHasGas: snap_packTypeHasGas,
+          equipmentMap: snap_equipmentMap,
+          boxStartedMap: snap_boxStartedMap,
+        });
+      }
       // ──────────────────────────────────────────────────────────────────────
     } catch (e) {
       console.error("Packing Report load error", e);
