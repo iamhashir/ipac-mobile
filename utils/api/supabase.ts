@@ -264,6 +264,10 @@ const persistSet = async (key: string, value: string) => {
 };
 
 // Helper functions for database operations
+// Normalize a destination code: strip control chars, trim, uppercase; blank -> UNASSIGNED.
+const normalizeDestinationCode = (value: unknown): string =>
+  String(value || '').replace(/[\r\n\t]+/g, '').trim().toUpperCase() || 'UNASSIGNED';
+
 const baseDb = {
   // Clear profile cache (useful when profile is updated)
   clearProfileCache: (userId?: string) => {
@@ -2068,11 +2072,7 @@ const baseDb = {
     orderId: UUID,
     destination: string | null
   ) => {
-    const code =
-      String(destination || '')
-        .replace(/[\r\n\t]+/g, '')
-        .trim()
-        .toUpperCase() || 'UNASSIGNED';
+    const code = normalizeDestinationCode(destination);
 
     const { data: dest, error: destErr } = await supabase
       .from('destinations')
@@ -2124,11 +2124,7 @@ const baseDb = {
     orderId: UUID,
     destination: string | null
   ) => {
-    const code =
-      String(destination || '')
-        .replace(/[\r\n\t]+/g, '')
-        .trim()
-        .toUpperCase() || 'UNASSIGNED';
+    const code = normalizeDestinationCode(destination);
     const { data: dest, error: destErr } = await supabase
       .from('destinations')
       .select('id')
@@ -2172,11 +2168,7 @@ const baseDb = {
     if (authErr || !user) {
       return { data: null, error: authErr ?? new Error('Not authenticated') };
     }
-    const code =
-      String(params.destination || '')
-        .replace(/[\r\n\t]+/g, '')
-        .trim()
-        .toUpperCase() || 'UNASSIGNED';
+    const code = normalizeDestinationCode(params.destination);
     const { data: dest, error: destErr } = await supabase
       .from('destinations')
       .select('id')
@@ -2740,11 +2732,7 @@ const baseDb = {
       let allocExpectedQty: number | null = null;
       let allocRemaining = 0;
       if (capOrderId) {
-        const destCode =
-          String(capInstance?.destination || '')
-            .replace(/[\r\n\t]+/g, '')
-            .trim()
-            .toUpperCase() || 'UNASSIGNED';
+        const destCode = normalizeDestinationCode(capInstance?.destination);
         const { data: destRow } = await supabase
           .from('destinations')
           .select('id')
@@ -3611,11 +3599,7 @@ const resolvePkdAllocation = async (
     .eq('id', pkgInstanceId)
     .maybeSingle();
 
-  const code =
-    String(inst?.destination || '')
-      .replace(/[\r\n\t]+/g, '')
-      .trim()
-      .toUpperCase() || 'UNASSIGNED';
+  const code = normalizeDestinationCode(inst?.destination);
 
   let orderId: UUID | null = null;
   if (inst?.order_pkg_overview_id) {
