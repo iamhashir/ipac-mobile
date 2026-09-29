@@ -33,6 +33,27 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install required Android NDK
+        shell: bash
+        run: |
+          sdkmanager --licenses < /dev/null || true
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+
+          for attempt in 1 2 3; do
+            if sdkmanager --install "ndk;27.1.12297006"; then
+              exit 0
+            fi
+
+            echo "NDK installation attempt ${attempt} failed; clearing the partial download before retrying."
+            rm -rf "${sdk_root}/.temp" "${sdk_root}/temp" "${sdk_root}/ndk/27.1.12297006"
+            sleep 10
+          done
+
+          exit 1
+
       - name: Install JavaScript dependencies
         run: npm install
 
