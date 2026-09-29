@@ -1,0 +1,64 @@
+name: Android Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release-main
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build and publish Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install JavaScript dependencies
+        run: npm install
+
+      - name: Build release APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Prepare release files
+        id: release-files
+        env:
+          APP_VERSION: ${{ github.run_number }}
+        run: |
+          mkdir -p release
+          cp android/app/build/outputs/apk/release/app-release.apk "release/ipac-mobile-${APP_VERSION}.apk"
+          sha256sum "release/ipac-mobile-${APP_VERSION}.apk" > "release/ipac-mobile-${APP_VERSION}.apk.sha256"
+          echo "apk=release/ipac-mobile-${APP_VERSION}.apk" >> "$GITHUB_OUTPUT"
+          echo "checksum=release/ipac-mobile-${APP_VERSION}.apk.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0-build.${{ github.run_number }}
+          name: IPAC Mobile v1.0.0-build.${{ github.run_number }}
+          generate_release_notes: true
+          files: |
+            ${{ steps.release-files.outputs.apk }}
+            ${{ steps.release-files.outputs.checksum }}

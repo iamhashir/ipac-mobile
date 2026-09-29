@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert, useWindowDimensions } from 'react-native';
 import { Plus, Package } from 'lucide-react-native';
 import { db, supabase } from '../../../utils/api/supabase';
 import PackageForm from './PackageForm';
 import PackageItemsEditor from './PackageItemsEditor';
-import OrderSecuringSection from '../../packing/OrderSecuringSection';
+import ManufacturingSection from '../../packer/packing-list/section_05_manufacturing/ManufacturingSection';
 import { X } from 'lucide-react-native';
 
 interface OrderPackagesEditorProps {
@@ -30,6 +30,7 @@ const OrderPackagesEditor: React.FC<OrderPackagesEditorProps> = ({ orderId, onDo
   const [adding, setAdding] = useState(false);
   const [activeItemsFor, setActiveItemsFor] = useState<{ id: string; number: number } | null>(null);
   const [activeSecuringFor, setActiveSecuringFor] = useState<{ id: string; number: number } | null>(null);
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
 
   const load = async () => {
     try {
@@ -108,7 +109,7 @@ const OrderPackagesEditor: React.FC<OrderPackagesEditorProps> = ({ orderId, onDo
                           setActiveSecuringFor({ id: p.id, number: p.package_number });
                         }}
                       >
-                        <Text className="text-blue-700 font-medium">Securing</Text>
+                        <Text className="text-blue-700 font-medium">Manufacturing</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -146,7 +147,14 @@ const OrderPackagesEditor: React.FC<OrderPackagesEditorProps> = ({ orderId, onDo
         <View className="absolute inset-0 z-50">
           <TouchableOpacity className="absolute inset-0 bg-black bg-opacity-50" activeOpacity={1} onPress={() => setActiveSecuringFor(null)} />
           <View className="flex-1 justify-center items-center p-6">
-            <View className="bg-white rounded-xl w-full" style={{ maxWidth: 1100, width: '90vw', maxHeight: '85vh' }}>
+            <View
+              className="bg-white rounded-xl w-full"
+              style={{
+                maxWidth: 1100,
+                width: Math.min(windowWidth * 0.9, 1100),
+                maxHeight: windowHeight * 0.85,
+              }}
+            >
               <View className="flex-row justify-between items-center p-4 border-b border-gray-200">
                 <Text className="text-lg font-bold text-gray-900">Securing for Box #{activeSecuringFor.number}</Text>
                 <TouchableOpacity onPress={() => setActiveSecuringFor(null)} className="p-2">
@@ -154,7 +162,7 @@ const OrderPackagesEditor: React.FC<OrderPackagesEditorProps> = ({ orderId, onDo
                 </TouchableOpacity>
               </View>
               <ScrollView className="p-2">
-                <OrderSecuringSection orderPackageId={activeSecuringFor.id} editTarget="original" editable={true} autoSave={false} />
+                <ManufacturingSection orderPackageId={activeSecuringFor.id} editTarget="original" editable={true} autoSave={false} />
               </ScrollView>
             </View>
           </View>

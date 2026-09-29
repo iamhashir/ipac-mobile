@@ -93,13 +93,14 @@ const TaskManagementExample: React.FC = () => {
   const handleUnpause = async (taskLogId: string) => {
     try {
       // Calculate pause duration if we have a pause timestamp
-      let pauseDurationSeconds = null;
+      let pauseDurationSeconds: number | null = null;
       if (pauseTimestamps[taskLogId]) {
         const pauseStart = pauseTimestamps[taskLogId];
         pauseDurationSeconds = Math.floor((new Date().getTime() - pauseStart.getTime()) / 1000);
       }
 
-      const { data, error } = await db.unpauseTask(taskLogId, pauseDurationSeconds);
+  const durationArg = pauseDurationSeconds ?? undefined;
+  const { data, error } = await db.unpauseTask(taskLogId, durationArg as any);
       if (error) {
         Alert.alert('Error', 'Failed to resume from pause');
         return;

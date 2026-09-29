@@ -250,7 +250,7 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                                 return { color: 'bg-red-500', status: 'Alert', icon: '!' };
                               };
                               
-                              const formatLastUpdated = (dateStr: string) => {
+                              const formatLastUpdated = (dateStr?: string | null) => {
                                 if (!dateStr) return 'Never updated';
                                 const date = new Date(dateStr);
                                 const now = new Date();
@@ -342,7 +342,7 @@ export function MaterialCard({ material, onEdit, onDelete, onManageVariants, sup
                                         </TouchableOpacity>
                                       </View>
                                     </View>
-                                    {pIndex === 0 && variant.supplier_pricing.length > 1 && (
+                                    {pIndex === 0 && (variant.supplier_pricing?.length ?? 0) > 1 && (
                                       <View className="bg-green-500 px-2 py-1 rounded-full ml-2">
                                         <Text className="text-xs text-white font-medium">Best Price</Text>
                                       </View>
@@ -1840,6 +1840,22 @@ export function SupplierVariantManager({
   const [newVariantDescription, setNewVariantDescription] = useState('');
   const [showNewMaterialForm, setShowNewMaterialForm] = useState(false);
   const [showNewVariantForm, setShowNewVariantForm] = useState(false);
+  type VariantDisplay = { id: string; variant_name: string; description?: string };
+
+  const materialVariantRecords: MaterialVariant[] = Array.isArray(selectedMaterial?.material_variants)
+    ? (selectedMaterial.material_variants as MaterialVariant[])
+    : [];
+
+  const variantDisplayList = materialVariantRecords.map(
+    (variant): VariantDisplay => ({
+      id: String(variant.id ?? ''),
+      variant_name: variant.variant_name || 'Unnamed Variant',
+      description: variant.description
+    })
+  );
+
+  const hasMaterialVariants = selectedMaterial !== null && variantDisplayList.length > 0;
+  const selectedVariantId = selectedVariant?.id != null ? String(selectedVariant.id) : null;
   
   // Filter materials based on search
   useEffect(() => {
@@ -1921,7 +1937,7 @@ export function SupplierVariantManager({
       const variantData = {
         material_id: selectedMaterial.id,
         variant_name: newVariantName,
-        description: newVariantDescription || null,
+        description: newVariantDescription?.trim() ? newVariantDescription : undefined,
         attributes: {}
       };
 
@@ -1969,7 +1985,7 @@ export function SupplierVariantManager({
       // Create the material
       const materialData = {
         name: newMaterialName,
-        description: newMaterialDescription || null,
+        description: newMaterialDescription?.trim() ? newMaterialDescription : undefined,
         unit_id: selectedUnit.id
       };
 
@@ -1983,7 +1999,7 @@ export function SupplierVariantManager({
       const variantData = {
         material_id: newMaterial.id,
         variant_name: newVariantName,
-        description: newVariantDescription || null,
+        description: newVariantDescription?.trim() ? newVariantDescription : undefined,
         attributes: {}
       };
 
@@ -2243,7 +2259,7 @@ export function SupplierVariantManager({
                         </TouchableOpacity>
                         
                         {/* Show variants if material is selected or matches search */}
-                        {material.material_variants && material.material_variants.map((variant) => (
+                        {material.material_variants && material.material_variants.map((variant: MaterialVariant) => (
                           <TouchableOpacity
                             key={variant.id}
                             className="p-3 pl-6 border-b border-gray-50 bg-gray-50"
@@ -2271,28 +2287,36 @@ export function SupplierVariantManager({
 			)}
 			
 			{/* Variant Selection for existing material */}
-            {selectedMaterial && selectedMaterial.material_variants && selectedMaterial.material_variants.length > 0 && !selectedVariant && (
+            {hasMaterialVariants && !selectedVariant && (
               <View className="mb-4">
                 <Text className="text-base font-medium text-gray-900 mb-2">
                   Select Variant *
                 </Text>
                 <View className="flex-wrap">
-                  {selectedMaterial.material_variants.map((variant) => (
-                    <TouchableOpacity
-                      key={variant.id}
-                      className={`border rounded-lg p-3 mr-2 mb-2 ${selectedVariant?.id === variant.id ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}
-                      onPress={() => handleSelectVariant(variant)}
-                    >
-                      <Text className={`${selectedVariant?.id === variant.id ? 'text-blue-900' : 'text-gray-900'} font-medium`}>
-                        {variant.variant_name}
-                      </Text>
-                      {variant.description && (
-                        <Text className={`text-sm ${selectedVariant?.id === variant.id ? 'text-blue-700' : 'text-gray-600'}`}>
-                          {variant.description}
+                  {variantDisplayList.map((variant) => {
+                    const isSelected = selectedVariantId === variant.id;
+                    return (
+                      <TouchableOpacity
+                        key={variant.id}
+                        className={`border rounded-lg p-3 mr-2 mb-2 ${isSelected ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}
+                        onPress={() => {
+                          const rawVariant = materialVariantRecords.find((v) => String(v.id ?? '') === variant.id);
+                          if (rawVariant) {
+                            handleSelectVariant(rawVariant as MaterialVariant);
+                          }
+                        }}
+                      >
+                        <Text className={`${isSelected ? 'text-blue-900' : 'text-gray-900'} font-medium`}>
+                          {variant.variant_name}
                         </Text>
-                      )}
-                    </TouchableOpacity>
-                  ))}
+                        {variant.description && (
+                          <Text className={`text-sm ${isSelected ? 'text-blue-700' : 'text-gray-600'}`}>
+                            {variant.description}
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
               </View>
             )}

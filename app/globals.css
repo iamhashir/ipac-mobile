@@ -17,3 +17,11 @@ html[data-textsize='large'] [class^='css-text'],
 html[data-textsize='large'] [class*=' css-text'] {
   font-size: 18px !important;
 }
+html[data-textsize='xl'] [class^='css-text'],
+html[data-textsize='xl'] [class*=' css-text'] {
+  font-size: 22px !important;
+}
+html[data-textsize='xxl'] [class^='css-text'],
+html[data-textsize='xxl'] [class*=' css-text'] {
+  font-size: 27px !important;
+}

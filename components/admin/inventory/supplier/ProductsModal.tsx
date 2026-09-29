@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, View, Text, TouchableOpacity, ScrollView } from 'react-native';
 import { Package, X, Edit3, Trash2 } from 'lucide-react-native';
-import { Supplier, Material, UnitOfMeasure, MaterialVariant } from '../../../../utils/api/inventory';
+import { Supplier, Material, UnitOfMeasure, MaterialVariant, sanitizeUnitName } from '../../../../utils/api/inventory';
 import { supplierOperations, pricingOperations } from '../../../../utils/api/inventory';
 import { ConfirmModal } from '../../../ui/ConfirmModal';
 import { SupplierPricingForm } from '../../../inventory/InventoryForms';
@@ -15,7 +15,7 @@ export interface SupplierProductsModalProps {
 }
 
 export default function SupplierProductsModal({ visible, supplier, allUnits, onUpdate, onClose }: SupplierProductsModalProps) {
-const [supplierVariants, setSupplierVariants] = useState<any[]>([]);
+  const [supplierVariants, setSupplierVariants] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [editPricing, setEditPricing] = useState<any | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ visible: boolean; pricing: any | null }>({ visible: false, pricing: null });
@@ -42,6 +42,20 @@ const [supplierVariants, setSupplierVariants] = useState<any[]>([]);
     } catch {
       return `AED ${price?.toFixed?.(2) ?? price}`;
     }
+  };
+
+  const unitNameFor = (unitId?: string | null) => {
+    if (!unitId) return undefined;
+    const u = allUnits.find(u => u.id === unitId);
+    return u ? sanitizeUnitName(u.name) : undefined;
+  };
+
+  const formatDimensions = (v: any) => {
+    const parts: string[] = [];
+    if (v?.length != null) parts.push(`L: ${v.length}`);
+    if (v?.width != null) parts.push(`W: ${v.width}`);
+    if (v?.thickness != null) parts.push(`T: ${v.thickness}`);
+    return parts.join(' • ');
   };
 
   return (
@@ -73,7 +87,7 @@ const [supplierVariants, setSupplierVariants] = useState<any[]>([]);
               </View>
             ) : (
               <View>
-{supplierVariants.map((item, index) => (
+                {supplierVariants.map((item, index) => (
                   <View key={index} className="bg-gray-50 rounded-lg p-4 mb-3 border border-gray-200">
                     <View className="flex-row justify-between items-start mb-2">
                       <View className="flex-1 pr-2">
@@ -82,6 +96,34 @@ const [supplierVariants, setSupplierVariants] = useState<any[]>([]);
                         {item.material_variants?.description ? (
                           <Text className="text-sm text-gray-600 mt-1">{item.material_variants.description}</Text>
                         ) : null}
+
+                        {/* Unit and Dimensions */}
+                        <View className="mt-2">
+                          {(() => {
+                            const unitName = unitNameFor(item.material_variants?.unit_id);
+                            const dims = formatDimensions(item.material_variants);
+                            return (
+                              <>
+                                {unitName ? (
+                                  <Text className="text-xs text-gray-600">Unit: {unitName}</Text>
+                                ) : null}
+                                {dims ? (
+                                  <Text className="text-xs text-gray-600 mt-1">Dimensions: {dims}</Text>
+                                ) : null}
+                              </>
+                            );
+                          })()}
+                        </View>
+                        {/* Variant tags */}
+                        {item.material_variants?.material_variant_tags && item.material_variants.material_variant_tags.length > 0 && (
+                          <View className="mt-2 flex-row flex-wrap">
+                            {item.material_variants.material_variant_tags.map((vt: any, i: number) => (
+                              <View key={i} className="bg-blue-100 px-2 py-1 rounded-full mr-2 mb-2 border border-blue-300">
+                                <Text className="text-xs text-blue-800">{vt?.tags?.name}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
                       </View>
                       <View className="items-end">
                         <Text className="text-lg font-bold text-green-600">{formatPrice(item.price)}</Text>
@@ -130,7 +172,7 @@ const [supplierVariants, setSupplierVariants] = useState<any[]>([]);
                 ))}
               </View>
             )}
-</ScrollView>
+          </ScrollView>
 
           {/* Edit pricing modal (separate Modal to avoid clipping by parent overflow) */}
           <Modal visible={!!editPricing} transparent animationType="fade">

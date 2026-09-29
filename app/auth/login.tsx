@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Alert, KeyboardAvoidingView, Platform, ScrollView, useWindowDimensions, Button } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../utils/AuthContext';
 import { Eye, EyeOff } from 'lucide-react-native';
-import { ErrorAlert } from '../../components/ui/Alert';
+import { useToast } from '../../components/ui/Toast';
 import { auth } from '../../utils/api/supabase';
 
 export default function LoginScreen() {
@@ -12,8 +12,8 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [errorAlert, setErrorAlert] = useState<{visible: boolean, title: string, message?: string}>({visible: false, title: ''});
   const { user, profile, loading: authLoading, signIn } = useAuth();
+  const toast = useToast();
   const router = useRouter();
   const { width, height } = useWindowDimensions();
   const isLandscape = width > height;
@@ -35,31 +35,34 @@ export default function LoginScreen() {
   }, [user, profile, authLoading, router]);
 
   const handleLogin = async () => {
-    if (!username || !password) {
-      setErrorAlert({visible: true, title: 'Missing Credentials', message: 'Please enter both username and password'});
+    // Usernames/emails are case-insensitive and must not carry stray whitespace.
+    // (Password is left untouched — it is case-sensitive and may contain spaces.)
+    const cleanUsername = username.toLowerCase().replace(/\s/g, '');
+    if (!cleanUsername || !password) {
+      toast.error('Please enter both username and password');
       return;
     }
 
     setLoading(true);
-    
+
     try {
       let authResult;
       // Check if input looks like an email
-      if (username.includes('@')) {
-        authResult = await signIn(username, password);
+      if (cleanUsername.includes('@')) {
+        authResult = await signIn(cleanUsername, password);
       } else {
-        authResult = await auth.signInWithUsername(username, password);
+        authResult = await auth.signInWithUsername(cleanUsername, password);
       }
       const { data, error } = authResult;
       if (error) {
-        setErrorAlert({visible: true, title: 'Login Failed', message: error.message || 'Invalid username or password'});
+        toast.error(error.message || 'Invalid username or password');
       } else if (data?.user) {
         // Clear the form; navigation handled by auth state
         setUsername('');
         setPassword('');
       }
     } catch (error) {
-      setErrorAlert({visible: true, title: 'Login Error', message: 'An unexpected error occurred. Please try again.'});
+      toast.error('An unexpected error occurred. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -99,15 +102,6 @@ export default function LoginScreen() {
               )}
             </View>
 
-            {/* Error Alert */}
-            <ErrorAlert
-              visible={errorAlert.visible}
-              title={errorAlert.title}
-              message={errorAlert.message}
-              onClose={() => setErrorAlert({visible: false, title: ''})}
-              autoDismiss={true}
-            />
-
             {/* Login Form */}
             <View className={isCompact ? 'space-y-4' : 'space-y-6'}>
               <View>
@@ -115,8 +109,9 @@ export default function LoginScreen() {
                   Username
                 </Text>
                 <TextInput
-                  className={`bg-white border border-gray-300 rounded-lg px-3 md:px-4 py-3 text-base`}
+                  className={`bg-white border border-gray-300 rounded-lg px-3 md:px-4 py-3 text-base text-gray-900`}
                   placeholder="Enter your username"
+                  placeholderTextColor="#9ca3af"
                   value={username}
                   onChangeText={setUsername}
                   autoCapitalize="none"
@@ -130,11 +125,20 @@ export default function LoginScreen() {
                 </Text>
                 <View className="relative">
                   <TextInput
-                    className={`bg-white border border-gray-300 rounded-lg px-3 md:px-4 py-3 pr-12 text-base`}
+                    className={`bg-white border border-gray-300 rounded-lg px-3 md:px-4 py-3 pr-12 text-base text-gray-900`}
                     placeholder="Enter your password"
+                    placeholderTextColor="#9ca3af"
                     value={password}
                     onChangeText={setPassword}
                     secureTextEntry={!showPassword}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    textContentType="password"
+                    autoComplete="password"
+                    style={{
+                      fontFamily: Platform.OS === 'android' ? 'sans-serif' : 'System',
+                      color: '#111827',
+                    }}
                   />
                   <TouchableOpacity
                     className={`absolute right-3 top-3.5`}

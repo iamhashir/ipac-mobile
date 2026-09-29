@@ -1,18 +1,50 @@
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
+import type { AuthChangeEvent, Session, User } from '@supabase/supabase-js';
 import { auth, db, supabase } from './api/supabase';
 
-const AuthContext = createContext({});
+interface AuthProfile {
+  id?: string;
+  full_name?: string | null;
+  username?: string | null;
+  role_id?: string | null;
+  roles?: {
+    id?: string;
+    name?: string | null;
+    [key: string]: any;
+  } | null;
+  status?: string | null;
+  [key: string]: any;
+}
 
-export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
-  const [profile, setProfile] = useState(null);
+interface AuthContextValue {
+  user: User | null;
+  profile: AuthProfile | null;
+  loading: boolean;
+  session: Session | null;
+  signIn: (email: string, password: string) => Promise<{ data: any; error: any }>;
+  signInWithPhone: (phone: string) => Promise<{ data: any; error: any }>;
+  verifyOtp: (phone: string, token: string) => Promise<{ data: any; error: any }>;
+  signOut: () => Promise<{ error: any }>;
+  isAdmin: () => boolean;
+  isPacker: () => boolean;
+  isProjectLead: (orderId?: string) => boolean;
+  hasPermission: (permission: string) => boolean;
+  getUserRole: () => string;
+  refreshProfile: () => Promise<boolean>;
+}
+
+const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+
+export const AuthProvider = ({ children }: React.PropsWithChildren<{}>) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<AuthProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [session, setSession] = useState(null);
-  const [lastAuthEvent, setLastAuthEvent] = useState(null);
-  const profileLoadingRef = useRef(false);
-  const sessionRefreshTimeoutRef = useRef(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [lastAuthEvent, setLastAuthEvent] = useState<AuthChangeEvent | null>(null);
+  const profileLoadingRef = useRef<boolean>(false);
+  const sessionRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Refs to avoid stale closures inside the auth listener
-  const lastAuthEventRef = useRef(null);
+  const lastAuthEventRef = useRef<AuthChangeEvent | null>(null);
   const userIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -106,7 +138,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const loadUserProfile = async (userId) => {
+  const loadUserProfile = async (userId: string) => {
     try {
       // Skip if we already have this user's profile
       if (profile?.id === userId) {
@@ -183,6 +215,9 @@ export const AuthProvider = ({ children }) => {
         if (currentSession) {
           // Check if session needs refresh (expires in less than 60 minutes)
           const expiresAt = currentSession.expires_at;
+          if (typeof expiresAt !== 'number') {
+            return;
+          }
           const now = Math.floor(Date.now() / 1000);
           const timeUntilExpiry = expiresAt - now;
           
@@ -203,7 +238,7 @@ export const AuthProvider = ({ children }) => {
     sessionRefreshTimeoutRef.current = setTimeout(checkSession, checkInterval);
   };
 
-  const signIn = async (email, password) => {
+  const signIn = async (email: string, password: string) => {
     try {
       const { data, error } = await auth.signIn(email, password);
       // Don't manually set loading to false here - let the auth state change handle it
@@ -215,7 +250,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const signInWithPhone = async (phone) => {
+  const signInWithPhone = async (phone: string) => {
     try {
       setLoading(true);
       const { data, error } = await auth.signInWithPhone(phone);
@@ -228,7 +263,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const verifyOtp = async (phone, token) => {
+  const verifyOtp = async (phone: string, token: string) => {
     try {
       setLoading(true);
       const { data, error } = await auth.verifyOtp(phone, token);
@@ -281,7 +316,7 @@ export const AuthProvider = ({ children }) => {
     return false;
   };
 
-  const hasPermission = (permission) => {
+  const hasPermission = (permission: string) => {
     return profile?.roles?.[permission] === true;
   };
 
@@ -304,7 +339,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const value = {
+  const value: AuthContextValue = {
     user,
     profile,
     loading,

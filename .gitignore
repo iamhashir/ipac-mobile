@@ -45,6 +45,7 @@ fix_*.sql
 run-*.sql
 check-*.sql
 *_examples.sql
+*.md
 
 # macOS
 .DS_Store
@@ -59,3 +60,10 @@ check-*.sql
 
 # Legacy Appwrite artifacts (remove when possible)
 functions/appwrite/
+
+supabase/migrations/*
+
+# Local archive of replaced implementations
+archives/
+# Claude Code local session dir
+.claude/

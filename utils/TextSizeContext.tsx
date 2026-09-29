@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from '
 import { Text, TextInput, StyleSheet, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export type TextSizeOption = 'small' | 'medium' | 'large';
+export type TextSizeOption = 'small' | 'medium' | 'large' | 'xl' | 'xxl';
 export const TEXT_SIZE_KEY = 'packer_text_size';
 
 interface TextSizeContextValue {
@@ -17,6 +17,8 @@ const SCALE_MAP: Record<TextSizeOption, number> = {
   small: 0.9,
   medium: 1.0,
   large: 1.3,
+  xl: 1.5,
+  xxl: 1.8,
 };
 
 // Global mutable multiplier used by RN native preprocessors (web uses CSS overrides)
@@ -48,7 +50,7 @@ export const TextSizeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     (async () => {
       try {
         const stored = await AsyncStorage.getItem(TEXT_SIZE_KEY);
-        if (stored === 'small' || stored === 'medium' || stored === 'large') {
+        if (stored === 'small' || stored === 'medium' || stored === 'large' || stored === 'xl' || stored === 'xxl') {
           setSizeState(stored);
         }
       } finally {

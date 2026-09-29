@@ -116,6 +116,7 @@ export default function OrdersPage() {
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Order | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchOrders();
@@ -123,6 +124,7 @@ export default function OrdersPage() {
 
   const fetchOrders = async () => {
     try {
+      setFetchError(null);
       const { data, error } = await supabase
         .from('orders')
         .select(`
@@ -145,8 +147,9 @@ export default function OrdersPage() {
       }));
 
       setOrders(formattedOrders);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching orders:', error);
+      setFetchError(error?.message || 'Failed to load orders. Check your connection and try again.');
     } finally {
       setLoading(false);
     }
@@ -253,6 +256,18 @@ export default function OrdersPage() {
           </TouchableOpacity>
         </View>
 
+        {fetchError && !loading ? (
+          <View className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+            <Text className="text-red-700 mb-2">{fetchError}</Text>
+            <TouchableOpacity
+              onPress={() => { setLoading(true); fetchOrders(); }}
+              className="self-start bg-red-600 px-4 py-2 rounded"
+            >
+              <Text className="text-white font-medium">Retry</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
         {loading ? (
           <View className="flex-1 justify-center items-center py-12">
             <Text className="text-gray-500 text-lg">Loading orders...</Text>
@@ -273,7 +288,7 @@ export default function OrdersPage() {
           ))
         )}
 
-        {filteredOrders.length === 0 ? (
+        {!loading && !fetchError && filteredOrders.length === 0 ? (
           <View className="flex-1 justify-center items-center py-12">
             <Text className="text-gray-500 text-lg">No orders found</Text>
             <Text className="text-gray-400 text-sm mt-2">

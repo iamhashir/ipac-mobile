@@ -175,6 +175,11 @@ export default function UsersPage() {
   const [formUsername, setFormUsername] = useState("");
   const [formPassword, setFormPassword] = useState("");
   const [formRole, setFormRole] = useState<string>("packer");
+  const [formErrors, setFormErrors] = useState<{
+    fullName?: string;
+    email?: string;
+    password?: string;
+  }>({});
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -265,7 +270,7 @@ export default function UsersPage() {
           </Text>
           <TouchableOpacity
             className="bg-blue-50 border border-blue-600 px-4 py-2 rounded-lg flex-row items-center"
-            onPress={() => setAddOpen(true)}
+            onPress={() => { setFormErrors({}); setAddOpen(true); }}
           >
             <Plus size={16} color="#1d4ed8" />
             <Text className="ml-2 text-blue-700 font-medium">Add User</Text>
@@ -399,10 +404,13 @@ export default function UsersPage() {
               </Text>
               <TextInput
                 value={formFullName}
-                onChangeText={setFormFullName}
+                onChangeText={(t) => { setFormFullName(t); setFormErrors((e) => ({ ...e, fullName: undefined })); }}
                 placeholder="e.g. Jane Doe"
-                className="border border-gray-300 rounded p-2 bg-white"
+                className={`border rounded p-2 bg-white ${formErrors.fullName ? 'border-red-500' : 'border-gray-300'}`}
               />
+              {formErrors.fullName ? (
+                <Text className="text-red-600 text-xs mt-1">{formErrors.fullName}</Text>
+              ) : null}
             </View>
 
             <View className="mb-2">
@@ -411,12 +419,15 @@ export default function UsersPage() {
               </Text>
               <TextInput
                 value={formEmail}
-                onChangeText={setFormEmail}
+                onChangeText={(t) => { setFormEmail(t); setFormErrors((e) => ({ ...e, email: undefined })); }}
                 autoCapitalize="none"
                 keyboardType="email-address"
                 placeholder="name@example.com"
-                className="border border-gray-300 rounded p-2 bg-white"
+                className={`border rounded p-2 bg-white ${formErrors.email ? 'border-red-500' : 'border-gray-300'}`}
               />
+              {formErrors.email ? (
+                <Text className="text-red-600 text-xs mt-1">{formErrors.email}</Text>
+              ) : null}
             </View>
 
             <View className="mb-2">
@@ -436,11 +447,14 @@ export default function UsersPage() {
               </Text>
               <TextInput
                 value={formPassword}
-                onChangeText={setFormPassword}
+                onChangeText={(t) => { setFormPassword(t); setFormErrors((e) => ({ ...e, password: undefined })); }}
                 secureTextEntry
                 placeholder="••••••••"
-                className="border border-gray-300 rounded p-2 bg-white"
+                className={`border rounded p-2 bg-white ${formErrors.password ? 'border-red-500' : 'border-gray-300'}`}
               />
+              {formErrors.password ? (
+                <Text className="text-red-600 text-xs mt-1">{formErrors.password}</Text>
+              ) : null}
             </View>
 
             <View className="mb-3">
@@ -481,16 +495,16 @@ export default function UsersPage() {
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={async () => {
-                  if (
-                    !formFullName ||
-                    !formEmail ||
-                    !formPassword ||
-                    !formRole
-                  ) {
-                    Alert.alert(
-                      "Missing fields",
-                      "Please fill in full name, email, password and role."
-                    );
+                  const errors: { fullName?: string; email?: string; password?: string } = {};
+                  if (!formFullName.trim()) errors.fullName = "Full name is required";
+                  if (!formEmail.trim()) errors.email = "Email is required";
+                  else if (!/^\S+@\S+\.\S+$/.test(formEmail.trim()))
+                    errors.email = "Enter a valid email address";
+                  if (!formPassword) errors.password = "Password is required";
+                  else if (formPassword.length < 6)
+                    errors.password = "Password must be at least 6 characters";
+                  if (Object.keys(errors).length > 0) {
+                    setFormErrors(errors);
                     return;
                   }
                   try {

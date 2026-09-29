@@ -5,7 +5,7 @@ import { useAuth } from '../../utils/AuthContext';
 import { View, Text, ActivityIndicator, TouchableOpacity } from 'react-native';
 
 export default function PackerLayout() {
-  const { user, profile, loading, refreshProfile, signOut } = useAuth();
+  const { user, profile, loading, refreshProfile, signOut } = useAuth() as any;
   const router = useRouter();
   const [profileWaitTooLong, setProfileWaitTooLong] = useState(false);
 
@@ -97,7 +97,7 @@ export default function PackerLayout() {
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="dashboard" />
       <Stack.Screen name="attendance" />
-      <Stack.Screen name="packing-report" />
+  <Stack.Screen name="packing-list" />
       <Stack.Screen name="settings" />
     </Stack>
   );

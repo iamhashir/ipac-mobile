@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, ScrollView, Text, View } from "react-native";
 import { createPortal } from "react-dom";
 import { db } from "../../../utils/api/supabase";
@@ -44,29 +44,36 @@ export default function AssignmentsBoard() {
           client_name: o.client_name,
         })) as OrderLaneModel[];
 
-        // Fetch team members and lead for each order
-        const withTeams = await Promise.all(
-          ordersBase.map(async (o) => {
-            const [{ data: members }, { data: lead }] = await Promise.all([
-              db.getOrderPackers(o.id),
-              teamLeadApi.getOrderTeamLead(o.id),
-            ]);
-            const packersForOrder: PackerRow[] = ((members as any) || []).map(
-              (m: any) => ({
-                id: m.packer_id || m.id,
-                full_name: m.full_name || m.profiles?.full_name || "",
-                username: m.username || null,
-                packer_status: "busy",
-              })
-            );
-            const teamLeadId = (lead as any)?.packer_id || null;
-            return {
-              ...o,
-              packers: packersForOrder,
-              teamLeadId,
-            } as OrderLaneModel;
-          })
+        // Fetch team members + lead flags for all orders in one batch query
+        const { data: teamRows } = await db.getTeamMembersForOrders(
+          ordersBase.map((o) => o.id)
         );
+        const membersByOrder = new Map<string, any[]>();
+        ((teamRows as any) || []).forEach((row: any) => {
+          const list = membersByOrder.get(row.order_id) || [];
+          list.push(row);
+          membersByOrder.set(row.order_id, list);
+        });
+
+        const withTeams = ordersBase.map((o) => {
+          const rows = membersByOrder.get(o.id) || [];
+          const packersForOrder: PackerRow[] = rows.map((m: any) => ({
+            id: m.packer_id,
+            full_name: m.profiles?.full_name || "",
+            username: m.profiles?.username || null,
+            packer_status: "busy",
+          }));
+          const teamLeadIds = rows
+            .filter((m: any) => m.is_team_lead)
+            .map((m: any) => m.packer_id);
+          const teamLeadId = teamLeadIds.length > 0 ? teamLeadIds[0] : null; // for backward compatibility
+          return {
+            ...o,
+            packers: packersForOrder,
+            teamLeadId,
+            teamLeadIds,
+          } as OrderLaneModel;
+        });
 
         setOrders(withTeams);
       } catch (e: any) {
@@ -83,6 +90,52 @@ export default function AssignmentsBoard() {
     orders.forEach((o) => o.packers.forEach((p) => assignedIds.add(p.id)));
     return allPackers.filter((p) => !assignedIds.has(p.id));
   }, [orders, allPackers]);
+
+  const moveOptions = useMemo(
+    () => orders.map((o) => ({ id: o.id, label: o.order_name })),
+    [orders]
+  );
+
+  const openProfile = useCallback(
+    (id: string) => router.push(`/(admin)/users/${id}`),
+    [router]
+  );
+
+  const handleMakeLead = useCallback(async (orderId: string, packerId: string) => {
+    const { error } = await teamLeadApi.addTeamLead(orderId, packerId);
+    if (error) setError(error.message || "Failed to add lead");
+    else
+      setOrders((prev) =>
+        prev.map((ord) =>
+          ord.id === orderId
+            ? {
+                ...ord,
+                teamLeadIds: [...(ord.teamLeadIds || []), packerId],
+                teamLeadId: ord.teamLeadId || packerId,
+              }
+            : ord
+        )
+      );
+  }, []);
+
+  const handleRemoveLead = useCallback(async (orderId: string, packerId: string) => {
+    const { error } = await teamLeadApi.removeTeamLead(orderId, packerId);
+    if (error) setError(error.message || "Failed to remove lead");
+    else
+      setOrders((prev) =>
+        prev.map((ord) => {
+          if (ord.id === orderId) {
+            const newLeadIds = (ord.teamLeadIds || []).filter((id) => id !== packerId);
+            return {
+              ...ord,
+              teamLeadIds: newLeadIds,
+              teamLeadId: newLeadIds.length > 0 ? newLeadIds[0] : null,
+            };
+          }
+          return ord;
+        })
+      );
+  }, []);
 
   const requestAssign = (
     orderId: string,
@@ -105,7 +158,11 @@ export default function AssignmentsBoard() {
   };
 
   const confirmAssign = async () => {
-    if (!confirm.packerId) return setConfirm({ open: false });
+    const packerId = confirm.packerId;
+    if (!packerId) {
+      setConfirm({ open: false });
+      return;
+    }
 
     // Unassign to pool
     if (confirm.orderId === "POOL" && confirm.originOrderId) {
@@ -113,7 +170,7 @@ export default function AssignmentsBoard() {
       if (!origin) return setConfirm({ open: false });
       const originIds = origin.packers
         .map((p) => p.id)
-        .filter((id) => id !== confirm.packerId);
+        .filter((id) => id !== packerId);
       const { error } = await db.assignPackersToOrder(origin.id, originIds);
       if (error) setError(error.message || "Failed to unassign");
       setOrders((prev) =>
@@ -121,14 +178,14 @@ export default function AssignmentsBoard() {
           o.id === origin.id
             ? {
                 ...o,
-                packers: o.packers.filter((p) => p.id !== confirm.packerId),
+                packers: o.packers.filter((p) => p.id !== packerId),
               }
             : o
         )
       );
       setAllPackers((prev) =>
         prev.map((p) =>
-          p.id === confirm.packerId ? { ...p, packer_status: "available" } : p
+          p.id === packerId ? { ...p, packer_status: "available" } : p
         )
       );
       setConfirm({ open: false });
@@ -136,7 +193,7 @@ export default function AssignmentsBoard() {
     }
 
     if (!confirm.orderId) return setConfirm({ open: false });
-    const target = orders.find((o) => o.id === confirm.orderId);
+  const target = orders.find((o) => o.id === confirm.orderId);
     if (!target) return setConfirm({ open: false });
 
     // Move between orders
@@ -145,10 +202,10 @@ export default function AssignmentsBoard() {
       if (origin) {
         const originIds = origin.packers
           .map((p) => p.id)
-          .filter((id) => id !== confirm.packerId);
+          .filter((id) => id !== packerId);
         await db.assignPackersToOrder(origin.id, originIds);
       }
-      const targetIds = [...target.packers.map((p) => p.id), confirm.packerId];
+  const targetIds = [...target.packers.map((p) => p.id), packerId];
       const { error } = await db.assignPackersToOrder(target.id, targetIds);
       if (error) setError(error.message || "Failed to move packer");
       setOrders((prev) =>
@@ -159,10 +216,10 @@ export default function AssignmentsBoard() {
               packers: [
                 ...o.packers,
                 {
-                  id: confirm.packerId!,
+                  id: packerId,
                   full_name:
                     confirm.packerName ||
-                    allPackers.find((p) => p.id === confirm.packerId)
+                    allPackers.find((p) => p.id === packerId)
                       ?.full_name ||
                     "—",
                   packer_status: "busy",
@@ -172,7 +229,7 @@ export default function AssignmentsBoard() {
           if (o.id === confirm.originOrderId)
             return {
               ...o,
-              packers: o.packers.filter((p) => p.id !== confirm.packerId),
+              packers: o.packers.filter((p) => p.id !== packerId),
             };
           return o;
         })
@@ -183,16 +240,16 @@ export default function AssignmentsBoard() {
 
     // Assign from pool -> order
     const existing = target.packers.map((p) => p.id);
-    if (existing.includes(confirm.packerId)) {
+  if (existing.includes(packerId)) {
       setConfirm({ open: false });
       return;
     }
-    const newIds = [...existing, confirm.packerId];
+  const newIds = [...existing, packerId];
     const { error } = await db.assignPackersToOrder(target.id, newIds);
     if (error) {
       setError(error.message || "Failed to assign packer");
     } else {
-      const added = allPackers.find((p) => p.id === confirm.packerId);
+  const added = allPackers.find((p) => p.id === packerId);
       setOrders((prev) =>
         prev.map((o) =>
           o.id === target.id
@@ -201,7 +258,7 @@ export default function AssignmentsBoard() {
                 packers: [
                   ...o.packers,
                   {
-                    id: added?.id || confirm.packerId,
+                    id: added?.id || packerId,
                     full_name: added?.full_name || "—",
                     packer_status: "busy",
                   },
@@ -212,7 +269,7 @@ export default function AssignmentsBoard() {
       );
       setAllPackers((prev) =>
         prev.map((p) =>
-          p.id === confirm.packerId ? { ...p, packer_status: "busy" } : p
+          p.id === packerId ? { ...p, packer_status: "busy" } : p
         )
       );
     }
@@ -359,8 +416,8 @@ export default function AssignmentsBoard() {
                 <PackerCard
                   key={p.id}
                   packer={p}
-                  onPress={(id) => router.push(`/(admin)/users/${id}`)}
-                  moveOptions={orders.map(o => ({ id: o.id, label: o.order_name }))}
+                  onPress={openProfile}
+                  moveOptions={moveOptions}
                   onMoveTo={(destId) => requestAssign(destId, p.id, p.full_name, null)}
                 />
               ))}
@@ -394,22 +451,9 @@ export default function AssignmentsBoard() {
                   order={o}
                   allOrders={orders}
                   onDropPacker={requestAssign}
-                  onOpenProfile={(id) => router.push(`/(admin)/users/${id}`)}
-                  onMakeLead={async (orderId, packerId) => {
-                    const { error } = await teamLeadApi.assignTeamLead(
-                      orderId,
-                      packerId
-                    );
-                    if (error)
-                      setError(error.message || "Failed to assign lead");
-                    setOrders((prev) =>
-                      prev.map((ord) =>
-                        ord.id === orderId
-                          ? { ...ord, teamLeadId: packerId }
-                          : ord
-                      )
-                    );
-                  }}
+                  onOpenProfile={openProfile}
+                  onMakeLead={handleMakeLead}
+                  onRemoveLead={handleRemoveLead}
                 />
               ))}
             </div>
@@ -421,22 +465,9 @@ export default function AssignmentsBoard() {
                   order={o}
                   allOrders={orders}
                   onDropPacker={requestAssign}
-                  onOpenProfile={(id) => router.push(`/(admin)/users/${id}`)}
-                  onMakeLead={async (orderId, packerId) => {
-                    const { error } = await teamLeadApi.assignTeamLead(
-                      orderId,
-                      packerId
-                    );
-                    if (error)
-                      setError(error.message || "Failed to assign lead");
-                    setOrders((prev) =>
-                      prev.map((ord) =>
-                        ord.id === orderId
-                          ? { ...ord, teamLeadId: packerId }
-                          : ord
-                      )
-                    );
-                  }}
+                  onOpenProfile={openProfile}
+                  onMakeLead={handleMakeLead}
+                  onRemoveLead={handleRemoveLead}
                 />
               ))}
             </View>

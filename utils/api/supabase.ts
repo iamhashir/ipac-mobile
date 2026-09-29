@@ -2,15 +2,96 @@ import { createClient } from '@supabase/supabase-js';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
+
+import type { Json, Maybe, NullableDate, SupabaseUpdatePayload, UUID } from './types';
+import { createAttendanceApi } from './modules/attendance';
+import { createPackingApi } from './modules/packing';
+import { createTasksApi } from './modules/tasks';
+import { createServicesApi } from './modules/services';
+import { getCachedSignedUrl } from '../cache/signedUrlCache';
+
+interface AttendanceWindow {
+  orderId: UUID;
+  packerId: UUID;
+  shiftPeriod: string;
+}
+
+interface PackageItemInput {
+  order_package_id?: UUID;
+  orderPackageId?: UUID;
+  designation: string;
+  quantity: number;
+  reference?: string | null;
+  length?: number | null;
+  width?: number | null;
+  height?: number | null;
+  net_weight?: number | null;
+}
+
+interface FinalDimensionInput {
+  orderPackageId: UUID;
+  finalInfoId?: UUID | null;
+  originalInfoId?: UUID | null;
+  scope: string;
+  length: number | null;
+  width: number | null;
+  height: number | null;
+}
+
+interface PackageInfoInput {
+  orderPackageId: UUID;
+  finalInfoId?: UUID | null;
+  originalInfoId?: UUID | null;
+}
+
+type ProjectType = 'standard' | 'maintenance' | 'survey';
+
+interface CreatePackerProjectInput {
+  projectType: ProjectType;
+  clientId: UUID;
+  createdBy?: UUID | null;
+  orderName?: string | null;
+  description?: string | null;
+}
+
+type MaintenanceTaskCategory = 'survey' | 'unpack' | 'repack';
+
+const unwrapSingleRelation = <T>(relation: T | T[] | null | undefined): T | null => {
+  if (Array.isArray(relation)) {
+    return relation[0] ?? null;
+  }
+  return relation ?? null;
+};
+
+const getMappedCategoryIdsForOrder = async (orderId?: UUID | null) => {
+  if (!orderId) {
+    return { data: [] as string[], error: null };
+  }
+
+  const { data, error } = await supabase
+    .from('category_order_map')
+    .select('category_id')
+    .eq('order_id', orderId)
+    .not('category_id', 'is', null);
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const categoryIds = Array.from(
+    new Set(
+      (data || [])
+        .map((row: any) => String(row?.category_id || '').trim())
+        .filter((id) => id.length > 0)
+    )
+  );
+
+  return { data: categoryIds, error: null };
+};
 
 const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl || process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabasePublishableKey = Constants.expoConfig?.extra?.supabasePublishableKey || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-
-//get rid of these test logs later
-console.warn("😭😭😭 sup url constants:'", Constants.expoConfig?.extra?.supabaseUrl,"'");
-console.warn("😭😭😭 sup key constants:'", Constants.expoConfig?.extra?.supabasePublishableKey,"'");
-console.warn("😭😭😭 sup url env:'", process.env.EXPO_PUBLIC_SUPABASE_URL,"'");
-console.warn("😭😭😭 sup key env:'", process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,"'");
 
 if (!supabaseUrl || !supabasePublishableKey) {
   throw new Error('Missing Supabase environment variables. Please check your .env file.');
@@ -30,7 +111,7 @@ export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
 // Helper functions for authentication
 export const auth = {
   // Sign in with email/password
-  signIn: async (email, password) => {
+  signIn: async (email: string, password: string) => {
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
@@ -39,7 +120,7 @@ export const auth = {
   },
 
   // Sign in with phone/OTP (for packers)
-  signInWithPhone: async (phone) => {
+  signInWithPhone: async (phone: string) => {
     const { data, error } = await supabase.auth.signInWithOtp({
       phone,
     });
@@ -47,7 +128,7 @@ export const auth = {
   },
 
   // Verify OTP
-  verifyOtp: async (phone, token) => {
+  verifyOtp: async (phone: string, token: string) => {
     const { data, error } = await supabase.auth.verifyOtp({
       phone,
       token,
@@ -81,15 +162,18 @@ export const auth = {
   },
 
   // Get user by username (for username-based login)
-  getUserByUsername: async (username) => {
+  getUserByUsername: async (username: string) => {
     try {
-      console.log('🔍 Looking up username:', username);
-      
+      // Normalize: lowercase + strip ALL whitespace so a lookup never misses on
+      // casing or stray spaces, regardless of how the caller passed it in.
+      const lookupUsername = (username || '').toLowerCase().replace(/\s/g, '');
+      console.log('🔍 Looking up username:', lookupUsername);
+
       // Use a stored function to lookup username securely
       // This bypasses RLS policies since it runs with elevated privileges
       const { data, error } = await supabase
         .rpc('get_user_email_by_username', {
-          lookup_username: username
+          lookup_username: lookupUsername
         });
       
       console.log('🔍 Username lookup result:', { 
@@ -120,7 +204,7 @@ export const auth = {
   },
 
   // Sign in with username/password
-  signInWithUsername: async (username, password) => {
+  signInWithUsername: async (username: string, password: string) => {
     try {
       // First get the email for this username
       const { data: userProfile, error: lookupError } = await auth.getUserByUsername(username);
@@ -180,7 +264,11 @@ const persistSet = async (key: string, value: string) => {
 };
 
 // Helper functions for database operations
-export const db = {
+// Normalize a destination code: strip control chars, trim, uppercase; blank -> UNASSIGNED.
+const normalizeDestinationCode = (value: unknown): string =>
+  String(value || '').replace(/[\r\n\t]+/g, '').trim().toUpperCase() || 'UNASSIGNED';
+
+const baseDb = {
   // Clear profile cache (useful when profile is updated)
   clearProfileCache: (userId?: string) => {
     if (userId) {
@@ -191,7 +279,7 @@ export const db = {
   },
 
   // Get user profile with role (with caching)
-  getUserProfile: async (userId) => {
+  getUserProfile: async (userId: UUID) => {
     // In-memory cache first (fastest)
     const cached = profileCache.get(userId);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
@@ -369,25 +457,51 @@ export const db = {
         id,
         order_name,
         description,
+        project_type,
         production_status,
         clients (
           name
         )
       `)
-      .in('production_status', ['pending', 'in_progress'])
+      .in('production_status', ['pending', 'in_progress', 'on_hold'])
       .order('order_name');
     
     if (error) return { data: null, error };
+
+    const orders = data || [];
+    const orderIds = orders.map((order) => order.id).filter(Boolean);
+    const assignedPackerCountByOrder: Record<string, number> = {};
+
+    if (orderIds.length > 0) {
+      const { data: membershipRows, error: membershipError } = await supabase
+        .from('order_team_members')
+        .select('order_id')
+        .in('order_id', orderIds);
+
+      if (membershipError) {
+        console.warn('Failed to load order team member counts:', membershipError);
+      } else {
+        (membershipRows || []).forEach((row: any) => {
+          const rowOrderId = row?.order_id;
+          if (!rowOrderId) return;
+          assignedPackerCountByOrder[rowOrderId] = (assignedPackerCountByOrder[rowOrderId] || 0) + 1;
+        });
+      }
+    }
     
     // Transform the data to match expected format
-    const transformedData = data?.map(order => ({
-      id: order.id,
-      order_name: order.order_name,
-      description: order.description,
-      production_status: order.production_status,
-      client_name: order.clients?.name || 'Unknown Client',
-      assigned_packers_count: 0 // This could be calculated if needed
-    })) || [];
+    const transformedData = orders.map(order => {
+      const client = unwrapSingleRelation<{ name?: string }>(order.clients);
+      return {
+        id: order.id,
+        order_name: order.order_name,
+        description: order.description,
+        project_type: (order as any).project_type || 'standard',
+        production_status: order.production_status,
+        client_name: client?.name || 'Unknown Client',
+        assigned_packers_count: assignedPackerCountByOrder[order.id] || 0
+      };
+    });
     
     return { data: transformedData, error };
   },
@@ -397,6 +511,27 @@ export const db = {
     const { data, error } = await supabase
       .rpc('get_available_packers');
     
+    return { data, error };
+  },
+
+  endAttendanceForPackers: async (orderId: UUID, packerIds: UUID[]) => {
+    if (!orderId || !packerIds || packerIds.length === 0) {
+      return { data: [], error: null };
+    }
+
+    const nowIso = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .update({
+        end_time: nowIso,
+        updated_at: nowIso,
+      })
+      .eq('order_id', orderId)
+      .in('packer_id', packerIds)
+      .is('end_time', null)
+      .select('id');
+
     return { data, error };
   },
 
@@ -411,7 +546,7 @@ export const db = {
   },
 
   // Assign packers to order using new JSON structure
-  assignPackersToOrder: async (orderId, packerIds) => {
+  assignPackersToOrder: async (orderId: UUID, packerIds: UUID[]) => {
     const { data, error } = await supabase
       .rpc('assign_packers_to_order', {
         order_uuid: orderId,
@@ -422,7 +557,16 @@ export const db = {
   },
 
   // Log attendance with comprehensive data
-  logAttendance: async (orderId, packerId, shiftPeriod, status, startTime = null, endTime = null, toolboxBriefing = false, isProjectStart = false) => {
+  logAttendance: async (
+    orderId: UUID,
+    packerId: UUID,
+    shiftPeriod: string,
+    status: string,
+    startTime: NullableDate = null,
+    endTime: NullableDate = null,
+    toolboxBriefing = false,
+    isProjectStart = false
+  ) => {
     const { data, error } = await supabase
       .from('attendance_logs')
       .insert({
@@ -441,7 +585,7 @@ export const db = {
   },
 
   // Update attendance end time
-  updateAttendanceEndTime: async (attendanceId, endTime) => {
+  updateAttendanceEndTime: async (attendanceId: UUID, endTime: NullableDate) => {
     const { data, error } = await supabase
       .from('attendance_logs')
       .update({ 
@@ -455,8 +599,15 @@ export const db = {
   },
 
   // Update attendance end time by order, packer, and shift period
-  updateAttendanceEndTimeByDetails: async (orderId, packerId, shiftPeriod, endTime) => {
+  updateAttendanceEndTimeByDetails: async (
+    orderId: UUID,
+    packerId: UUID,
+    shiftPeriod: string,
+    endTime: NullableDate,
+    logDateOverride?: string
+  ) => {
     const today = new Date().toISOString().split('T')[0];
+    const targetDate = logDateOverride || today;
     
     const { data, error } = await supabase
       .from('attendance_logs')
@@ -467,7 +618,7 @@ export const db = {
       .eq('order_id', orderId)
       .eq('packer_id', packerId)
       .eq('shift_period', shiftPeriod)
-      .eq('log_date', today)
+      .eq('log_date', targetDate)
       .is('end_time', null) // Only update records without end time
       .select();
     
@@ -475,7 +626,7 @@ export const db = {
   },
 
   // Mark toolbox briefing as completed for the whole order and current shift (today)
-  setToolboxBriefingForOrderShift: async (orderId, shiftPeriod) => {
+  setToolboxBriefingForOrderShift: async (orderId: UUID, shiftPeriod: string) => {
     const today = new Date().toISOString().split('T')[0];
     const { data, error } = await supabase
       .from('attendance_logs')
@@ -488,7 +639,12 @@ export const db = {
   },
 
   // Update attendance records to allow restarting
-  updateAttendanceForRestart: async (orderId, packerId, shiftPeriod, startTimeIso) => {
+  updateAttendanceForRestart: async (
+    orderId: UUID,
+    packerId: UUID,
+    shiftPeriod: string,
+    startTimeIso: string
+  ) => {
     const today = new Date().toISOString().split('T')[0];
     
     const { data, error } = await supabase
@@ -509,7 +665,7 @@ export const db = {
   },
 
   // Get active attendance for a packer today
-  getActiveAttendance: async (orderId, packerId, shiftPeriod) => {
+  getActiveAttendance: async (orderId: UUID, packerId: UUID, shiftPeriod: string) => {
     const today = new Date().toISOString().split('T')[0];
     
     const { data, error } = await supabase
@@ -532,7 +688,7 @@ export const db = {
   },
 
   // Get today's attendance for an order
-  getTodaysAttendance: async (orderId) => {
+  getTodaysAttendance: async (orderId: UUID) => {
     const today = new Date().toISOString().split('T')[0];
     
     const { data, error } = await supabase
@@ -552,7 +708,7 @@ export const db = {
   },
 
   // Check if packer has logged attendance today
-  hasLoggedAttendanceToday: async (orderId, packerId) => {
+  hasLoggedAttendanceToday: async (orderId: UUID, _packerId: UUID) => {
     const today = new Date().toISOString().split('T')[0];
     
     const { data, error } = await supabase
@@ -564,15 +720,19 @@ export const db = {
   },
 
   // Get order by ID with project lead
-  getOrderById: async (orderId) => {
+  getOrderById: async (orderId: string) => {
     const { data, error } = await supabase
       .from('orders')
       .select(`
         id,
         order_name,
         description,
+        project_type,
+        production_status,
+        client_id,
         clients (
-          name
+          name,
+          portal_settings_id
         ),
         project_lead:profiles!project_lead_id (
           full_name
@@ -583,13 +743,22 @@ export const db = {
     
     // Transform the data to match expected format
     if (data) {
+      const client = unwrapSingleRelation<{ name?: string, portal_settings_id?: string | null }>(data.clients);
+      const projectLead = unwrapSingleRelation<{ full_name?: string }>(data.project_lead);
       return {
         data: {
           id: data.id,
           order_name: data.order_name,
           description: data.description,
-          client_name: data.clients?.name || 'Unknown Client',
-          project_lead_name: data.project_lead?.full_name || ''
+          project_type: (data as any).project_type || 'standard',
+          production_status: data.production_status || null,
+          commercial_status: data.commercial_status || null,
+          client_id: (data as any).client_id,
+          client_name: client?.name || 'Unknown Client',
+          project_lead_name: projectLead?.full_name || '',
+          client: {
+            portal_settings_id: client?.portal_settings_id || null
+          }
         },
         error
       };
@@ -598,8 +767,30 @@ export const db = {
     return { data, error };
   },
 
+  getClientQrLogoUrl: async (clientId: UUID) => {
+    try {
+      const { data, error } = await supabase
+        .from('clients')
+        .select(`
+          portal_settings:client_portal_settings (
+            qr_logo_url
+          )
+        `)
+        .eq('id', clientId)
+        .maybeSingle();
+
+      if (error) return { data: null, error };
+      
+      const settings = unwrapSingleRelation<{ qr_logo_url: string | null }>(data?.portal_settings as any);
+      return { data: settings?.qr_logo_url || null, error: null };
+    } catch (e) {
+      return { data: null, error: e };
+    }
+  },
+
+
   // Get packers by IDs
-  getPackersByIds: async (packerIds) => {
+  getPackersByIds: async (packerIds: UUID[]) => {
     const { data, error } = await supabase
       .from('profiles')
       .select('id, full_name, username')
@@ -608,8 +799,27 @@ export const db = {
     return { data, error };
   },
 
+  // Batch: team members (with lead flag) for many orders in one query
+  getTeamMembersForOrders: async (orderIds: UUID[]) => {
+    const { data, error } = await supabase
+      .from('order_team_members')
+      .select(`
+        order_id,
+        packer_id,
+        is_team_lead,
+        profiles (
+          id,
+          full_name,
+          username
+        )
+      `)
+      .in('order_id', orderIds);
+
+    return { data, error };
+  },
+
   // Get packers assigned to an order (using new JSON structure)
-  getOrderPackers: async (orderId) => {
+  getOrderPackers: async (orderId: UUID) => {
     const { data, error } = await supabase
       .rpc('get_order_packers', {
         order_uuid: orderId
@@ -618,1522 +828,2838 @@ export const db = {
     return { data, error };
   },
 
+  // Remove self from order (packer self-removal)
+  removeSelfFromOrder: async (orderId: UUID, packerId: UUID) => {
+    const { data, error } = await supabase
+      .rpc('remove_self_from_order', {
+        order_uuid: orderId,
+        packer_uuid: packerId
+      });
+    
+    return { data, error };
+  },
+
   // Get all packers with their current assignment status
   getAllPackersWithStatus: async () => {
     const { data, error } = await supabase
-      .rpc('get_all_packers_with_status');
+      .from('profiles')
+      .select(`
+        id,
+        full_name,
+        username,
+        packer_status,
+        current_order_id,
+        orders:current_order_id (
+          order_name
+        )
+      `)
+      .eq('status', 'active')
+      .order('full_name');
     
-    return { data, error };
+    if (error) return { data: null, error };
+
+    const basePackers = (data || []).map(packer => {
+      const currentOrder = unwrapSingleRelation<{ order_name?: string }>(packer.orders);
+      return {
+        id: packer.id,
+        full_name: packer.full_name,
+        username: packer.username,
+        packer_status: packer.packer_status || 'available',
+        current_order_name: currentOrder?.order_name || null
+      };
+    });
+
+    const withoutOrderName = basePackers.filter(
+      (packer) => !packer.current_order_name
+    );
+
+    const activeSessionOrderNameByPacker: Record<string, string> = {};
+    if (withoutOrderName.length > 0) {
+      const busyIds = withoutOrderName.map((packer) => packer.id);
+      const { data: sessionRows, error: sessionError } = await supabase
+        .from('packer_sessions')
+        .select(`
+          packer_id,
+          created_at,
+          orders:order_id (
+            order_name
+          )
+        `)
+        .eq('session_active', true)
+        .in('packer_id', busyIds)
+        .order('created_at', { ascending: false });
+
+      if (sessionError) {
+        console.warn('Failed to load active session order names for packers:', sessionError);
+      } else {
+        (sessionRows || []).forEach((row: any) => {
+          const packerId = row?.packer_id;
+          if (!packerId || activeSessionOrderNameByPacker[packerId]) return;
+
+          const order = unwrapSingleRelation<{ order_name?: string }>(row?.orders);
+          if (order?.order_name) {
+            activeSessionOrderNameByPacker[packerId] = order.order_name;
+          }
+        });
+      }
+    }
+
+    const unresolvedBusyPackers = withoutOrderName.filter(
+      (packer) => !activeSessionOrderNameByPacker[packer.id]
+    );
+
+    const membershipOrderNameByPacker: Record<string, string> = {};
+    if (unresolvedBusyPackers.length > 0) {
+      const unresolvedIds = unresolvedBusyPackers.map((packer) => packer.id);
+      const { data: membershipRows, error: membershipError } = await supabase
+        .from('order_team_members')
+        .select(`
+          packer_id,
+          created_at,
+          orders:order_id (
+            order_name
+          )
+        `)
+        .in('packer_id', unresolvedIds)
+        .order('created_at', { ascending: false });
+
+      if (membershipError) {
+        console.warn('Failed to load fallback membership order names for packers:', membershipError);
+      } else {
+        (membershipRows || []).forEach((row: any) => {
+          const packerId = row?.packer_id;
+          if (!packerId || membershipOrderNameByPacker[packerId]) return;
+
+          const order = unwrapSingleRelation<{ order_name?: string }>(row?.orders);
+          if (order?.order_name) {
+            membershipOrderNameByPacker[packerId] = order.order_name;
+          }
+        });
+      }
+    }
+    
+    const transformed = basePackers.map((packer) => {
+      if (packer.current_order_name) {
+        return packer;
+      }
+
+      const resolvedOrderName = activeSessionOrderNameByPacker[packer.id] || membershipOrderNameByPacker[packer.id] || null;
+      return {
+        ...packer,
+        current_order_name: resolvedOrderName,
+      };
+    });
+    
+    return { data: transformed, error: null };
   },
 
   // Update project lead for an order
-  updateProjectLead: async (orderId, projectLeadId) => {
+  updateProjectLead: async (orderId: UUID, projectLeadId: UUID) => {
     const { data, error } = await supabase
-      .rpc('update_project_lead_with_status', {
-        order_uuid: orderId,
-        lead_id: projectLeadId
-      });
-    
-    return { data, error };
-  },
-
-  // Session management functions
-  // Create a new packer session
-  createPackerSession: async (sessionData) => {
-    const { data, error } = await supabase
-      .from('packer_sessions')
-      .insert(sessionData)
-      .select()
+      .from('orders')
+      .update({
+        project_lead_id: projectLeadId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', orderId)
+      .select('id, project_lead_id')
       .single();
     
     return { data, error };
   },
 
-  // Get active session for a packer
-  getActivePackerSession: async (packerId) => {
+  clearProjectLead: async (orderId: UUID) => {
     const { data, error } = await supabase
-      .from('packer_sessions')
-      .select('*')
-      .eq('packer_id', packerId)
-      .eq('session_active', true)
+      .from('orders')
+      .update({
+        project_lead_id: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', orderId)
+      .select('id, project_lead_id')
+      .single();
+
+    return { data, error };
+  },
+
+  setOrderProductionStatus: async (orderId: UUID, status: string) => {
+    const { data, error } = await supabase
+      .from('orders')
+      .update({ production_status: status })
+      .eq('id', orderId)
+      .select('id, production_status')
+      .single();
+
+    return { data, error };
+  },
+
+  getClients: async () => {
+    const { data, error } = await supabase
+      .from('clients')
+      .select('id, name')
+      .order('name');
+
+    if (!error && (data || []).length > 0) {
+      return { data, error: null };
+    }
+
+    const { data: orderClients, error: orderClientsError } = await supabase
+      .from('orders')
+      .select(`
+        client_id,
+        clients (
+          id,
+          name
+        )
+      `)
+      .not('client_id', 'is', null)
       .order('created_at', { ascending: false })
-      .limit(1);
-    
-    // Return the first item if data exists, otherwise null
-    return { 
-      data: data && data.length > 0 ? data[0] : null, 
-      error 
+      .limit(500);
+
+    if (orderClientsError) {
+      return { data: data || null, error: error || orderClientsError };
+    }
+
+    const unique = new Map<string, { id: string; name: string }>();
+    (orderClients || []).forEach((row: any) => {
+      const client = unwrapSingleRelation<{ id?: string; name?: string }>(row.clients);
+      const id = client?.id || row.client_id;
+      const name = client?.name;
+      if (!id || !name || unique.has(id)) return;
+      unique.set(id, { id, name });
+    });
+
+    const fallback = Array.from(unique.values()).sort((a, b) => a.name.localeCompare(b.name));
+    return { data: fallback, error: null };
+  },
+
+  createPackerProject: async ({ projectType, clientId, createdBy = null, orderName, description = null }: CreatePackerProjectInput) => {
+    let actorId = createdBy;
+    if (!actorId) {
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || !authData?.user?.id) {
+        return { data: null, error: authError || new Error('Authenticated user not found') };
+      }
+      actorId = authData.user.id;
+    }
+
+    const today = new Date();
+    const yyyy = String(today.getFullYear());
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const datePrefix = `${yyyy}-${mm}${dd}`;
+
+    const { data: clientRow, error: clientErr } = await supabase
+      .from('clients')
+      .select('id, name')
+      .eq('id', clientId)
+      .single();
+    if (clientErr || !clientRow) return { data: null, error: clientErr || new Error('Client not found') };
+
+    const clientKey = String(clientRow.name || 'CLIENT')
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, '-')
+      .replace(/[^A-Z0-9-]/g, '') || 'CLIENT';
+
+    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0).toISOString();
+    const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999).toISOString();
+
+    const { data: sameDayOrders, error: sameDayErr } = await supabase
+      .from('orders')
+      .select('id')
+      .eq('client_id', clientId)
+      .gte('created_at', startOfDay)
+      .lte('created_at', endOfDay);
+    if (sameDayErr) return { data: null, error: sameDayErr };
+
+    const dailySequence = String((sameDayOrders || []).length + 1).padStart(2, '0');
+    const autoName = `${datePrefix}-V01-${clientKey}-${dailySequence}`;
+    const chosenOrderName = (orderName || '').trim() || autoName;
+
+    const { data: orderRow, error: orderErr } = await supabase
+      .from('orders')
+      .insert({
+        order_name: chosenOrderName,
+        description: description || null,
+        client_id: clientId,
+        created_by: actorId,
+        commercial_status: 'draft',
+        production_status: 'pending',
+        project_type: projectType,
+      })
+      .select('id, order_name, project_type')
+      .single();
+    if (orderErr || !orderRow) return { data: null, error: orderErr || new Error('Failed to create order') };
+
+    const { data: origInfo, error: origErr } = await supabase
+      .from('package_info')
+      .insert({})
+      .select('id')
+      .single();
+    if (origErr || !origInfo) return { data: null, error: origErr || new Error('Failed to create original package info') };
+
+    const { data: finInfo, error: finErr } = await supabase
+      .from('package_info')
+      .insert({})
+      .select('id')
+      .single();
+    if (finErr || !finInfo) return { data: null, error: finErr || new Error('Failed to create final package info') };
+
+    const { data: orderPkg, error: pkgErr } = await supabase
+      .from('order_packages')
+      .insert({
+        order_id: orderRow.id,
+        package_number: 1,
+        description: null,
+        status: 'approved',
+        original_pkg_info: origInfo.id,
+        final_pkg_info: finInfo.id,
+      })
+      .select('id, order_id, package_number, status, description')
+      .single();
+    if (pkgErr || !orderPkg) return { data: null, error: pkgErr || new Error('Failed to create order package') };
+
+    const normalizedInstanceStatus =
+      orderPkg.status === 'packed'
+        ? 'packed'
+        : orderPkg.status === 'in_production'
+        ? 'in_production'
+        : orderPkg.status === 'design'
+        ? 'design'
+        : 'approved';
+
+    const { data: overviewRow, error: overviewErr } = await supabase
+      .from('order_pkg_overview')
+      .insert({
+        order_id: orderRow.id,
+        pkg_number: orderPkg.package_number,
+        status: normalizedInstanceStatus,
+        quantity: 1,
+        quantity_packed: normalizedInstanceStatus === 'packed' ? 1 : 0,
+        description: orderPkg.description || null,
+      })
+      .select('id')
+      .single();
+
+    if (overviewErr || !overviewRow?.id) {
+      return {
+        data: null,
+        error: overviewErr || new Error('Failed to create order package overview'),
+      };
+    }
+
+    const { error: instanceErr } = await supabase
+      .from('order_pkg_instance')
+      .insert({
+        order_pkg_overview_id: overviewRow.id,
+        order_package_id: orderPkg.id,
+        instance_number: 1,
+        status: normalizedInstanceStatus,
+        packed_at: normalizedInstanceStatus === 'packed' ? new Date().toISOString() : null,
+      });
+
+    if (instanceErr) {
+      return { data: null, error: instanceErr };
+    }
+
+    return {
+      data: {
+        order_id: orderRow.id,
+        order_name: orderRow.order_name,
+        project_type: (orderRow as any).project_type,
+        order_package_id: orderPkg.id,
+        package_number: orderPkg.package_number,
+        auto_name: autoName,
+      },
+      error: null,
     };
   },
 
-  // Update packer session
-  updatePackerSession: async (sessionId, updates) => {
-    const { data, error } = await supabase
-      .from('packer_sessions')
-      .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('id', sessionId)
-      .select()
+  getOrderPackageInternalDimensions: async (orderPackageId: string) => {
+    type PackageInfoRow = {
+      id: string;
+      internal_length: number | null;
+      internal_width: number | null;
+      internal_height: number | null;
+    };
+
+    type DimensionTriple = {
+      length: number | null;
+      width: number | null;
+      height: number | null;
+    };
+
+    const { data: pkg, error: pkgError } = await supabase
+      .from('order_packages')
+      .select('id, original_pkg_info, final_pkg_info')
+      .eq('id', orderPackageId)
       .single();
-    
-    return { data, error };
-  },
 
-  // Get packer attendance by order and date (returns latest records)
-  getPackerAttendanceByOrderAndDate: async (orderId, packerId, date) => {
-    const { data, error } = await supabase
-      .from('attendance_logs')
-      .select('*')
-      .eq('order_id', orderId)
-      .eq('packer_id', packerId)
-      .eq('log_date', date)
-      .order('created_at', { ascending: false });
-    
-    return { data, error };
-  },
-
-  // Get latest attendance records for all packers in an order
-  getLatestAttendanceForOrder: async (orderId) => {
-    const today = new Date().toISOString().split('T')[0];
-    
-    const { data, error } = await supabase
-      .from('attendance_logs')
-      .select(`
-        *,
-        profiles (
-          id,
-          full_name,
-          username
-        )
-      `)
-      .eq('order_id', orderId)
-      .eq('log_date', today)
-      .order('packer_id')
-      .order('shift_period')
-      .order('created_at', { ascending: false });
-    
-    if (error) return { data: null, error };
-    
-    // Group by packer and shift to get latest records
-    const latestRecords = {};
-    
-    if (data) {
-      data.forEach(record => {
-        const key = `${record.packer_id}_${record.shift_period}`;
-        if (!latestRecords[key] || new Date(record.created_at) > new Date(latestRecords[key].created_at)) {
-          latestRecords[key] = record;
-        }
-      });
+    if (pkgError || !pkg) {
+      return { data: null, error: pkgError };
     }
-    
-    return { data: Object.values(latestRecords), error };
-  },
 
-  // Get session by ID
-  getPackerSessionById: async (sessionId) => {
-    const { data, error } = await supabase
-      .from('packer_sessions')
-      .select('*')
-      .eq('id', sessionId)
-      .single();
-    
-    return { data, error };
-  },
+    const infoIds = [pkg.original_pkg_info, pkg.final_pkg_info].filter(Boolean) as string[];
+    if (infoIds.length === 0) {
+      return { data: { original: null, final: null }, error: null };
+    }
 
-  // Get active sessions for an order (for team-based sessions)
-  getActiveSessionsForOrder: async (orderId) => {
-    const { data, error } = await supabase
-      .from('packer_sessions')
-      .select('*')
-      .eq('order_id', orderId)
-      .eq('session_active', true)
-      .order('created_at', { ascending: false });
-    
-    return { data, error };
-  },
+    const { data: infoData, error: infoError } = await supabase
+      .from('package_info')
+      .select('id, internal_length, internal_width, internal_height')
+      .in('id', infoIds);
 
-  // Create or update sessions for all packers in a team
-  createTeamSessions: async (orderId, orderData, packerIds) => {
-    try {
-      const sessions = [];
-      
-      for (const packerId of packerIds) {
-        // Check if session already exists for this packer and order
-        const { data: existingSession } = await supabase
-          .from('packer_sessions')
-          .select('*')
-          .eq('packer_id', packerId)
-          .eq('order_id', orderId)
-          .eq('session_active', true)
-          .maybeSingle();
-        
-        if (!existingSession) {
-          // Create new session for this packer
-          const sessionData = {
-            packer_id: packerId,
-            order_id: orderId,
-            order_name: orderData.order_name,
-            client_name: orderData.client_name,
-            project_lead_name: orderData.project_lead_name,
-            team_selected: true,
-            attendance_completed: false,
-            packaging_started: false,
-            session_active: true
-          };
-          
-          const { data: newSession, error } = await supabase
-            .from('packer_sessions')
-            .insert(sessionData)
-            .select()
-            .single();
-          
-          if (!error && newSession) {
-            sessions.push(newSession);
+    if (infoError) {
+      return { data: null, error: infoError };
+    }
+
+    const lookup = new Map<string, PackageInfoRow>();
+    (infoData as PackageInfoRow[] | null)?.forEach((row) => {
+      lookup.set(row.id, row);
+    });
+
+    const toTriple = (row?: PackageInfoRow | null): DimensionTriple | null =>
+      row
+        ? {
+            length: row.internal_length,
+            width: row.internal_width,
+            height: row.internal_height,
           }
-        } else {
-          sessions.push(existingSession);
-        }
-      }
-      
-      return { data: sessions, error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+        : null;
+
+    return {
+      data: {
+        original: toTriple(pkg.original_pkg_info ? lookup.get(pkg.original_pkg_info) : null),
+        final: toTriple(pkg.final_pkg_info ? lookup.get(pkg.final_pkg_info) : null),
+      },
+      error: null,
+    };
   },
 
-  // Check if user can mark attendance for an order
-  canUserMarkAttendance: async (orderId) => {
-    const { data, error } = await supabase
-      .rpc('can_user_mark_attendance', {
-        order_uuid: orderId
-      });
-    
-    return { data, error };
-  },
-
-  // Check if attendance can be recorded (prevents spam clicking)
-  canRecordAttendance: async (orderId, packerId, shiftPeriod) => {
-    const { data, error } = await supabase
-      .rpc('can_record_attendance', {
-        order_uuid: orderId,
-        packer_uuid: packerId,
-        shift_period_param: shiftPeriod
-      });
-    
-    return { data, error };
-  },
-
-  // Packaging: fetch order packages (lightweight)
-  getOrderPackages: async (orderId) => {
+  getOrderPackageById: async (orderPackageId: UUID) => {
     const { data, error } = await supabase
       .from('order_packages')
-      .select('*')
-      .eq('order_id', orderId);
+      .select('id, order_id, package_number, maintenance_package_type, original_pkg_info, final_pkg_info, status')
+      .eq('id', orderPackageId)
+      .single();
     return { data, error };
   },
 
-  // Packaging: fetch package_info by IDs
-  getPackageInfosByIds: async (ids) => {
-    if (!ids || ids.length === 0) return { data: [], error: null };
+  updateOrderPackageFields: async (orderPackageId: UUID, fields: Record<string, unknown>) => {
     const { data, error } = await supabase
-      .from('package_info')
-      .select('id, center_of_gravity, quantity, box_type_id, packing_type_id, tare, net_weight, gross_weight, internal_length, internal_width, internal_height, external_length, external_width, external_height')
-      .in('id', ids);
+      .from('order_packages')
+      .update({ ...fields, updated_at: new Date().toISOString() })
+      .eq('id', orderPackageId)
+      .select('id, maintenance_package_type')
+      .single();
     return { data, error };
   },
 
-  // Upsert final dimensions for an order package. If finalInfoId is missing, create an EMPTY final package_info and link it.
-  upsertFinalDimensions: async ({ orderPackageId, finalInfoId, originalInfoId, scope, length, width, height }) => {
-    const fields: any = {};
-    if (scope === 'internal') {
-      fields.internal_length = length;
-      fields.internal_width = width;
-      fields.internal_height = height;
-    } else {
-      fields.external_length = length;
-      fields.external_width = width;
-      fields.external_height = height;
+  getSeiCategories: async () => {
+    const { data, error } = await supabase
+      .from('sei_categories')
+      .select('id, code, name, description')
+      .order('id');
+    return { data, error };
+  },
+
+  getSeiProtections: async () => {
+    const { data, error } = await supabase
+      .from('sei_protection')
+      .select('id, code, name, description')
+      .order('id');
+    return { data, error };
+  },
+  /**
+   * Upload media (image/video) to the 'media' bucket with structured folder path
+   * Path: orders/{order_uuid}/{package_number}/{section}/{filename}
+   * Also creates a record in the media table
+   * 
+   * @param orderPackageId - UUID of the order_package
+   * @param fileUri - Local file URI from camera/gallery
+   * @param designation - Enum value from media_category
+   * @param notes - Optional notes (e.g., item name, task name, accessory name)
+   * @returns { data: { mediaId, path, signedUrl }, error }
+   */
+  uploadMediaToStorage: async (
+    orderPackageId: string,
+    fileUri: string,
+    designation: string,
+    notes?: string,
+    mappingIds?: {
+      orderPkgInstanceId?: string | null;
+      pkdItemId?: string | null;
+      packageItemId?: string | null;
+      taskLogId?: string | null;
+      maintenanceTaskLogId?: string | null;
     }
+  ) => {
+    try {
+      // 1. Get order_id and package_number from order_package
+      const { data: packageData, error: pkgError } = await supabase
+        .from('order_packages')
+        .select('order_id, package_number')
+        .eq('id', orderPackageId)
+        .single();
 
-    let effectiveFinalId = finalInfoId as string | null | undefined;
+      if (pkgError || !packageData) {
+        return { data: null, error: pkgError || new Error('Order package not found') };
+      }
 
-    // If there is no final package_info, create an EMPTY row and link it to the order package
-    if (!effectiveFinalId) {
-      const { data: created, error: createErr } = await supabase
-        .from('package_info')
-        .insert({})
+      const { order_id, package_number } = packageData;
+
+      // 1b. Resize + recompress images before upload. Phone photos are 12MP/multi-MB
+      // and packer documentation photos don't need that — this cuts upload AND every
+      // future download several-fold (combined with the on-device image cache, the
+      // biggest bandwidth/data lever). Videos are skipped; best-effort: if resize fails
+      // for any reason we upload the original untouched.
+      const lowerUri = fileUri.toLowerCase();
+      const looksLikeVideo =
+        lowerUri.endsWith('.mp4') || lowerUri.endsWith('.mov') || lowerUri.endsWith('.avi');
+      if (!looksLikeVideo) {
+        try {
+          const resized = await manipulateAsync(
+            fileUri,
+            [{ resize: { width: 1600 } }],
+            { compress: 0.6, format: SaveFormat.JPEG },
+          );
+          if (resized?.uri) fileUri = resized.uri;
+        } catch (resizeError) {
+          console.warn('Image resize failed; uploading original:', resizeError);
+        }
+      }
+
+      // 2. Determine file type from URI
+      const uriLower = fileUri.toLowerCase();
+      let mimeType = 'image/jpeg';
+      let ext = 'jpg';
+      
+      // Determine file extension and MIME type from URI
+      if (uriLower.endsWith('.png')) {
+        ext = 'png';
+        mimeType = 'image/png';
+      } else if (uriLower.endsWith('.jpg') || uriLower.endsWith('.jpeg')) {
+        ext = 'jpg';
+        mimeType = 'image/jpeg';
+      } else if (uriLower.endsWith('.gif')) {
+        ext = 'gif';
+        mimeType = 'image/gif';
+      } else if (uriLower.endsWith('.webp')) {
+        ext = 'webp';
+        mimeType = 'image/webp';
+      } else if (uriLower.endsWith('.mp4')) {
+        ext = 'mp4';
+        mimeType = 'video/mp4';
+      } else if (uriLower.endsWith('.mov')) {
+        ext = 'mov';
+        mimeType = 'video/quicktime';
+      } else if (uriLower.endsWith('.avi')) {
+        ext = 'avi';
+        mimeType = 'video/x-msvideo';
+      }
+
+      // 3. Build folder structure: orders/{order_uuid}/{package_number}/{section}/
+      const sectionFolder = designation; // Use designation as folder name
+      const timestamp = Date.now();
+      const filename = `${timestamp}.${ext}`;
+      const fullPath = `orders/${order_id}/${package_number}/${sectionFolder}/${filename}`;
+
+      // 4. Create file data for React Native
+      const response = await fetch(fileUri);
+      const arrayBuffer = await response.arrayBuffer();
+      const fileData = new Uint8Array(arrayBuffer);
+
+      // 5. Upload to 'media' bucket
+      const { data: uploadData, error: uploadError } = await supabase
+        .storage
+        .from('media')
+        .upload(fullPath, fileData, { 
+          contentType: mimeType,
+          upsert: false // Don't overwrite existing files
+        });
+
+      if (uploadError) {
+        console.error('Upload error:', uploadError);
+        return { data: null, error: uploadError };
+      }
+
+      const storagePath = uploadData?.path || fullPath;
+
+      // 6. Generate a signed URL (valid for 1 year)
+      const { data: signedUrlData, error: urlError } = await supabase
+        .storage
+        .from('media')
+        .createSignedUrl(storagePath, 31536000); // 1 year
+
+      if (urlError) {
+        console.warn('Could not create signed URL:', urlError);
+      }
+
+      const signedUrl = signedUrlData?.signedUrl || null;
+
+      // 7. Insert record into media table
+      const { data: mediaRecord, error: insertError } = await supabase
+        .from('media')
+        .insert({
+          image_url: storagePath,
+          notes: notes || null,
+          order_package_id: orderPackageId,
+          designation: designation,
+          order_pkg_instance_id: mappingIds?.orderPkgInstanceId,
+          pkd_item_id: mappingIds?.pkdItemId,
+          package_item_id: mappingIds?.packageItemId,
+          task_log_id: mappingIds?.taskLogId,
+          maintenance_task_log_id: mappingIds?.maintenanceTaskLogId,
+        })
         .select('id')
         .single();
-      if (createErr || !created) return { data: null, error: createErr || { message: 'Failed to create final package info' } };
-      effectiveFinalId = created.id;
 
-      const { error: updErr } = await supabase
-        .from('order_packages')
-        .update({ final_pkg_info: effectiveFinalId })
-        .eq('id', orderPackageId);
-      if (updErr) return { data: null, error: updErr };
-    }
-
-    // Update the final package_info with provided fields (no cloning)
-    const { error: updFinalErr } = await supabase
-      .from('package_info')
-      .update(fields)
-      .eq('id', effectiveFinalId);
-    if (updFinalErr) return { data: null, error: updFinalErr };
-
-    return { data: { final_pkg_info: effectiveFinalId }, error: null };
-  },
-
-  // Packaging: materials lookup
-  getMaterialsByIds: async (ids) => {
-    if (!ids || ids.length === 0) return { data: [], error: null };
-    const { data, error } = await supabase
-      .from('materials')
-      .select('id, name')
-      .in('id', ids);
-    return { data, error };
-  },
-
-  // Packaging: packing types lookup (support multiple column names for vacuum/gas flags)
-  getPackingTypesByIds: async (ids) => {
-    if (!ids || ids.length === 0) return { data: [], error: null };
-
-    // Attempt 1: preferred columns
-    {
-      const r = await supabase
-        .from('packing_types')
-        .select('id, name, code, includes_vacuum_protection, includes_gas_protection')
-        .in('id', ids);
-      if (!r.error) {
-        return { data: r.data, error: null };
+      if (insertError) {
+        console.error('Media record insert error:', insertError);
+        await supabase.storage.from('media').remove([storagePath]);
+        return { data: null, error: insertError };
       }
-    }
 
-    // Attempt 2: alternate naming for vacuum flag
-    {
-      const r = await supabase
-        .from('packing_types')
-        .select('id, name, code, includes_vacuum_packing, includes_gas_protection')
-        .in('id', ids);
-      if (!r.error) {
-        const mapped = (r.data || []).map((t: any) => ({
-          id: t.id,
-          name: t.name,
-          code: t.code,
-          includes_vacuum_protection: !!t.includes_vacuum_packing,
-          includes_gas_protection: !!t.includes_gas_protection,
-        }));
-        return { data: mapped, error: null };
-      }
-    }
-
-    // Attempt 3: alternate naming for gas flag
-    {
-      const r = await supabase
-        .from('packing_types')
-        .select('id, name, code, includes_vacuum_protection, includes_gas_packing')
-        .in('id', ids);
-      if (!r.error) {
-        const mapped = (r.data || []).map((t: any) => ({
-          id: t.id,
-          name: t.name,
-          code: t.code,
-          includes_vacuum_protection: !!t.includes_vacuum_protection,
-          includes_gas_protection: !!t.includes_gas_packing,
-        }));
-        return { data: mapped, error: null };
-      }
-    }
-
-    // Attempt 4: historical misspelling for vacuum flag
-    {
-      const r = await supabase
-        .from('packing_types')
-        .select('id, name, code, inlcudes_vacuum_protecton, includes_gas_protection')
-        .in('id', ids);
-      if (!r.error) {
-        const mapped = (r.data || []).map((t: any) => ({
-          id: t.id,
-          name: t.name,
-          code: t.code,
-          includes_vacuum_protection: !!t.inlcudes_vacuum_protecton,
-          includes_gas_protection: !!t.includes_gas_protection,
-        }));
-        return { data: mapped, error: null };
-      }
-    }
-
-    // Fallback without flags
-    {
-      const r = await supabase
-        .from('packing_types')
-        .select('id, name, code')
-        .in('id', ids);
-      if (r.error) return { data: null, error: r.error };
-      const withFlags = (r.data || []).map((t: any) => ({ ...t, includes_vacuum_protection: false, includes_gas_protection: false }));
-      return { data: withFlags, error: null };
-    }
-  },
-
-  getAllMaterials: async () => {
-    const { data, error } = await supabase
-      .from('materials')
-      .select('id, name')
-      .order('name');
-    return { data, error };
-  },
-
-  // Units lookup for materials usage
-  getAllUnits: async () => {
-    const { data, error } = await supabase
-      .from('units_of_measure')
-      .select('id, name')
-      .order('name');
-    return { data, error };
-  },
-
-  // Material variants filtered by a specific tag name (strict match, case-insensitive)
-  getMaterialVariantsByTag: async (tagName) => {
-    const normalized = String(tagName || '').trim();
-
-    // Step 0: resolve the tag id by name (case-insensitive exact)
-    const { data: tagRow, error: tagErr } = await supabase
-      .from('tags')
-      .select('id, name')
-      .ilike('name', normalized)
-      .maybeSingle();
-    if (tagErr) return { data: null, error: tagErr };
-    if (!tagRow?.id) return { data: [], error: null };
-
-    // Step 1: find materials that have exactly this tag id
-    const { data: mats, error: matsErr } = await supabase
-      .from('material_tags')
-      .select('material_id')
-      .eq('tag_id', tagRow.id);
-    if (matsErr) return { data: null, error: matsErr };
-    const materialIds = Array.from(new Set((mats || []).map((r: any) => r.material_id).filter(Boolean)));
-    if (!materialIds.length) return { data: [], error: null };
-
-    // Step 2: fetch all variants for these materials, including the material's default unit
-    let variants: any = null;
-    let varErr: any = null;
-    {
-      const r = await supabase
-        .from('material_variants')
-        .select(`
-          id,
-          variant_name,
-          material_id,
-          materials:material_id (
-            id,
-            unit_id,
-            units_of_measure:unit_id ( id, name )
-          )
-        `)
-        .in('material_id', materialIds)
-        .order('variant_name');
-      variants = r.data;
-      varErr = r.error;
-    }
-
-    if (varErr) {
-      const r2 = await supabase
-        .from('material_variants')
-        .select('id, variant_name, material_id')
-        .in('material_id', materialIds)
-        .order('variant_name');
-      variants = r2.data;
-      varErr = r2.error;
-    }
-
-    if (varErr) return { data: null, error: varErr };
-
-    const items = (variants || []).map((v: any) => ({
-      id: v.id,
-      value: v.id,
-      label: v.variant_name,
-      material_id: v.material_id,
-      unit_id: v?.materials?.unit_id || null,
-      unit_name: v?.materials?.units_of_measure?.name || null,
-    }));
-    return { data: items, error: null };
-  },
-
-  // Material variants filtered by variant tag (uses material_variant_tags table)
-  getMaterialVariantsByVariantTag: async (tagName) => {
-    const normalized = String(tagName || '').trim();
-
-    // Step 0: resolve the tag id by name (case-insensitive exact)
-    const { data: tagRow, error: tagErr } = await supabase
-      .from('tags')
-      .select('id, name')
-      .ilike('name', normalized)
-      .maybeSingle();
-    if (tagErr) return { data: null, error: tagErr };
-    if (!tagRow?.id) return { data: [], error: null };
-
-    // Step 1: find variant ids that have exactly this tag id
-    const { data: variantTags, error: variantTagsErr } = await supabase
-      .from('material_variant_tags')
-      .select('material_variant_id')
-      .eq('tag_id', tagRow.id);
-    if (variantTagsErr) return { data: null, error: variantTagsErr };
-    const variantIds = Array.from(new Set((variantTags || []).map((r: any) => r.material_variant_id).filter(Boolean)));
-    if (!variantIds.length) return { data: [], error: null };
-
-    // Step 2: fetch these variants with their material's default unit
-    let variants: any = null;
-    let varErr: any = null;
-    {
-      const r = await supabase
-        .from('material_variants')
-        .select(`
-          id,
-          variant_name,
-          material_id,
-          materials:material_id (
-            id,
-            unit_id,
-            units_of_measure:unit_id ( id, name )
-          )
-        `)
-        .in('id', variantIds)
-        .order('variant_name');
-      variants = r.data;
-      varErr = r.error;
-    }
-
-    if (varErr) {
-      const r2 = await supabase
-        .from('material_variants')
-        .select('id, variant_name, material_id')
-        .in('id', variantIds)
-        .order('variant_name');
-      variants = r2.data;
-      varErr = r2.error;
-    }
-
-    if (varErr) return { data: null, error: varErr };
-
-    const items = (variants || []).map((v: any) => ({
-      id: v.id,
-      value: v.id,
-      label: v.variant_name,
-      material_id: v.material_id,
-      unit_id: v?.materials?.unit_id || null,
-      unit_name: v?.materials?.units_of_measure?.name || null,
-    }));
-    return { data: items, error: null };
-  },
-
-  // Material variants filtered by material name (case-insensitive, partial match)
-  getMaterialVariantsByMaterialName: async (materialName) => {
-    // Step 1: find materials whose name includes the provided text (case-insensitive)
-    const { data: mats, error: matsErr } = await supabase
-      .from('materials')
-      .select('id, name, unit_id, units_of_measure:unit_id ( id, name )')
-      .ilike('name', `%${materialName}%`);
-    if (matsErr) return { data: null, error: matsErr };
-    const materialIds = Array.from(new Set((mats || []).map((m: any) => m.id).filter(Boolean)));
-    if (!materialIds.length) return { data: [], error: null };
-
-    // Step 2: get variants for those materials, include material unit if possible
-    let variants: any = null;
-    let varErr: any = null;
-    {
-      const r = await supabase
-        .from('material_variants')
-        .select(`
-          id,
-          variant_name,
-          material_id,
-          materials:material_id (
-            id,
-            unit_id,
-            units_of_measure:unit_id ( id, name )
-          )
-        `)
-        .in('material_id', materialIds)
-        .order('variant_name');
-      variants = r.data;
-      varErr = r.error;
-    }
-
-    if (varErr) return { data: null, error: varErr };
-
-    const items = (variants || []).map((v: any) => ({
-      id: v.id,
-      value: v.id,
-      label: v.variant_name,
-      material_id: v.material_id,
-      unit_id: v?.materials?.unit_id || null,
-      unit_name: v?.materials?.units_of_measure?.name || null,
-    }));
-    return { data: items, error: null };
-  },
-
-  // Material variants filtered by material name with exact match (case-insensitive, no partials)
-  getMaterialVariantsByMaterialExactName: async (materialName) => {
-    const { data: mats, error: matsErr } = await supabase
-      .from('materials')
-      .select('id, name, unit_id, units_of_measure:unit_id ( id, name )')
-      .ilike('name', materialName); // exact (no wildcards)
-    if (matsErr) return { data: null, error: matsErr };
-    const materialIds = Array.from(new Set((mats || []).map((m: any) => m.id).filter(Boolean)));
-    if (!materialIds.length) return { data: [], error: null };
-
-    let variants: any = null;
-    let varErr: any = null;
-    const r = await supabase
-      .from('material_variants')
-      .select(`
-        id,
-        variant_name,
-        material_id,
-        materials:material_id (
-          id,
-          unit_id,
-          units_of_measure:unit_id ( id, name )
-        )
-      `)
-      .in('material_id', materialIds)
-      .order('variant_name');
-    variants = r.data;
-    varErr = r.error;
-    if (varErr) return { data: null, error: varErr };
-
-    const items = (variants || []).map((v: any) => ({
-      id: v.id,
-      value: v.id,
-      label: v.variant_name,
-      material_id: v.material_id,
-      unit_id: v?.materials?.unit_id || null,
-      unit_name: v?.materials?.units_of_measure?.name || null,
-    }));
-    return { data: items, error: null };
-  },
-
-  // Get order package materials (used by Accessories and specialized sections)
-  getOrderPackageMaterials: async (orderPackageId) => {
-    const { data, error } = await supabase
-      .from('order_package_materials')
-      .select('id, order_package_id, material_variant_id, material_type, quantity, quantity_used, unit_id, length, width, comment, item_used')
-      .eq('order_package_id', orderPackageId)
-      .order('created_at', { ascending: true });
-    return { data, error };
-  },
-
-  addOrderPackageMaterial: async (payload) => {
-    // Canonicalize material_type to your enum values
-    const allowed = ['Accessories','Securing','Gas Packing','Vacuum Packing'];
-    const canonType = (() => {
-      const raw = String(payload.material_type || '').trim();
-      const match = allowed.find(a => a.toLowerCase() === raw.toLowerCase());
-      return match || (raw || 'Accessories');
-    })();
-
-    // Build exactly the row shape matching your table (single POST only)
-    const row: any = {
-      order_package_id: payload.order_package_id,
-      material_variant_id: payload.material_variant_id,
-      material_type: canonType,
-      is_final: payload.is_final ?? true,
-      quantity: (typeof payload.quantity === 'number' && isFinite(payload.quantity))
-        ? payload.quantity
-        : Number(payload.quantity ?? 0),
-      unit_id: payload.unit_id,
-      length: (typeof payload.length === 'number' && isFinite(payload.length)) ? payload.length : null,
-      width: (typeof payload.width === 'number' && isFinite(payload.width)) ? payload.width : null,
-      height: (typeof payload.height === 'number' && isFinite(payload.height)) ? payload.height : null,
-      comment: payload.comment ?? null,
-      item_used: payload.item_used ?? false,
-      original: payload.original ?? null,
-      quantity_used: (typeof payload.quantity_used === 'number' && isFinite(payload.quantity_used)) ? payload.quantity_used : null,
-    };
-
-    const { data, error } = await supabase
-      .from('order_package_materials')
-      .insert(row)
-      .select('id')
-      .single();
-    return { data, error };
-  },
-
-  updateOrderPackageMaterial: async (id, fields) => {
-    const { data, error } = await supabase
-      .from('order_package_materials')
-      .update({ ...fields, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select('id')
-      .single();
-    return { data, error };
-  },
-
-  deleteOrderPackageMaterial: async (id) => {
-    const { data, error } = await supabase
-      .from('order_package_materials')
-      .delete()
-      .eq('id', id)
-      .select('id')
-      .single();
-    return { data, error };
-  },
-
-  // Upload image to Supabase storage bucket 'order_media'.
-  // Returns path and publicUrl (if bucket is public).
-  uploadOrderPackageImage: async (orderPackageId, fileUri) => {
-    try {
-      const resp = await fetch(fileUri);
-      const blob = await resp.blob();
-      const extGuess = (blob && blob.type && blob.type.includes('png')) ? 'png' : 'jpg';
-      const filename = `${orderPackageId}/${Date.now()}.${extGuess}`;
-      const { data, error } = await supabase
-        .storage
-        .from('order_media')
-        .upload(filename, blob, { contentType: blob.type || 'image/jpeg', upsert: true });
-      if (error) return { data: null, error };
-      const { data: pub } = await supabase.storage.from('order_media').getPublicUrl(filename);
-      return { data: { path: data?.path || filename, publicUrl: pub?.publicUrl || null }, error: null };
-    } catch (e) {
+      return { 
+        data: { 
+          mediaId: mediaRecord.id,
+          path: storagePath,
+          signedUrl: signedUrl
+        }, 
+        error: null 
+      };
+    } catch (e: any) {
+      console.error('Unexpected error in uploadMediaToStorage:', e);
       return { data: null, error: e };
     }
   },
 
-  addPackageItem: async ({ orderPackageId, designation, quantity }) => {
+  /**
+   * Get all media records for a specific order package
+   * @param orderPackageId - UUID of the order_package
+   * @returns Array of media records with signed URLs
+   */
+  getMediaForPackage: async (orderPackageId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('media')
+        .select('*')
+        .eq('order_package_id', orderPackageId)
+        .order('created_at', { ascending: false });
+
+      if (error) return { data: null, error };
+
+      // Generate signed URLs for each media item
+      const mediaWithUrls = await Promise.all(
+        (data || []).map(async (item: any) => {
+          const signedUrl = await getCachedSignedUrl(supabase, 'media', item.image_url);
+
+          return {
+            ...item,
+            signedUrl: signedUrl || null
+          };
+        })
+      );
+
+      return { data: mediaWithUrls, error: null };
+    } catch (e: any) {
+      return { data: null, error: e };
+    }
+  },
+
+  getMaintenanceTaskLogsForPackage: async (orderPackageId: UUID) => {
     const { data, error } = await supabase
-      .from('package_items')
-      .insert({ order_package_id: orderPackageId, designation, quantity })
-      .select('id')
+      .from('maintenance_task_log')
+      .select('id, order_package_id, task_id, sequence_order, start_time, end_time, duration_minutes, task_status, category, created_at, updated_at, tasks(name, description)')
+      .eq('order_package_id', orderPackageId)
+      .order('sequence_order', { ascending: true });
+    return { data, error };
+  },
+
+  updateMaintenanceTaskLog: async (id: UUID, fields: Record<string, unknown>) => {
+    const { data, error } = await supabase
+      .from('maintenance_task_log')
+      .update({ ...fields, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('id, task_status, start_time, end_time, duration_minutes, category, sequence_order')
       .single();
     return { data, error };
+  },
+
+  addMaintenanceTaskLogRow: async (
+    orderPackageId: UUID,
+    taskId: UUID,
+    sequenceOrder: number,
+    category: MaintenanceTaskCategory
+  ) => {
+    const { data, error } = await supabase
+      .from('maintenance_task_log')
+      .insert({
+        order_package_id: orderPackageId,
+        task_id: taskId,
+        sequence_order: sequenceOrder,
+        category,
+        task_status: 'pending',
+      })
+      .select('id, sequence_order, category, task_status')
+      .single();
+    return { data, error };
+  },
+
+  getMaintenanceTaskAssignmentsByTaskLogIds: async (taskLogIds: UUID[]) => {
+    if (!taskLogIds || taskLogIds.length === 0) return { data: [], error: null };
+    const { data, error } = await supabase
+      .from('maintenance_task_assignments')
+      .select('id, maintenance_task_log_id, packer_id, profiles(full_name, username)')
+      .in('maintenance_task_log_id', taskLogIds);
+    return { data, error };
+  },
+
+  setMaintenanceTaskAssignments: async (maintenanceTaskLogId: UUID, packerIds: UUID[]) => {
+    const targetIds = Array.from(new Set((packerIds || []).filter(Boolean)));
+
+    const { data: existingRows, error: existingError } = await supabase
+      .from('maintenance_task_assignments')
+      .select('id, packer_id')
+      .eq('maintenance_task_log_id', maintenanceTaskLogId);
+    if (existingError) return { data: null, error: existingError };
+
+    const existingIds = new Set((existingRows || []).map((row: any) => row.packer_id));
+    const toInsert = targetIds.filter((id) => !existingIds.has(id));
+    const toDelete = (existingRows || [])
+      .map((row: any) => row.packer_id)
+      .filter((id: UUID) => !targetIds.includes(id));
+
+    if (toInsert.length > 0) {
+      const { error: insertError } = await supabase
+        .from('maintenance_task_assignments')
+        .insert(
+          toInsert.map((packerId) => ({
+            maintenance_task_log_id: maintenanceTaskLogId,
+            packer_id: packerId,
+          }))
+        );
+      if (insertError) return { data: null, error: insertError };
+    }
+
+    if (toDelete.length > 0) {
+      const { error: deleteError } = await supabase
+        .from('maintenance_task_assignments')
+        .delete()
+        .eq('maintenance_task_log_id', maintenanceTaskLogId)
+        .in('packer_id', toDelete);
+      if (deleteError) return { data: null, error: deleteError };
+    }
+
+    return { data: { maintenanceTaskLogId, assignedPackerIds: targetIds }, error: null };
+  },
+
+  getMediaForMaintenanceTask: async (maintenanceTaskLogId: UUID) => {
+    const { data, error } = await supabase
+      .from('media')
+      .select('*')
+      .eq('maintenance_task_log_id', maintenanceTaskLogId)
+      .order('created_at', { ascending: false });
+
+    if (error) return { data: null, error };
+
+    const mediaWithUrls = await Promise.all(
+      (data || []).map(async (item: any) => {
+        const signedUrl = await getCachedSignedUrl(supabase, 'media', item.image_url);
+
+        return {
+          ...item,
+          signedUrl: signedUrl || null,
+        };
+      })
+    );
+
+    return { data: mediaWithUrls, error: null };
+  },
+
+  uploadMaintenanceTaskMedia: async (
+    orderPackageId: UUID,
+    maintenanceTaskLogId: UUID,
+    category: MaintenanceTaskCategory,
+    fileUri: string,
+    notes?: string
+  ) => {
+    const designation = category === 'survey'
+      ? 'maint_survey'
+      : category === 'unpack'
+      ? 'maint_unpack'
+      : 'maint_repack';
+
+    const uploaded = await baseDb.uploadMediaToStorage(orderPackageId, fileUri, designation, notes, { maintenanceTaskLogId });
+    if (uploaded.error || !uploaded.data?.mediaId) {
+      return uploaded;
+    }
+
+
+    return uploaded;
+  },
+
+  /**
+   * Delete a media record and its associated file from storage
+   * @param mediaId - UUID of the media record
+   */
+  deleteMedia: async (mediaId: string) => {
+    try {
+      // Get the media record first to find the storage path
+      const { data: mediaRecord, error: fetchError } = await supabase
+        .from('media')
+        .select('image_url')
+        .eq('id', mediaId)
+        .single();
+
+      if (fetchError || !mediaRecord) {
+        return { data: null, error: fetchError || new Error('Media record not found') };
+      }
+
+      // Delete from storage
+      const { error: storageError } = await supabase
+        .storage
+        .from('media')
+        .remove([mediaRecord.image_url]);
+
+      if (storageError) {
+        console.warn('Storage deletion error:', storageError);
+        // Continue with database deletion even if storage deletion fails
+      }
+
+      // Delete from database
+      const { error: deleteError } = await supabase
+        .from('media')
+        .delete()
+        .eq('id', mediaId);
+
+      if (deleteError) {
+        return { data: null, error: deleteError };
+      }
+
+      return { data: { success: true }, error: null };
+    } catch (e: any) {
+      return { data: null, error: e };
+    }
+  },
+  // Update order_package status (uses RPC for 'packed' to avoid RLS issues)
+  updateOrderPackageStatus: async (orderPackageId: string, status: string) => {
+    if (status === 'packed') {
+      const { error } = await supabase.rpc('mark_order_package_packed', { op_id: orderPackageId });
+      return { data: { id: orderPackageId }, error };
+    }
+    const { error } = await supabase
+      .from('order_packages')
+      .update({ status })
+      .eq('id', orderPackageId);
+    return { data: { id: orderPackageId }, error };
+  },
+
+  // Reset packer data for an order - removes all packer-entered data
+  resetPackerData: async (orderId: string) => {
+    try {
+      // Get all packages for this order
+      const { data: packages, error: pkgError } = await supabase
+        .from('order_packages')
+        .select('id, final_pkg_info')
+        .eq('order_id', orderId);
+
+      if (pkgError) throw pkgError;
+
+      const packageIds = (packages || []).map(p => p.id);
+      const finalInfoIds = (packages || []).map(p => p.final_pkg_info).filter(Boolean);
+
+      // 1. Delete order_package_materials created by packers (is_final = true, original is null)
+      if (packageIds.length > 0) {
+        const { error: matError } = await supabase
+          .from('order_package_materials')
+          .delete()
+          .in('order_package_id', packageIds)
+          .eq('is_final', true)
+          .is('original', null);
+        if (matError) console.warn('Error deleting materials:', matError);
+      }
+
+      // 2. Delete tasks started by packers using RPC (bypasses RLS)
+      // We use RPC because there are no DELETE policies on task_logs, task_packages, task_assignments
+      // The CASCADE rules will automatically delete task_packages and task_assignments when we delete task_logs
+      if (packageIds.length > 0) {
+        console.log(`[RPC] Calling delete_tasks_for_order_packages with ${packageIds.length} package IDs`);
+        const { data: rpcData, error: deleteTasksError } = await supabase
+          .rpc('delete_tasks_for_order_packages', {
+            package_ids: packageIds
+          });
+        
+        if (deleteTasksError) {
+          console.error('[RPC] Error deleting tasks for order packages:', deleteTasksError);
+          console.error('[RPC] Error details:', JSON.stringify(deleteTasksError, null, 2));
+        } else {
+          console.log('[RPC] Successfully deleted task_logs (and cascaded task_packages, task_assignments)');
+          console.log('[RPC] Response:', rpcData);
+        }
+      }
+
+      // 3. Reset final package_info values to NULL
+      if (finalInfoIds.length > 0) {
+        const { error: infoError } = await supabase
+          .from('package_info')
+          .update({
+            quantity: null,
+            center_of_gravity: null,
+            box_type_id: null,
+            packing_type_id: null,
+            tare: null,
+            net_weight: null,
+            gross_weight: null,
+            internal_length: null,
+            internal_width: null,
+            internal_height: null,
+            external_length: null,
+            external_width: null,
+            external_height: null
+          })
+          .in('id', finalInfoIds);
+        if (infoError) console.warn('Error resetting package_info:', infoError);
+      }
+
+      // 4. Delete package_items created by packers (no final_quantity column, just delete non-admin items)
+      // Skip this step as package_items don't have a final_quantity column
+      // Items are managed by admin only, so we don't need to reset them
+
+      // 5. Reset order_packages status using unpack RPC (handles status correctly)
+      if (packageIds.length > 0) {
+        for (const pkgId of packageIds) {
+          try {
+            // Use the unpack RPC which knows how to handle status transitions correctly
+            const { error: unpackError } = await supabase.rpc('unpack_order_package', { op_id: pkgId });
+            if (unpackError) {
+              console.warn(`Error unpacking package ${pkgId}:`, unpackError);
+            }
+          } catch (e) {
+            console.warn(`Exception unpacking package ${pkgId}:`, e);
+          }
+        }
+      }
+
+      // 6. Delete attendance logs for this order
+      const { error: attendanceError } = await supabase
+        .from('attendance_logs')
+        .delete()
+        .eq('order_id', orderId);
+      if (attendanceError) {
+        console.warn('Error deleting attendance_logs:', attendanceError);
+      } else {
+        console.log('Successfully deleted attendance_logs for order');
+      }
+
+      // 7. Reset final securing templates (delete and recreate empty)
+      if (packageIds.length > 0) {
+        for (const pkgId of packageIds) {
+          try {
+            // Get all final securing rows for this package
+            const { data: securingRows } = await supabase
+              .from('order_package_securing')
+              .select('id, securing_template_id')
+              .eq('order_package_id', pkgId)
+              .eq('is_final', true);
+
+            if (securingRows && securingRows.length > 0) {
+              for (const row of securingRows) {
+                if (row.securing_template_id) {
+                  // Get the template to find beam IDs
+                  const { data: template } = await supabase
+                    .from('securing_template')
+                    .select('horizontal_bar, vertical_bar, skids')
+                    .eq('id', row.securing_template_id)
+                    .single();
+
+                  // First, reset template fields to NULL (removes foreign key references)
+                  await supabase
+                    .from('securing_template')
+                    .update({
+                      quantity: null,
+                      type_id: null,
+                      thickness: null,
+                      horizontal_bar: null,
+                      vertical_bar: null,
+                      skids: null
+                    })
+                    .eq('id', row.securing_template_id);
+
+                  // Then delete beams (after references are removed)
+                  if (template) {
+                    const beamIds = [template.horizontal_bar, template.vertical_bar, template.skids].filter(Boolean);
+                    if (beamIds.length > 0) {
+                      const { error: beamError } = await supabase.from('beam').delete().in('id', beamIds);
+                      if (beamError) console.warn('Error deleting beams:', beamError);
+                    }
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            console.warn(`Error resetting securing for package ${pkgId}:`, e);
+          }
+        }
+      }
+
+      return { data: { success: true }, error: null };
+    } catch (e: any) {
+      return { data: null, error: e };
+    }
   },
 
   getAllPackingTypes: async () => {
     const { data, error } = await supabase
       .from('packing_types')
-      .select('id, code, name')
+      .select('id, code, name, includes_gas_protection, includes_vacuum_protection')
       .order('code');
     return { data, error };
   },
 
-  updatePackageInfo: async (id, fields) => {
-    // Do not include non-existent columns to avoid 400 errors
-    const { error } = await supabase
-      .from('package_info')
-      .update({ ...fields })
-      .eq('id', id);
-    return { data: { id }, error };
-  },
+  // ===== Maintenance Portal & QR Code Methods =====
 
-  // Ensure there is a linked EMPTY final package_info for this order package
-  ensureFinalPackageInfo: async ({ orderPackageId, finalInfoId, originalInfoId }) => {
-    if (finalInfoId) return { data: { id: finalInfoId }, error: null };
+  getOrderItemsForPackages: async (
+    orderPackageIds: UUID[],
+    clientId?: UUID,
+    orderPkgInstanceIds?: UUID[]
+  ) => {
+    const packageIds = Array.from(new Set((orderPackageIds || []).filter(Boolean)));
+    const requestedInstanceIds = Array.from(new Set((orderPkgInstanceIds || []).filter(Boolean)));
 
-    // Always create an EMPTY package_info row (do not clone original)
-    const { data: created, error: createErr } = await supabase
-      .from('package_info')
-      .insert({})
-      .select('id')
-      .single();
-    if (createErr || !created) return { data: null, error: createErr };
 
-    // Link to order_packages.final_pkg_info
-    const { error: updErr } = await supabase
-      .from('order_packages')
-      .update({ final_pkg_info: created.id })
-      .eq('id', orderPackageId);
-    if (updErr) return { data: null, error: updErr };
+    if (packageIds.length === 0 && requestedInstanceIds.length === 0) {
+      return { data: [], error: null };
+    }
 
-    return { data: { id: created.id }, error: null };
-  },
+    const loadLegacyPackageItems = async () => {
+      const { data: legacyRows, error: legacyError } = await supabase
+        .from('package_items')
+        .select('id, order_package_id, quantity, designation, reference, length, width, height, net_weight')
+        .in('order_package_id', packageIds);
 
-  // Ensure there is a linked EMPTY original package_info for this order package
-  ensureOriginalPackageInfo: async ({ orderPackageId, originalInfoId }) => {
-    if (originalInfoId) return { data: { id: originalInfoId }, error: null };
+      if (legacyError) {
+        return { data: null, error: legacyError };
+      }
 
-    const { data: created, error: createErr } = await supabase
-      .from('package_info')
-      .insert({})
-      .select('id')
-      .single();
-    if (createErr || !created) return { data: null, error: createErr };
+      const mapped = (legacyRows || []).map((row: any) => ({
+        id: String(row.id),
+        quantity: row.quantity,
+        created_at: null,
+        pkg_instance_id: null,
+        maintenance_db_id: null,
+        order_package_id: row.order_package_id,
+        is_legacy_package_item: true,
+        maintenance_items: {
+          id: null,
+          client_id: clientId || null,
+          reference: row.reference || null,
+          ipac_comments: null,
+          expected_qty: row.quantity ?? null,
+          packed_qty: null,
+          item_num: null,
+          description: row.designation || row.reference || 'Legacy Item',
+          length: row.length ?? null,
+          width: row.width ?? null,
+          height: row.height ?? null,
+          net_weight: row.net_weight ?? null,
+          warehouse_location: null,
+          maintenance_package_categories: null,
+        },
+      }));
 
-    const { error: updErr } = await supabase
-      .from('order_packages')
-      .update({ original_pkg_info: created.id })
-      .eq('id', orderPackageId);
-    if (updErr) return { data: null, error: updErr };
+      return { data: mapped, error: null };
+    };
 
-    return { data: { id: created.id }, error: null };
-  },
+    let instanceIds: UUID[] = requestedInstanceIds;
+    let packageIdByInstanceId = new Map<string, string>();
 
-  // Securing
-  getSecuringForPackage: async (orderPackageId) => {
-    const { data, error } = await supabase
-      .from('order_package_securing')
+    if (instanceIds.length === 0) {
+      // pkd_item now targets instances, so first resolve instances for the requested template packages.
+      const { data: instanceRowsRaw, error: instanceError } = await supabase
+        .from('order_pkg_instance')
+        .select('id, order_package_id')
+        .in('order_package_id', orderPackageIds);
+
+      if (instanceError) {
+        return { data: null, error: instanceError };
+      }
+
+      const instanceRows = (instanceRowsRaw || []).filter((row: any) => !!row?.id);
+      if (instanceRows.length === 0) {
+        return await loadLegacyPackageItems();
+      }
+
+      instanceIds = instanceRows.map((row: any) => row.id as UUID);
+      packageIdByInstanceId = new Map<string, string>(
+        instanceRows.map((row: any) => [String(row.id), String(row.order_package_id || '')])
+      );
+    } else {
+      const { data: instanceRowsRaw, error: instanceError } = await supabase
+        .from('order_pkg_instance')
+        .select('id, order_package_id')
+        .in('id', instanceIds);
+
+      if (instanceError) {
+        return { data: null, error: instanceError };
+      }
+
+      packageIdByInstanceId = new Map<string, string>(
+        (instanceRowsRaw || []).map((row: any) => [String(row.id), String(row.order_package_id || '')])
+      );
+    }
+
+    let query = supabase
+      .from('pkd_item')
+
       .select(`
         id,
-        securing_side,
-        is_final,
-        securing_template:securing_template(
-          id, quantity, type_id, thickness,
-          horizontal_bar:beam!securing_template_horizontal_bar_fkey(id, quantity, type, width, thickness, space),
-          vertical_bar:beam!securing_template_vertical_bar_fkey(id, quantity, type, width, thickness, space),
-          skids:beam!securing_template_skids_fkey(id, quantity, type, width, thickness, space)
-        )
-      `)
-      .eq('order_package_id', orderPackageId);
-    return { data, error };
-  },
+        quantity,
+        is_confirmed,
+        pkg_instance_id,
+        order_pkg_instance!inner(
+          id,
+          order_package_id,
+          ipac_reference
+        ),
 
-  updateSecuringTemplate: async (templateId, fields) => {
-    const { data, error } = await supabase
-      .from('securing_template')
-      .update({ ...fields })
-      .eq('id', templateId)
-      .select('id')
-      .maybeSingle();
-    
-    // Handle 409 conflicts gracefully - the data might already be set
-    if (error && error.code === '409') {
-      console.warn('Conflict updating securing_template, retrying with fresh data...');
-      // Retry once
-      const { data: retryData, error: retryError } = await supabase
-        .from('securing_template')
-        .update({ ...fields })
-        .eq('id', templateId)
-        .select('id')
-        .maybeSingle();
-      return { data: retryData || { id: templateId }, error: retryError };
+        item_details:items_db(
+
+
+
+          id,
+          client_id,
+          category_id,
+          reference,
+          expected_qty,
+          packed_qty,
+          ipac_comments,
+          item_num,
+          description,
+          length,
+          width,
+          height,
+          net_weight,
+          warehouse_location,
+          pkg_category:pkg_category(
+            id,
+            label,
+            category_tag_map(
+              tag:project_tags(id, name)
+            )
+          )
+        ),
+        media(id, image_url, created_at)
+      `);
+
+    if (requestedInstanceIds.length > 0) {
+      query = query.in('pkg_instance_id', requestedInstanceIds);
+    } else {
+      query = query.in('order_pkg_instance.order_package_id', orderPackageIds);
+
     }
-    
-    return { data: data || { id: templateId }, error };
-  },
 
-  updateBeam: async (beamId, fields) => {
-    const { data, error } = await supabase
-      .from('beam')
-      .update({ ...fields })
-      .eq('id', beamId)
-      .select('id')
-      .maybeSingle();
-    
-    // Handle 409 conflicts gracefully
-    if (error && error.code === '409') {
-      console.warn('Conflict updating beam, retrying...');
-      const { data: retryData, error: retryError } = await supabase
-        .from('beam')
-        .update({ ...fields })
-        .eq('id', beamId)
-        .select('id')
-        .maybeSingle();
-      return { data: retryData || { id: beamId }, error: retryError };
+    const { data, error } = await query;
+
+    if (error) {
+      return { data: null, error };
     }
-    
-    return { data: data || { id: beamId }, error };
+
+    let normalized = (data || []).map((row: any) => ({
+      ...row,
+      order_package_id:
+        row?.order_pkg_instance?.order_package_id ||
+
+        packageIdByInstanceId.get(String(row?.pkg_instance_id || '')) ||
+        null,
+    }));
+
+    if (clientId) {
+      normalized = normalized.filter(
+        (row: any) => String(row?.item_details?.client_id || '') === String(clientId)
+      );
+    }
+
+
+
+    if (normalized.length === 0 && requestedInstanceIds.length === 0) {
+      return await loadLegacyPackageItems();
+    }
+
+    // Generate public URLs for all media items
+    const processed = normalized.map((row: any) => {
+      if (!row.media || !row.media.length) return row;
+      
+      const mediaWithUrls = (row.media || []).map((m: any) => {
+        const { data: publicData } = supabase.storage.from('media').getPublicUrl(m.image_url);
+        return { ...m, image_url: publicData?.publicUrl || m.image_url };
+      });
+      
+      return { ...row, media: mediaWithUrls };
+    });
+
+    return { data: processed, error: null };
   },
 
-  // Ensure the securing_template (and beams) for a given side are not shared by other sides.
-  // If shared, clone beams + template and re-link the current side to the new template.
-  ensureUniqueTemplateForSide: async (orderPackageId: string, side: string, isFinal: boolean) => {
-    // 1) Fetch this side's securing row with template + beams
-    const { data: secRows, error: secErr } = await supabase
-      .from('order_package_securing')
+  getUnassignedCatalogItems: async (
+    clientId: UUID,
+    orderId?: UUID | null,
+    search?: string,
+    overrideCategoryId?: UUID | null
+  ) => {
+    // If an instance-level category override is provided, bypass the order-level map
+    let categoryIds: string[] = [];
+    if (overrideCategoryId) {
+      categoryIds = [String(overrideCategoryId)];
+    } else {
+      const { data: mappedCategoryIds, error: categoryMapError } =
+        await getMappedCategoryIdsForOrder(orderId);
+      if (categoryMapError) {
+        return { data: null, error: categoryMapError };
+      }
+      categoryIds = mappedCategoryIds || [];
+    }
+
+    const hasSearch = search && search.trim() !== '';
+
+    let query = supabase
+      .from('items_db')
       .select(`
         id,
-        securing_template_id,
-        securing_template:securing_template(
-          id, quantity, type_id, thickness,
-          horizontal_bar:beam!securing_template_horizontal_bar_fkey(id, quantity, type, width, thickness, space),
-          vertical_bar:beam!securing_template_vertical_bar_fkey(id, quantity, type, width, thickness, space),
-          skids:beam!securing_template_skids_fkey(id, quantity, type, width, thickness, space)
+        client_id,
+        category_id,
+        reference,
+        expected_qty,
+        packed_qty,
+        ipac_comments,
+        item_num,
+        description,
+        length,
+        width,
+        height,
+        net_weight,
+        warehouse_location,
+        pkg_category:pkg_category(
+          id,
+          label,
+          category_tag_map(
+            tag:project_tags(id, name)
+          )
         )
       `)
-      .eq('order_package_id', orderPackageId)
-      .eq('securing_side', side)
-      .eq('is_final', isFinal)
+      .eq('client_id', clientId)
+      .order('item_num', { ascending: true })
+      .limit(5000);
+
+    if (categoryIds.length > 0) {
+      query = query.in('category_id', categoryIds);
+    }
+
+    if (hasSearch) {
+      const q = `%${search.trim()}%`;
+      query = query.or(`item_num.ilike.${q},reference.ilike.${q},description.ilike.${q}`);
+    }
+    
+    return await query;
+  },
+
+  // Standard-box destination pool: items allocated to this order + destination for standard
+  // boxes (order_item_allocation.is_standard_box = true). The packer SB picker uses this so
+  // only the right-destination items are offered — replacing the old warehouse_location match.
+  // expected_qty/packed_qty come from the ALLOCATION row (the per-destination amount).
+  getStandardBoxAllocationItems: async (
+    orderId: UUID,
+    destination: string | null
+  ) => {
+    const code = normalizeDestinationCode(destination);
+
+    const { data: dest, error: destErr } = await supabase
+      .from('destinations')
+      .select('id')
+      .eq('code', code)
+      .maybeSingle();
+    if (destErr) return { data: null, error: destErr };
+    if (!dest?.id) return { data: [], error: null };
+
+    // One destination can hold >1000 allocations; PostgREST caps an uncapped select at
+    // 1000 rows. Page through with .range(), ordered by the unique items_db_id tiebreaker
+    // (per order+destination one row per item) so paging is deterministic.
+    const pageSize = 1000;
+    let from = 0;
+    const all: any[] = [];
+    while (true) {
+      const { data, error } = await supabase
+        .from('order_item_allocation')
+        .select(`
+          expected_qty,
+          packed_qty,
+          items_db:items_db(
+            id, client_id, category_id, reference, ipac_comments, item_num, description,
+            length, width, height, net_weight, warehouse_location,
+            pkg_category:pkg_category(
+              id, label,
+              category_tag_map(tag:project_tags(id, name))
+            )
+          )
+        `)
+        .eq('order_id', orderId)
+        .eq('destination_id', dest.id)
+        .eq('is_standard_box', true)
+        .order('items_db_id', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) return { data: null, error };
+      const rows = data || [];
+      all.push(...rows);
+      if (rows.length < pageSize) break;
+      from += pageSize;
+    }
+    return { data: all, error: null };
+  },
+
+  // All per-destination allocation quantities for an order (ANY is_standard_box). Lets the
+  // m2m catalog show this box destination's expected/packed (the order plan) instead of the
+  // global items_db rollup.
+  getOrderAllocationsForDestination: async (
+    orderId: UUID,
+    destination: string | null
+  ) => {
+    const code = normalizeDestinationCode(destination);
+    const { data: dest, error: destErr } = await supabase
+      .from('destinations')
+      .select('id')
+      .eq('code', code)
+      .maybeSingle();
+    if (destErr) return { data: null, error: destErr };
+    if (!dest?.id) return { data: [], error: null };
+    // AUH-scale destinations exceed the 1000-row PostgREST cap; page through with
+    // .range() ordered by the unique items_db_id (one allocation per item+dest).
+    const pageSize = 1000;
+    let from = 0;
+    const all: any[] = [];
+    while (true) {
+      const { data, error } = await supabase
+        .from('order_item_allocation')
+        .select('items_db_id, expected_qty, packed_qty, is_standard_box')
+        .eq('order_id', orderId)
+        .eq('destination_id', dest.id)
+        .order('items_db_id', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) return { data: null, error };
+      const rows = data || [];
+      all.push(...rows);
+      if (rows.length < pageSize) break;
+      from += pageSize;
+    }
+    return { data: all, error: null };
+  },
+
+  // Packer "request more": raise an allocation-increase ticket for an admin to review.
+  // Resolves the box's destination text to destinations.id and stamps requested_by from auth.
+  createAllocationIncreaseRequest: async (params: {
+    orderId: UUID;
+    itemsDbId: UUID;
+    destination: string | null;
+    requestedDelta: number;
+    reason?: string | null;
+    orderPackageId?: UUID | null;
+  }) => {
+    const { data: { user }, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !user) {
+      return { data: null, error: authErr ?? new Error('Not authenticated') };
+    }
+    const code = normalizeDestinationCode(params.destination);
+    const { data: dest, error: destErr } = await supabase
+      .from('destinations')
+      .select('id')
+      .eq('code', code)
+      .maybeSingle();
+    if (destErr) return { data: null, error: destErr };
+    if (!dest?.id) {
+      return { data: null, error: new Error(`Unknown destination "${code}"`) };
+    }
+    return supabase
+      .from('allocation_increase_requests')
+      .insert({
+        order_id: params.orderId,
+        items_db_id: params.itemsDbId,
+        destination_id: dest.id,
+        requested_delta: params.requestedDelta,
+        reason: params.reason ?? null,
+        requested_by: user.id,
+        order_package_context: params.orderPackageId ?? null,
+      })
+      .select('id')
+      .single();
+  },
+
+  updateItemDimensions: async (
+    itemId: UUID,
+    dims: { length: number | null; width: number | null; height: number | null }
+  ) => {
+    return supabase
+      .from('items_db')
+      .update({
+        length: dims.length,
+        width: dims.width,
+        height: dims.height,
+      })
+      .eq('id', itemId);
+  },
+
+  getItemCatalogByNumber: async (
+    clientId: UUID,
+    itemNumber: string,
+    orderId?: UUID | null
+  ) => {
+
+    const normalizedItemNumber = String(itemNumber || '').trim();
+    if (!normalizedItemNumber) {
+      return {
+        data: [],
+        error: { message: 'Item number is required' },
+      };
+    }
+
+    const { data: mappedCategoryIds, error: categoryMapError } =
+      await getMappedCategoryIdsForOrder(orderId);
+    if (categoryMapError) {
+      return { data: [], error: categoryMapError };
+    }
+
+    const asNumber = Number(normalizedItemNumber);
+    const filterValue = Number.isFinite(asNumber) && /^\d+$/.test(normalizedItemNumber)
+      ? asNumber
+      : normalizedItemNumber;
+
+    let query = supabase
+      .from('items_db')
+      .select(`
+        id,
+        client_id,
+        category_id,
+        reference,
+        expected_qty,
+        packed_qty,
+        ipac_comments,
+        item_num,
+        description,
+        length,
+        width,
+        height,
+        net_weight,
+        warehouse_location,
+        pkg_category:pkg_category(
+
+          id,
+          label,
+          category_tag_map(
+            tag:project_tags(id, name)
+          )
+        )
+      `)
+      .eq('client_id', clientId)
+      .eq('item_num', filterValue)
+      .order('reference', { ascending: true });
+
+    if ((mappedCategoryIds || []).length > 0) {
+      query = query.in('category_id', mappedCategoryIds || []);
+    }
+
+    const { data, error } = await query;
+
+    return { data: data || [], error };
+  },
+
+  getItemCatalogByBin: async (
+    clientId: UUID,
+    defaultBin: string,
+    orderId?: UUID | null
+  ) => {
+
+    const normalizedDefaultBin = String(defaultBin || '').trim();
+    if (!normalizedDefaultBin) {
+      return {
+        data: [],
+        error: { message: 'Default bin is required' },
+        matchedColumn: null,
+      };
+    }
+
+    const { data: mappedCategoryIds, error: categoryMapError } =
+      await getMappedCategoryIdsForOrder(orderId);
+    if (categoryMapError) {
+      return {
+        data: [],
+        error: categoryMapError,
+        matchedColumn: null,
+      };
+    }
+
+    const asNumber = Number(normalizedDefaultBin);
+    const filterValues = Number.isFinite(asNumber) && /^\d+$/.test(normalizedDefaultBin)
+      ? [asNumber, normalizedDefaultBin]
+      : [normalizedDefaultBin];
+
+    // Some environments use different names for default-bin columns.
+    const candidateColumns = [
+      'default_bin',
+      'default_bin_code',
+      'default_bin_location',
+      'default_bin_name',
+      'default_location',
+      'warehouse_location',
+      'storage_bin',
+      'bin',
+      'bin_code',
+      'bin_location',
+      'bin_number',
+    ];
+
+    const selectClause = `
+      id,
+      client_id,
+      category_id,
+      reference,
+      expected_qty,
+      packed_qty,
+      ipac_comments,
+      item_num,
+      description,
+      length,
+      width,
+      height,
+      net_weight,
+      warehouse_location,
+      maintenance_package_categories:pkg_category(
+        id,
+        label,
+        category_tag_map(
+          tag:project_tags(id, name)
+        )
+      )
+    `;
+
+    let fallbackError: any = null;
+
+    for (const columnName of candidateColumns) {
+      let tryNextColumn = false;
+
+      for (const filterValue of filterValues) {
+        let query = supabase
+          .from('items_db')
+          .select(selectClause)
+          .eq('client_id', clientId)
+          .eq(columnName as any, filterValue as any)
+          .order('reference', { ascending: true });
+
+        if ((mappedCategoryIds || []).length > 0) {
+          query = query.in('category_id', mappedCategoryIds || []);
+        }
+
+        const { data, error } = await query;
+
+        if (error) {
+          const message = String(error.message || '').toLowerCase();
+          if (
+            message.includes('column') ||
+            message.includes('schema cache') ||
+            message.includes('does not exist')
+          ) {
+            tryNextColumn = true;
+            break;
+          }
+
+          fallbackError = error;
+          continue;
+        }
+
+        if ((data || []).length > 0) {
+          return { data: data || [], error: null, matchedColumn: columnName };
+        }
+      }
+
+      if (fallbackError) {
+        break;
+      }
+
+      if (tryNextColumn) {
+        continue;
+      }
+    }
+
+    if (fallbackError) {
+      return { data: [], error: fallbackError, matchedColumn: null };
+    }
+
+    return { data: [], error: null, matchedColumn: null };
+  },
+
+  getMaintenanceCatalogItemByItemNumber: async (
+    clientId: UUID,
+    itemNumber: string,
+    orderId?: UUID | null
+  ) => {
+    const normalizedItemNumber = String(itemNumber || '').trim();
+    if (!normalizedItemNumber) {
+      return {
+        data: null,
+        error: { message: 'Item number is required' },
+      };
+    }
+
+    const { data: mappedCategoryIds, error: categoryMapError } =
+      await getMappedCategoryIdsForOrder(orderId);
+    if (categoryMapError) {
+      return { data: null, error: categoryMapError };
+    }
+
+    const asNumber = Number(normalizedItemNumber);
+    const filterValue = Number.isFinite(asNumber) && /^\d+$/.test(normalizedItemNumber)
+      ? asNumber
+      : normalizedItemNumber;
+
+    let query = supabase
+      .from('items_db')
+      .select(`
+        id,
+        client_id,
+        category_id,
+        reference,
+        expected_qty,
+        packed_qty,
+        ipac_comments,
+        item_num,
+        description,
+        length,
+        width,
+        height,
+        net_weight,
+        warehouse_location,
+        maintenance_package_categories:pkg_category(
+          id,
+          label,
+          category_tag_map(
+            tag:project_tags(id, name)
+          )
+        )
+      `)
+      .eq('client_id', clientId)
+      .eq('item_num', filterValue)
+      .order('reference', { ascending: true })
       .limit(1);
-    if (secErr || !secRows || !secRows.length) return { data: null, error: secErr };
-    const current = secRows[0] as any;
-    const tmplId = current.securing_template_id;
 
-    // If for any reason there is no template linked yet, create an empty one and link it
-    if (!tmplId) {
-      // Create empty beams
-      const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
-      const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
-      let skId: any = null;
-      if (side === 'base') { const { data: sk } = await supabase.from('beam').insert({}).select('id').single(); skId = sk?.id || null; }
-      const tmplPayload: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
-      if (skId) tmplPayload.skids = skId;
-      const { data: newEmpty, error: newErr } = await supabase
-        .from('securing_template')
-        .insert(tmplPayload)
-        .select('id')
-        .single();
-      if (newErr || !newEmpty) return { data: null, error: newErr };
-      const { error: linkErr } = await supabase
-        .from('order_package_securing')
-        .update({ securing_template_id: newEmpty.id })
-        .eq('id', current.id);
-      if (linkErr) return { data: null, error: linkErr };
-      return { data: { id: newEmpty.id, created: true }, error: null };
+    if ((mappedCategoryIds || []).length > 0) {
+      query = query.in('category_id', mappedCategoryIds || []);
     }
 
-    // 2) Count how many rows reference this template id
-    const { data: others, error: countErr } = await supabase
-      .from('order_package_securing')
-      .select('id, securing_side')
-      .eq('securing_template_id', tmplId);
-    if (countErr) return { data: null, error: countErr };
-    if ((others || []).length <= 1) return { data: { id: tmplId, unchanged: true }, error: null };
+    const { data, error } = await query;
 
-    // 3) Clone beams
-    const cloneBeam = async (b: any) => {
-      if (!b?.id) return null;
-      const { data: nb, error: bErr } = await supabase
-        .from('beam')
+    if (error) {
+      return { data: null, error };
+    }
+
+    return { data: data?.[0] || null, error: null };
+  },
+
+  assignItemToPackage: async (
+    maintenanceDbId: UUID,
+    orderPackageId: UUID,
+    quantity: number = 1,
+    pkgInstanceId?: UUID | null
+  ) => {
+    const parsedQty = Number(quantity);
+    if (!Number.isFinite(parsedQty) || parsedQty <= 0) {
+      return {
+        data: null,
+        error: { message: 'Quantity must be greater than 0' },
+      };
+    }
+
+    const { data: catalogItem, error: catalogError } = await supabase
+      .from('items_db')
+      .select('id, expected_qty, packed_qty, item_num, reference, description')
+      .eq('id', maintenanceDbId)
+      .maybeSingle();
+
+    if (catalogError) {
+      return { data: null, error: catalogError };
+    }
+
+    if (!catalogItem?.id) {
+      return {
+        data: null,
+        error: { message: 'Selected maintenance item was not found.' },
+      };
+    }
+
+    const itemLabel =
+      catalogItem.item_num ||
+      catalogItem.reference ||
+      catalogItem.description ||
+      'Selected item';
+    // NOTE: the quota cap is enforced further down, AFTER the target instance is resolved,
+    // so it can use the per-destination order_item_allocation (the authoritative cap) and
+    // only fall back to the global items_db rollup for items with no allocation row.
+
+    const normalizeInstanceStatus = (
+      statusValue: unknown
+    ): 'design' | 'approved' | 'in_production' | 'packed' => {
+      const normalized = String(statusValue || '').trim().toLowerCase();
+      if (normalized === 'design') return 'design';
+      if (normalized === 'approved') return 'approved';
+      if (normalized === 'in_production') return 'in_production';
+      if (normalized === 'packed') return 'packed';
+      if (normalized === 'delivered') return 'packed';
+      return 'approved';
+    };
+
+    let targetInstanceId: UUID | null = pkgInstanceId || null;
+
+    if (targetInstanceId) {
+      const { data: providedInstance, error: providedInstanceError } = await supabase
+        .from('order_pkg_instance')
+        .select('id, order_package_id')
+        .eq('id', targetInstanceId)
+        .maybeSingle();
+
+      if (providedInstanceError) {
+        return { data: null, error: providedInstanceError };
+      }
+
+      if (!providedInstance?.id) {
+        return {
+          data: null,
+          error: { message: 'Selected package instance was not found.' },
+        };
+      }
+
+      if (String(providedInstance.order_package_id || '') !== String(orderPackageId)) {
+        return {
+          data: null,
+          error: { message: 'Selected instance does not belong to the target package.' },
+        };
+      }
+    }
+
+    if (!targetInstanceId) {
+      const { data: existingInstance, error: existingInstanceError } = await supabase
+        .from('order_pkg_instance')
+        .select('id, order_pkg_overview_id, instance_number')
+        .eq('order_package_id', orderPackageId)
+        .order('instance_number', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (existingInstanceError) {
+        return { data: null, error: existingInstanceError };
+      }
+
+      if (existingInstance?.id) {
+        targetInstanceId = existingInstance.id;
+      }
+    }
+
+    if (!targetInstanceId) {
+      const { data: packageRow, error: packageError } = await supabase
+        .from('order_packages')
+        .select('id, order_id, package_number, status, description')
+        .eq('id', orderPackageId)
+        .maybeSingle();
+
+      if (packageError) {
+        return { data: null, error: packageError };
+      }
+
+      if (!packageRow?.id || !packageRow?.order_id) {
+        return {
+          data: null,
+          error: { message: 'Selected package template was not found.' },
+        };
+      }
+
+      const packageNumber = Number(packageRow.package_number);
+      if (!Number.isFinite(packageNumber) || packageNumber <= 0) {
+        return {
+          data: null,
+          error: { message: 'Package number is invalid for this template.' },
+        };
+      }
+
+      const normalizedStatus = normalizeInstanceStatus(packageRow.status);
+
+      let overviewId: UUID | null = null;
+      let existingOverviewQty = 0;
+
+      const { data: overviewRow, error: overviewError } = await supabase
+        .from('order_pkg_overview')
+        .select('id, quantity')
+        .eq('order_id', packageRow.order_id)
+        .eq('pkg_number', packageNumber)
+        .maybeSingle();
+
+      if (overviewError) {
+        return { data: null, error: overviewError };
+      }
+
+      if (overviewRow?.id) {
+        overviewId = overviewRow.id;
+        existingOverviewQty = Number(overviewRow.quantity || 0);
+      } else {
+        const { data: createdOverview, error: createdOverviewError } = await supabase
+          .from('order_pkg_overview')
+          .insert({
+            order_id: packageRow.order_id,
+            pkg_number: packageNumber,
+            status: normalizedStatus,
+            quantity: 1,
+            quantity_packed: 0,
+            description: packageRow.description || null,
+          })
+          .select('id, quantity')
+          .single();
+
+        if (createdOverviewError || !createdOverview?.id) {
+          return {
+            data: null,
+            error: createdOverviewError || { message: 'Failed to create package overview.' },
+          };
+        }
+
+        overviewId = createdOverview.id;
+        existingOverviewQty = Number(createdOverview.quantity || 1);
+      }
+
+      const { data: lastInstanceRow, error: lastInstanceError } = await supabase
+        .from('order_pkg_instance')
+        .select('instance_number')
+        .eq('order_pkg_overview_id', overviewId)
+        .order('instance_number', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (lastInstanceError) {
+        return { data: null, error: lastInstanceError };
+      }
+
+      const nextInstanceNumber = Math.max(1, Number(lastInstanceRow?.instance_number || 0) + 1);
+
+      const { data: createdInstance, error: createdInstanceError } = await supabase
+        .from('order_pkg_instance')
         .insert({
-          quantity: b.quantity ?? null,
-          type: b.type ?? null,
-          width: b.width ?? null,
-          thickness: b.thickness ?? null,
-          space: b.space ?? null,
+          order_pkg_overview_id: overviewId,
+          order_package_id: orderPackageId,
+          instance_number: nextInstanceNumber,
+          status: normalizedStatus,
+          packed_at: normalizedStatus === 'packed' ? new Date().toISOString() : null,
         })
         .select('id')
         .single();
-      if (bErr) throw bErr;
-      return nb?.id || null;
-    };
 
-    let hbId: string | null = null; let vbId: string | null = null; let skId: string | null = null;
-    try {
-      hbId = await cloneBeam(current.securing_template?.horizontal_bar);
-      vbId = await cloneBeam(current.securing_template?.vertical_bar);
-      if (side === 'base' && current.securing_template?.skids) {
-        skId = await cloneBeam(current.securing_template?.skids);
+      if (createdInstanceError || !createdInstance?.id) {
+        return {
+          data: null,
+          error: createdInstanceError || { message: 'Failed to create package instance.' },
+        };
       }
-    } catch (e) {
-      return { data: null, error: e };
-    }
 
-    // 4) Clone template
-    const tmplPayload: any = {
-      quantity: current.securing_template?.quantity ?? null,
-      type_id: current.securing_template?.type_id ?? null,
-      thickness: current.securing_template?.thickness ?? null,
-      horizontal_bar: hbId,
-      vertical_bar: vbId,
-    };
-    if (skId) tmplPayload.skids = skId;
+      targetInstanceId = createdInstance.id;
 
-    const { data: newTmpl, error: tmplErr } = await supabase
-      .from('securing_template')
-      .insert(tmplPayload)
-      .select('id')
-      .single();
-    if (tmplErr || !newTmpl) return { data: null, error: tmplErr };
+      if (!Number.isFinite(existingOverviewQty) || existingOverviewQty < nextInstanceNumber) {
+        const { error: qtySyncError } = await supabase
+          .from('order_pkg_overview')
+          .update({ quantity: nextInstanceNumber })
+          .eq('id', overviewId);
 
-    // 5) Relink this side to new template
-    const { error: updErr } = await supabase
-      .from('order_package_securing')
-      .update({ securing_template_id: newTmpl.id })
-      .eq('id', current.id);
-    if (updErr) return { data: null, error: updErr };
-
-    return { data: { id: newTmpl.id, cloned: true }, error: null };
-  },
-
-  // Ensure final securing rows exist (empty) for any side that has an original
-  ensureFinalSecuringForPackage: async (orderPackageId: string) => {
-    // Load existing securing records for this package
-    const { data: rows, error } = await supabase
-      .from('order_package_securing')
-      .select('id, securing_side, is_final')
-      .eq('order_package_id', orderPackageId);
-    if (error) return { data: null, error };
-
-    const sides = ['big_sides','small_sides','lid','base'] as const;
-    const hasOriginal: Record<string, boolean> = {};
-    const hasFinal: Record<string, boolean> = {};
-    (rows || []).forEach((r: any) => {
-      if (r.is_final) hasFinal[r.securing_side] = true; else hasOriginal[r.securing_side] = true;
-    });
-
-    for (const side of sides) {
-      if (hasOriginal[side] && !hasFinal[side]) {
-        // Create empty beams
-        const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
-        const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
-        let skId: any = null;
-        if (side === 'base') {
-          const { data: sk } = await supabase.from('beam').insert({}).select('id').single();
-          skId = sk?.id || null;
+        if (qtySyncError) {
+          console.warn('Unable to sync overview quantity after instance creation:', qtySyncError);
         }
-
-        // Create empty template pointing to empty beams
-        const tmplPayload: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
-        if (skId) tmplPayload.skids = skId;
-        const { data: tmpl, error: tmplErr } = await supabase
-          .from('securing_template')
-          .insert(tmplPayload)
-          .select('id')
-          .single();
-        if (tmplErr) return { data: null, error: tmplErr };
-
-        // Create final securing row
-        const { error: secErr } = await supabase
-          .from('order_package_securing')
-          .insert({ order_package_id: orderPackageId, securing_template_id: tmpl?.id, securing_side: side, is_final: true })
-          .select('id')
-          .single();
-        if (secErr) return { data: null, error: secErr };
       }
     }
 
-    return { data: { ensured: true }, error: null };
-  },
-
-  // Ensure Final templates are empty and isolated from Original or other sides for this package
-  decoupleAndClearFinalTemplates: async (orderPackageId: string) => {
-    // Load all securing rows with template id
-    const { data: rows, error } = await supabase
-      .from('order_package_securing')
-      .select('id, securing_side, is_final, securing_template_id')
-      .eq('order_package_id', orderPackageId);
-    if (error) return { data: null, error };
-
-    // Build reference counts for template usage within this package
-    const counts: Record<string, number> = {};
-    (rows || []).forEach((r: any) => { if (r.securing_template_id) counts[r.securing_template_id] = (counts[r.securing_template_id] || 0) + 1; });
-
-    // For each FINAL row, if its template is shared OR null, then create a brand new EMPTY template and link it
-    for (const r of (rows || [])) {
-      if (!r.is_final) continue;
-      const tmplId = r.securing_template_id;
-      const needsNew = !tmplId || (counts[tmplId] || 0) > 1;
-      if (!needsNew) continue;
-
-      // Create empty beams
-      const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
-      const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
-      let skId: any = null;
-      if (r.securing_side === 'base') { const { data: sk } = await supabase.from('beam').insert({}).select('id').single(); skId = sk?.id || null; }
-
-      // Empty template payload
-      const emptyTmpl: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
-      if (skId) emptyTmpl.skids = skId;
-      const { data: newTmpl, error: newErr } = await supabase
-        .from('securing_template')
-        .insert(emptyTmpl)
-        .select('id')
-        .single();
-      if (newErr || !newTmpl) return { data: null, error: newErr };
-
-      const { error: linkErr } = await supabase
-        .from('order_package_securing')
-        .update({ securing_template_id: newTmpl.id })
-        .eq('id', r.id);
-      if (linkErr) return { data: null, error: linkErr };
+    if (!targetInstanceId) {
+      return {
+        data: null,
+        error: { message: 'Unable to resolve package instance for assignment.' },
+      };
     }
 
-    return { data: { normalized: true }, error: null };
-  },
-
-  // Ensure there is a securing row for a specific side and tier; create empty beams/template if missing
-  ensureSecuringRowForSide: async (orderPackageId: string, side: string, isFinal: boolean) => {
-    // Check existence
-    const { data: existing, error: existErr } = await supabase
-      .from('order_package_securing')
-      .select('id, securing_template_id')
-      .eq('order_package_id', orderPackageId)
-      .eq('securing_side', side)
-      .eq('is_final', isFinal)
-      .limit(1);
-    if (existErr) return { data: null, error: existErr };
-    if (existing && existing.length) return { data: existing[0], error: null };
-
-    // Create empty beams and template
-    const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
-    const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
-    let skId: any = null;
-    if (side === 'base') { const { data: sk } = await supabase.from('beam').insert({}).select('id').single(); skId = sk?.id || null; }
-
-    const tmplPayload: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
-    if (skId) tmplPayload.skids = skId;
-    const { data: tmpl, error: tmplErr } = await supabase
-      .from('securing_template')
-      .insert(tmplPayload)
-      .select('id')
-      .single();
-    if (tmplErr) return { data: null, error: tmplErr };
-
-    const { data: created, error: insErr } = await supabase
-      .from('order_package_securing')
-      .insert({ order_package_id: orderPackageId, securing_template_id: tmpl?.id, securing_side: side, is_final: isFinal })
-      .select('id, securing_template_id')
-      .single();
-    return { data: created, error: insErr };
-  },
-
-  // Ensure original securing rows exist (empty) if missing
-  ensureOriginalSecuringForPackage: async (orderPackageId: string) => {
-    const { data: rows, error } = await supabase
-      .from('order_package_securing')
-      .select('id, securing_side, is_final')
-      .eq('order_package_id', orderPackageId);
-    if (error) return { data: null, error };
-
-    const sides = ['big_sides','small_sides','lid','base'] as const;
-    const hasOriginal: Record<string, boolean> = {};
-    (rows || []).forEach((r: any) => { if (!r.is_final) hasOriginal[r.securing_side] = true; });
-
-    for (const side of sides) {
-      if (!hasOriginal[side]) {
-        const { data: hb } = await supabase.from('beam').insert({}).select('id').single();
-        const { data: vb } = await supabase.from('beam').insert({}).select('id').single();
-        let skId: any = null;
-        if (side === 'base') { const { data: sk } = await supabase.from('beam').insert({}).select('id').single(); skId = sk?.id || null; }
-        const tmplPayload: any = { quantity: null, type_id: null, thickness: null, horizontal_bar: hb?.id || null, vertical_bar: vb?.id || null };
-        if (skId) tmplPayload.skids = skId;
-        const { data: tmpl, error: tmplErr } = await supabase
-          .from('securing_template')
-          .insert(tmplPayload)
-          .select('id')
-          .single();
-        if (tmplErr) return { data: null, error: tmplErr };
-
-        const { error: secErr } = await supabase
-          .from('order_package_securing')
-          .insert({ order_package_id: orderPackageId, securing_template_id: tmpl?.id, securing_side: side, is_final: false })
-          .select('id')
-          .single();
-        if (secErr) return { data: null, error: secErr };
-      }
+    // Look up any existing pkd_item on this instance BEFORE the cap, because confirming an
+    // order-create shadow (is_confirmed=false) by re-assigning the same item adds the whole
+    // row to confirmed packed_qty, not just parsedQty — the cap and the rollup must use that.
+    const { data: existing, error: existingError } = await supabase
+      .from('pkd_item')
+      .select('id, quantity, is_confirmed')
+      .eq('maintenance_db_id', maintenanceDbId)
+      .eq('pkg_instance_id', targetInstanceId)
+      .maybeSingle();
+    if (existingError) {
+      return { data: null, error: existingError };
     }
+    const existingWasConfirmed = !!existing?.is_confirmed;
+    // Quantity this operation NEWLY adds to confirmed packed_qty:
+    //  - existing confirmed row → parsedQty (its old qty already counts)
+    //  - existing shadow row    → whole row + parsedQty (none of it counted yet)
+    //  - no existing row        → parsedQty (new, default-confirmed row)
+    const effectiveNewQty =
+      existing?.id && !existingWasConfirmed
+        ? Number(existing.quantity || 0) + parsedQty
+        : parsedQty;
 
-    return { data: { ensured: true }, error: null };
-  },
-
-  // Packaging: fetch package items for many order_package_ids
-  getPackageItemsByOrderPackageIds: async (orderPackageIds) => {
-    if (!orderPackageIds || orderPackageIds.length === 0) return { data: [], error: null };
-    const { data, error } = await supabase
-      .from('package_items')
-      .select('order_package_id, designation, quantity')
-      .in('order_package_id', orderPackageIds);
-    return { data, error };
-  },
-
-  // Packaging: add a single package item
-  addPackageItem: async ({ order_package_id, designation, quantity }) => {
-    const { data, error } = await supabase
-      .from('package_items')
-      .insert({ order_package_id, designation, quantity })
-      .select('id')
-      .single();
-    return { data, error };
-  },
-
-  // Tasks: list available task types
-  getTasks: async () => {
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('id, name, description')
-      .order('name');
-    return { data, error };
-  },
-
-  // Team packers for an order (with status)
-  getTeamPackersForOrder: async (orderId) => {
-    const { data, error } = await supabase
-      .from('order_team_members')
-      .select('packer_id, profiles(id, full_name, username, packer_status)')
-      .eq('order_id', orderId);
-    if (error) return { data: null, error };
-    const team = (data || []).map((row: any) => row.profiles).filter(Boolean);
-    return { data: team, error: null };
-  },
-
-  // Task logs by order package ids (aggregated)
-  getTaskLogsByOrderPackageIds: async (orderPackageIds) => {
-    if (!orderPackageIds || orderPackageIds.length === 0) return { data: [], error: null };
-    
-    // More robust approach: use inner join with task_packages to guarantee scope
-    const { data, error } = await supabase
-      .from('task_logs')
-      .select(`
-        id, 
-        start_time, 
-        end_time, 
-        duration_minutes, 
-        pause_duration, 
-        task_id, 
-        update_counter, 
-        notes,
-        tasks(name),
-        task_assignments(packer_id, task_status, profiles(full_name)),
-        task_packages!inner(order_package_id)
-      `)
-      .in('task_packages.order_package_id', orderPackageIds)
-      .order('start_time', { ascending: false });
-    return { data, error };
-  },
-
-  // Fetch order_package_ids linked to a task log
-  getTaskPackages: async (taskLogId: string) => {
-    const { data, error } = await supabase
-      .from('task_packages')
-      .select('order_package_id')
-      .eq('task_log_id', taskLogId);
-    if (error) return { data: null, error };
-    const ids = (data || []).map((r: any) => r.order_package_id).filter(Boolean);
-    return { data: ids, error: null };
-  },
-
-  // Get task logs specifically for a single order package
-  getTaskLogsForPackage: async (orderPackageId: string) => {
-    if (!orderPackageId) return { data: [], error: null };
-    
-    // Step 1: find task_log ids via task_packages for this specific package
-    const { data: tps, error: tpErr } = await supabase
-      .from('task_packages')
-      .select('task_log_id')
-      .eq('order_package_id', orderPackageId);
-    if (tpErr) return { data: null, error: tpErr };
-    
-    const logIds = Array.from(new Set((tps || []).map((t: any) => t.task_log_id).filter(Boolean)));
-    if (logIds.length === 0) return { data: [], error: null };
-
-    // Step 2: fetch logs with task name and assignments
-    const { data, error } = await supabase
-      .from('task_logs')
-      .select('id, start_time, end_time, duration_minutes, pause_duration, task_id, update_counter, notes, tasks(name), task_assignments(packer_id, task_status, profiles(full_name))')
-      .in('id', logIds)
-      .order('start_time', { ascending: false });
-    return { data, error };
-  },
-
-  // Link additional order packages to an existing task log
-  addTaskPackages: async (taskLogId: string, orderPackageIds: string[]) => {
-    if (!orderPackageIds || orderPackageIds.length === 0) return { data: [], error: null };
-    // Filter out already linked ids
-    const { data: existing } = await supabase
-      .from('task_packages')
-      .select('order_package_id')
-      .eq('task_log_id', taskLogId);
-    const existingSet = new Set((existing || []).map((r: any) => r.order_package_id));
-    const toInsert = orderPackageIds.filter(id => id && !existingSet.has(id));
-    if (toInsert.length === 0) return { data: [], error: null };
-    const rows = toInsert.map(opId => ({ task_log_id: taskLogId, order_package_id: opId }));
-    const { data, error } = await supabase.from('task_packages').insert(rows).select('order_package_id');
-    return { data, error };
-  },
-
-  getTaskLogById: async (id) => {
-    const { data, error } = await supabase
-      .from('task_logs')
-      .select('id, start_time, end_time, duration_minutes, pause_duration, task_id, update_counter, notes, tasks(name)')
-      .eq('id', id)
-      .single();
-    return { data, error };
-  },
-
-  updateTaskLogFields: async (id, fields) => {
-    const { data, error } = await supabase
-      .from('task_logs')
-      .update({ ...fields, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select('id, update_counter, pause_duration')
-      .single();
-    return { data, error };
-  },
-
-  incrementTaskLogCounter: async (id, fields = {}) => {
-    // Fetch current counter then increment
-    const { data: curr } = await supabase
-      .from('task_logs')
-      .select('update_counter')
-      .eq('id', id)
-      .single();
-    const next = (curr?.update_counter || 0) + 1;
-    const { data, error } = await supabase
-      .from('task_logs')
-      .update({ ...fields, update_counter: next, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select('id, update_counter')
-      .single();
-    return { data, error };
-  },
-
-  addPauseDuration: async (id, seconds) => {
-    // Fetch current and add seconds
-    const { data: curr } = await supabase
-      .from('task_logs')
-      .select('pause_duration, update_counter')
-      .eq('id', id)
-      .single();
-    const nextPause = (Number(curr?.pause_duration) || 0) + (seconds || 0);
-    const nextCounter = (curr?.update_counter || 0) + 1;
-    const { data, error } = await supabase
-      .from('task_logs')
-      .update({ pause_duration: nextPause, update_counter: nextCounter, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select('id, pause_duration, update_counter')
-      .single();
-    return { data, error };
-  },
-
-  updateTaskAssignmentsStatus: async (taskId, status, packerIds = null) => {
-    let q = supabase.from('task_assignments').update({ task_status: status }).eq('task_id', taskId);
-    if (packerIds && packerIds.length) q = q.in('packer_id', packerIds);
-    const { data, error } = await q.select('id');
-    return { data, error };
-  },
-
-  // Finish a task without RPC: compute minutes on client and persist end_time + duration_minutes
-  finishTaskLog: async (taskLogId: string) => {
-    const nowIso = new Date().toISOString();
-    // 1) fetch the current row to compute delta
-    const { data: row, error: fetchErr } = await supabase
-      .from('task_logs')
-      .select('id, start_time, restart_time, duration_minutes')
-      .eq('id', taskLogId)
-      .single();
-    if (fetchErr || !row) return { data: null, error: fetchErr };
-
-    const start = row.restart_time ? new Date(row.restart_time) : new Date(row.start_time);
-    const now = new Date();
-    const deltaMin = Math.max(0, Math.floor((now.getTime() - start.getTime()) / 60000));
-    const current = typeof row.duration_minutes === 'number' ? row.duration_minutes : 0;
-    const newTotal = current + deltaMin;
-
-    // 2) update end_time and duration_minutes atomically
-    const { data, error } = await supabase
-      .from('task_logs')
-      .update({ end_time: nowIso, duration_minutes: newTotal })
-      .eq('id', taskLogId)
-      .select('id, end_time, duration_minutes')
-      .single();
-    return { data, error };
-  },
-
-  // Restart a completed task: check assigned packers availability, then
-  // clear end_time, set restart_time, bump update_counter, and set assignments to in_progress
-  restartTaskLog: async (taskLogId: string) => {
-    // 1) find assigned packers for this task
-    const { data: assignedRows, error: assignedErr } = await supabase
-      .from('task_assignments')
-      .select('packer_id')
-      .eq('task_id', taskLogId);
-    if (assignedErr) return { data: null, error: assignedErr };
-    const assignedIds = (assignedRows || []).map((r: any) => r.packer_id).filter(Boolean);
-
-    // 2) check if any assigned packer is busy on another task
-    if (assignedIds.length > 0) {
-      const { data: busyRows, error: busyErr } = await supabase
-        .from('task_assignments')
-        .select('packer_id, task_id')
-        .in('packer_id', assignedIds)
-        .eq('task_status', 'in_progress')
-        .neq('task_id', taskLogId);
-      if (busyErr) return { data: null, error: busyErr };
-      if ((busyRows || []).length > 0) {
-        return { data: { canRestart: false }, error: null };
-      }
-    }
-
-    // 3) bump update_counter and set restart_time/end_time
-    const { data: curr, error: readErr } = await supabase
-      .from('task_logs')
-      .select('update_counter')
-      .eq('id', taskLogId)
-      .single();
-    if (readErr) return { data: null, error: readErr };
-
-    const nextCounter = (curr?.update_counter || 0) + 1;
-
-    // Try ISO timestamp first; if the column is numeric on this project, fall back to epoch seconds
-    let updErr: any = null;
+    // Per-destination quota cap. Prefer this box's order_item_allocation (kept in sync by
+    // DB triggers) — the authoritative cap. Fall back to the global items_db rollup only
+    // when the item has no allocation row (e.g. ad-hoc / non-allocation packing).
     {
-      const { error } = await supabase
-        .from('task_logs')
-        .update({ restart_time: new Date().toISOString(), end_time: null, update_counter: nextCounter })
-        .eq('id', taskLogId);
-      updErr = error;
-    }
+      const { data: capInstance, error: capInstanceError } = await supabase
+        .from('order_pkg_instance')
+        .select('destination, order_pkg_overview_id')
+        .eq('id', targetInstanceId)
+        .maybeSingle();
+      if (capInstanceError) {
+        return { data: null, error: capInstanceError };
+      }
 
-    if (updErr && updErr.code === '22P02') {
-      // Column is likely numeric; use epoch seconds
-      const epochSec = Math.floor(Date.now() / 1000);
-      const { error: fallbackErr } = await supabase
-        .from('task_logs')
-        .update({ restart_time: epochSec, end_time: null, update_counter: nextCounter })
-        .eq('id', taskLogId);
-      if (fallbackErr) return { data: null, error: fallbackErr };
-    } else if (updErr) {
-      return { data: null, error: updErr };
-    }
+      let capOrderId: UUID | null = null;
+      if (capInstance?.order_pkg_overview_id) {
+        const { data: capOverview } = await supabase
+          .from('order_pkg_overview')
+          .select('order_id')
+          .eq('id', capInstance.order_pkg_overview_id)
+          .maybeSingle();
+        capOrderId = (capOverview?.order_id as UUID) || null;
+      }
 
-    // 4) flip all assignments on this task to in_progress
-    const { error: statusErr } = await supabase
-      .from('task_assignments')
-      .update({ task_status: 'in_progress' })
-      .eq('task_id', taskLogId);
-    if (statusErr) return { data: null, error: statusErr };
-
-    return { data: { canRestart: true }, error: null };
-  },
-
-  // Compute busy packers from ACTIVE task logs only (end_time IS NULL).
-  // Treat both 'in_progress' and 'paused' assignments as busy.
-  getBusyPackerIds: async () => {
-    const { data, error } = await supabase
-      .from('task_logs')
-      .select('id, end_time, task_assignments(packer_id, task_status)')
-      .is('end_time', null);
-    
-    // Defensive error handling - always return an array, never null
-    if (error) {
-      console.warn('getBusyPackerIds error:', error);
-      return { data: [], error };
-    }
-    
-    if (!data || !Array.isArray(data)) {
-      return { data: [], error: null };
-    }
-    
-    const busySet = new Set<string>();
-    data.forEach((log: any) => {
-      if (!log || !Array.isArray(log.task_assignments)) return;
-      log.task_assignments.forEach((a: any) => {
-        if (a && ['in_progress', 'paused'].includes(a.task_status) && a.packer_id) {
-          busySet.add(a.packer_id);
+      let allocExpectedQty: number | null = null;
+      let allocRemaining = 0;
+      if (capOrderId) {
+        const destCode = normalizeDestinationCode(capInstance?.destination);
+        const { data: destRow } = await supabase
+          .from('destinations')
+          .select('id')
+          .eq('code', destCode)
+          .maybeSingle();
+        let destId: UUID | null = (destRow?.id as UUID) || null;
+        if (!destId) {
+          const { data: fallbackDest } = await supabase
+            .from('destinations')
+            .select('id')
+            .eq('code', 'UNASSIGNED')
+            .maybeSingle();
+          destId = (fallbackDest?.id as UUID) || null;
         }
-      });
-    });
-    return { data: Array.from(busySet), error: null };
-  },
+        if (destId) {
+          const { data: allocRow } = await supabase
+            .from('order_item_allocation')
+            .select('expected_qty, packed_qty')
+            .eq('order_id', capOrderId)
+            .eq('items_db_id', maintenanceDbId)
+            .eq('destination_id', destId)
+            .maybeSingle();
+          if (allocRow) {
+            const ae = Number(allocRow.expected_qty);
+            const ap = Number(allocRow.packed_qty);
+            allocExpectedQty = Number.isFinite(ae) ? ae : 0;
+            allocRemaining = Math.max(0, allocExpectedQty - (Number.isFinite(ap) ? ap : 0));
+          }
+        }
+      }
 
-  addTaskAssignments: async (taskId, packerIds) => {
-    if (!packerIds || packerIds.length === 0) return { data: [], error: null };
-    const rows = packerIds.map((pid: string) => ({ task_id: taskId, packer_id: pid }));
+      if (allocExpectedQty !== null) {
+        // Per-destination allocation cap (authoritative).
+        if (allocExpectedQty > 0) {
+          if (allocRemaining <= 0) {
+            return {
+              data: null,
+              error: { message: `${itemLabel} is fully packed for this destination. Use "Request more" to raise the allocation.` },
+            };
+          }
+          if (effectiveNewQty > allocRemaining) {
+            return {
+              data: null,
+              error: { message: `Only ${allocRemaining} remaining for ${itemLabel} at this destination.` },
+            };
+          }
+        }
+      } else {
+        // No allocation row: fall back to the global items_db rollup cap.
+        const expectedQty = Number(catalogItem.expected_qty);
+        const packedQty = Number(catalogItem.packed_qty);
+        if (Number.isFinite(expectedQty) && expectedQty > 0) {
+          const safePackedQty = Number.isFinite(packedQty) ? packedQty : 0;
+          const remainingQty = Math.max(0, expectedQty - safePackedQty);
+          if (remainingQty <= 0) {
+            return {
+              data: null,
+              error: { message: `${itemLabel} is already fully packed and cannot be assigned again.` },
+            };
+          }
+          if (effectiveNewQty > remainingQty) {
+            return {
+              data: null,
+              error: { message: `Only ${remainingQty} remaining for ${itemLabel}. Reduce quantity to continue.` },
+            };
+          }
+        }
+      }
+    }
+
+    if (existing?.id) {
+      const nextQty = Number(existing.quantity || 0) + parsedQty;
+      const { data, error } = await supabase
+        .from('pkd_item')
+        // A packer assigning from the catalog/pool IS packing it → confirmed.
+        .update({ quantity: nextQty, is_confirmed: true })
+        .eq('id', existing.id)
+        .select()
+        .single();
+
+      if (!error) {
+        // Bump the items_db rollup by what was NEWLY confirmed: a shadow row was never
+        // counted, so confirming it adds the whole nextQty; an already-confirmed row adds
+        // only parsedQty. Keeps items_db consistent with the trigger-computed allocation.
+        await supabase.rpc('increment_item_packed_qty', {
+          item_id: maintenanceDbId,
+          amount: existingWasConfirmed ? parsedQty : nextQty,
+        });
+      }
+
+      return { data, error };
+    }
+
     const { data, error } = await supabase
-      .from('task_assignments')
-      .insert(rows)
-      .select('id');
-    return { data, error };
-  },
-
-  removeTaskAssignments: async (taskId, packerIds) => {
-    if (!packerIds || packerIds.length === 0) return { data: [], error: null };
-    const { data, error } = await supabase
-      .from('task_assignments')
-      .delete()
-      .eq('task_id', taskId)
-      .in('packer_id', packerIds)
-      .select('id');
-    return { data, error };
-  },
-
-  // Create a task log, link packages, and assign packers
-  startTaskForPackages: async ({ taskTypeId, orderPackageIds, packerIds, notes = null }) => {
-    const nowIso = new Date().toISOString();
-    // 1) create task log (initialize counters to 0)
-    const { data: logIns, error: logErr } = await supabase
-      .from('task_logs')
-      .insert({ start_time: nowIso, task_id: taskTypeId, notes, pause_duration: 0, duration_minutes: 0, update_counter: 0 })
+      .from('pkd_item')
+      .insert({
+        maintenance_db_id: maintenanceDbId,
+        pkg_instance_id: targetInstanceId,
+        quantity: parsedQty,
+      })
       .select()
       .single();
-    if (logErr || !logIns) return { data: null, error: logErr || { message: 'Failed to create task log' } };
 
-    const logId = logIns.id;
-
-    // 2) link packages (consolidation)
-    if (orderPackageIds && orderPackageIds.length) {
-      const pkgRows = orderPackageIds.map((opId: string) => ({ task_log_id: logId, order_package_id: opId }));
-      const { error: pkErr } = await supabase.from('task_packages').insert(pkgRows);
-      if (pkErr) return { data: null, error: pkErr };
-    }
-
-    // 3) assign packers (task_status defaults to in_progress)
-    if (packerIds && packerIds.length) {
-      const assignRows = packerIds.map((pid: string) => ({ task_id: logId, packer_id: pid }));
-      const { error: asErr } = await supabase.from('task_assignments').insert(assignRows);
-      if (asErr) return { data: null, error: asErr };
-    }
-
-    return { data: { task_log_id: logId }, error: null };
-  },
-
-  // Task Management Functions (implementing rule-based behavior)
-  
-  // Check if a task can be resumed
-  canResumeTask: async (taskLogId) => {
-    const { data, error } = await supabase
-      .rpc('can_resume_task', { task_log_id: taskLogId });
-    return { data, error };
-  },
-
-  // Resume a completed task (checks packer availability first)
-  resumeTask: async (taskLogId) => {
-    const { data, error } = await supabase
-      .rpc('resume_task', { task_log_id: taskLogId });
-    return { data, error };
-  },
-
-  // Complete a task properly (updates assignments and duration)
-  completeTask: async (taskLogId) => {
-    const { data, error } = await supabase
-      .rpc('complete_task', { task_log_id: taskLogId });
-    return { data, error };
-  },
-
-  // Pause a task (records pause duration)
-  pauseTask: async (taskLogId) => {
-    const { data, error } = await supabase
-      .rpc('pause_task', { task_log_id: taskLogId });
-    return { data, error };
-  },
-
-  // Resume from pause (adds pause duration to task log)
-  unpauseTask: async (taskLogId, pauseDurationSeconds = null) => {
-    const { data, error } = await supabase
-      .rpc('unpause_task', { 
-        task_log_id: taskLogId, 
-        pause_duration_seconds: pauseDurationSeconds 
+    if (!error) {
+      // Atomically bump the items_db rollup packed_qty (avoids the lost-update race of a
+      // client-side read-modify-write under concurrent packers).
+      await supabase.rpc('increment_item_packed_qty', {
+        item_id: maintenanceDbId,
+        amount: parsedQty,
       });
-    return { data, error };
-  },
-
-  // Get comprehensive task status (for UI state management)
-  getTaskStatusView: async (taskLogIds = null) => {
-    let query = supabase.from('task_status_view').select('*');
-    
-    if (taskLogIds && taskLogIds.length > 0) {
-      query = query.in('task_log_id', taskLogIds);
     }
-    
-    const { data, error } = await query.order('start_time', { ascending: false });
+
     return { data, error };
   },
 
-  // Get active tasks for order packages (for task tab persistence)
-  getActiveTasksForPackages: async (orderPackageIds) => {
-    if (!orderPackageIds || orderPackageIds.length === 0) return { data: [], error: null };
-    
+  unassignItemFromPackage: async (maintenancePackageItemId: UUID) => {
+    try {
+      // 1. Get item details before deletion to know how much to decrement
+      const { data: itemData, error: fetchError } = await supabase
+        .from('pkd_item')
+        .select('maintenance_db_id, quantity, is_confirmed')
+        .eq('id', maintenancePackageItemId)
+        .single();
+
+      if (fetchError || !itemData) {
+        return { data: null, error: fetchError || new Error('Item not found in box.') };
+      }
+
+      // 2. Delete any associated media for this item in this box
+      await supabase
+        .from('media')
+        .delete()
+        .eq('pkd_item_id', maintenancePackageItemId);
+
+      // 3. Delete the item from the box
+      const { error: deleteError } = await supabase
+        .from('pkd_item')
+        .delete()
+        .eq('id', maintenancePackageItemId);
+
+      if (deleteError) return { data: null, error: deleteError };
+
+      // 4. Decrement the items_db rollup ONLY for confirmed (packed) items. Unconfirmed
+      // shadows never bumped the rollup, so removing one must not decrement it.
+      if (itemData.is_confirmed) {
+        await supabase.rpc('decrement_item_packed_qty', {
+          item_id: itemData.maintenance_db_id,
+          amount: Number(itemData.quantity || 0),
+        });
+      }
+
+      return { data: { success: true }, error: null };
+    } catch (e: any) {
+      return { data: null, error: e };
+    }
+  },
+
+  // Confirm a "shadow" (unconfirmed) pkd_item as actually packed: flips is_confirmed and
+  // sets the packed quantity, capped at the box destination's allocation (expected −
+  // confirmed-packed). Bumps the items_db rollup once. The packed_qty trigger then
+  // recomputes the allocation from confirmed items.
+  confirmPackedItem: async (pkdItemId: UUID, quantity?: number) => {
+    const { data: pkd, error: fetchErr } = await supabase
+      .from('pkd_item')
+      .select('id, maintenance_db_id, pkg_instance_id, quantity, is_confirmed')
+      .eq('id', pkdItemId)
+      .maybeSingle();
+    if (fetchErr) return { data: null, error: fetchErr };
+    if (!pkd?.id) return { data: null, error: { message: 'Item not found.' } };
+
+    const requested =
+      quantity != null ? Number(quantity) : Number(pkd.quantity || 1);
+    if (!Number.isFinite(requested) || requested <= 0) {
+      return { data: null, error: { message: 'Quantity must be greater than 0.' } };
+    }
+
+    // Resolve the per-destination allocation cap for this box.
+    const { expected: allocExpected, packed: allocPacked } =
+      await resolvePkdAllocation(pkd.pkg_instance_id, pkd.maintenance_db_id);
+
+    // packed_qty counts only confirmed items. A shadow isn't counted yet; an already-
+    // confirmed row's own qty IS in allocPacked, so exclude it — this keeps the cap equal
+    // to getPkdAllocationContext.remaining for every row state (no UI/server desync).
+    const selfPacked = pkd.is_confirmed ? Number(pkd.quantity || 0) : 0;
+    if (allocExpected !== null && allocExpected > 0) {
+      const remaining = Math.max(0, allocExpected - Math.max(0, allocPacked - selfPacked));
+      if (remaining <= 0) {
+        return {
+          data: null,
+          error: {
+            message:
+              'Already fully packed for this destination. Use "Request more" to raise the allocation.',
+          },
+        };
+      }
+      if (requested > remaining) {
+        return {
+          data: null,
+          error: {
+            message: `Only ${remaining} remaining for this destination. Reduce the quantity or use "Request more".`,
+          },
+        };
+      }
+    }
+
+    const wasConfirmed = !!pkd.is_confirmed;
     const { data, error } = await supabase
-      .from('task_status_view')
-      .select('*')
-      .neq('overall_status', 'completed')
-      .in('task_log_id', 
-        supabase
-          .from('task_packages')
-          .select('task_log_id')
-          .in('order_package_id', orderPackageIds)
-      );
-    
+      .from('pkd_item')
+      .update({ is_confirmed: true, quantity: requested })
+      .eq('id', pkdItemId)
+      .select()
+      .single();
+    if (error) return { data: null, error };
+
+    // Shadows never bumped the global rollup — do it once on first confirmation.
+    if (!wasConfirmed) {
+      await supabase.rpc('increment_item_packed_qty', {
+        item_id: pkd.maintenance_db_id,
+        amount: requested,
+      });
+    }
+    return { data, error: null };
+  },
+
+  // Edit a box item's quantity in place — works for both confirmed (packed) items and
+  // unconfirmed shadows. Caps the new qty at the destination allocation's remaining
+  // headroom and keeps the global items_db rollup in step (confirmed rows only).
+  updatePkdItemQuantity: async (pkdItemId: UUID, newQty: number) => {
+    const requested = Math.round(Number(newQty));
+    if (!Number.isFinite(requested) || requested <= 0) {
+      return { data: null, error: { message: 'Quantity must be a whole number greater than 0.' } };
+    }
+
+    const { data: pkd, error: fetchErr } = await supabase
+      .from('pkd_item')
+      .select('id, maintenance_db_id, pkg_instance_id, quantity, is_confirmed')
+      .eq('id', pkdItemId)
+      .maybeSingle();
+    if (fetchErr) return { data: null, error: fetchErr };
+    if (!pkd?.id) return { data: null, error: { message: 'Item not found.' } };
+
+    const oldQty = Number(pkd.quantity || 0);
+    if (requested === oldQty) return { data: pkd, error: null };
+
+    const { expected: allocExpected, packed: allocPacked } =
+      await resolvePkdAllocation(pkd.pkg_instance_id, pkd.maintenance_db_id);
+
+    // packed_qty already includes THIS row's qty only when it is confirmed, so the
+    // headroom is expected − (packed minus our own confirmed contribution).
+    if (allocExpected !== null && allocExpected > 0) {
+      const otherPacked = pkd.is_confirmed ? Math.max(0, allocPacked - oldQty) : allocPacked;
+      const maxAllowed = allocExpected - otherPacked;
+      if (requested > maxAllowed) {
+        return {
+          data: null,
+          error: {
+            message: `Only ${Math.max(0, maxAllowed)} allowed for this destination. Use "Request more" to raise the allocation.`,
+          },
+        };
+      }
+    }
+
+    const { data, error } = await supabase
+      .from('pkd_item')
+      .update({ quantity: requested })
+      .eq('id', pkdItemId)
+      .select()
+      .single();
+    if (error) return { data: null, error };
+
+    // Only confirmed rows feed the global items_db rollup; adjust it by the delta.
+    if (pkd.is_confirmed) {
+      const delta = requested - oldQty;
+      if (delta > 0) {
+        await supabase.rpc('increment_item_packed_qty', {
+          item_id: pkd.maintenance_db_id,
+          amount: delta,
+        });
+      } else if (delta < 0) {
+        await supabase.rpc('decrement_item_packed_qty', {
+          item_id: pkd.maintenance_db_id,
+          amount: -delta,
+        });
+      }
+    }
+    return { data, error: null };
+  },
+
+  // Allocation context for a pkd_item: per-destination expected/packed, the remaining
+  // headroom (excluding this row's own confirmed contribution), and the ids needed to
+  // file a "request more". Powers the confirm modal's remaining display + morph button.
+  getPkdAllocationContext: async (pkdItemId: UUID) => {
+    const { data: pkd, error } = await supabase
+      .from('pkd_item')
+      .select('id, maintenance_db_id, pkg_instance_id, quantity, is_confirmed')
+      .eq('id', pkdItemId)
+      .maybeSingle();
+    if (error) return { data: null, error };
+    if (!pkd?.id) return { data: null, error: { message: 'Item not found.' } };
+
+    const { expected, packed, orderId, destination } = await resolvePkdAllocation(
+      pkd.pkg_instance_id,
+      pkd.maintenance_db_id,
+    );
+    const oldQty = Number(pkd.quantity || 0);
+    // For a confirmed row its own qty is already inside `packed`; exclude it so the
+    // headroom reflects what OTHER boxes have packed for this destination.
+    const otherPacked = pkd.is_confirmed ? Math.max(0, packed - oldQty) : packed;
+    const remaining = expected !== null ? Math.max(0, expected - otherPacked) : null;
+
+    return {
+      data: {
+        orderId,
+        itemsDbId: pkd.maintenance_db_id as UUID,
+        destination,
+        expected,
+        packed,
+        remaining,
+      },
+      error: null,
+    };
+  },
+
+  getOrCreateQrToken: async (entityType: 'package' | 'item' | 'pkd_item', entityId: UUID) => {
+    // 1. Try to find an existing active token
+    const { data: existing, error: findError } = await supabase
+      .from('qr_codes')
+      .select('token')
+      .eq('entity_type', entityType)
+      .eq('entity_id', entityId)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (existing) {
+      return { data: existing.token, error: null };
+    }
+
+    // 2. If no token found, insert a new one
+    // The table handles generating the unique token on DEFAULT
+    const { data: inserted, error: insertError } = await supabase
+      .from('qr_codes')
+      .insert({
+        entity_type: entityType,
+        entity_id: entityId,
+        is_active: true
+      })
+      .select('token')
+      .single();
+
+    if (insertError) {
+      return { data: null, error: insertError };
+    }
+
+    return { data: inserted?.token || null, error: null };
+  },
+
+  createAdHocItem: async (input: {
+    clientId: UUID;
+    description: string;
+    quantity: number;
+    length?: number;
+    width?: number;
+    height?: number;
+    netWeight?: number;
+    reference?: string;
+  }) => {
+    const { data, error } = await supabase
+      .from('items_db')
+      .insert({
+        client_id: input.clientId,
+        description: input.description,
+        expected_qty: input.quantity,
+        packed_qty: 0,
+        length: input.length || null,
+        width: input.width || null,
+        height: input.height || null,
+        net_weight: input.netWeight || null,
+        reference: input.reference || null,
+      })
+      .select('id')
+      .single();
+
     return { data, error };
   },
+
+  getItemMedia: async (pkdItemId: UUID) => {
+    const { data, error } = await supabase
+      .from('media')
+      .select('id, image_url, created_at')
+      .eq('pkd_item_id', pkdItemId)
+      .order('created_at', { ascending: false });
+
+    if (error || !data) return { data, error };
+
+    const mediaWithUrls = await Promise.all(data.map(async (m: any) => {
+      const signedUrl = await getCachedSignedUrl(supabase, 'media', m.image_url);
+      return { ...m, image_url: signedUrl || m.image_url };
+    }));
+
+    return { data: mediaWithUrls, error: null };
+  },
+
+  getPackageMedia: async (orderPackageId: UUID) => {
+    const { data, error } = await supabase
+      .from('media')
+      .select('id, image_url, created_at')
+      .eq('order_package_id', orderPackageId)
+      .eq('designation', 'package')
+      .order('created_at', { ascending: false });
+
+    if (error || !data) return { data, error };
+
+    const mediaWithUrls = await Promise.all(data.map(async (m: any) => {
+      const signedUrl = await getCachedSignedUrl(supabase, 'media', m.image_url);
+      return { ...m, image_url: signedUrl || m.image_url };
+    }));
+
+    return { data: mediaWithUrls, error: null };
+  },
+
+  getMediaByEntityId: async (entityId: UUID, designation: string) => {
+    const { data, error } = await supabase
+      .from('media')
+      .select('id, image_url, created_at')
+      .eq('order_package_id', entityId) // Using order_package_id as a generic entity id for now, or we could add more specific columns
+      .eq('designation', designation)
+      .order('created_at', { ascending: false });
+
+    if (error || !data) return { data, error };
+
+    const bucket = 'media';
+    const mediaWithUrls = data.map((m: any) => {
+      const { data: publicData } = supabase.storage.from(bucket).getPublicUrl(m.image_url);
+      return { ...m, image_url: publicData?.publicUrl || m.image_url };
+    });
+
+    return { data: mediaWithUrls, error: null };
+  },
+
+  // ===== Box Creation Flow Helpers =====
+
+  /**
+   * Returns all box types for the box type picker.
+   * Standard boxes have names starting with "Standard Box" and codes starting with "standardbox".
+   */
+  getAllBoxTypes: async () => {
+    const { data, error } = await supabase
+      .from('box_type')
+      .select('id, name, code')
+      .order('name', { ascending: true });
+    return { data, error };
+  },
+
+  /**
+   * Returns categories mapped to an order via category_order_map,
+   * each with their tags ordered by tag_order for abbreviation building.
+   */
+  getOrderCategories: async (orderId: UUID) => {
+    const { data, error } = await supabase
+      .from('category_order_map')
+      .select(`
+        category_id,
+        pkg_category:pkg_category(
+          id,
+          label,
+          category_tag_map(
+            tag_order,
+            tag:project_tags(id, name, abbreviation)
+          )
+        )
+      `)
+      .eq('order_id', orderId)
+      .not('category_id', 'is', null);
+
+    if (error) return { data: null, error };
+
+    const seen = new Set<string>();
+    const categories = (data || [])
+      .map((row: any) => {
+        const cat = Array.isArray(row.pkg_category) ? row.pkg_category[0] : row.pkg_category;
+        if (!cat?.id || seen.has(cat.id)) return null;
+        seen.add(cat.id);
+        return cat;
+      })
+      .filter(Boolean);
+
+    return { data: categories, error: null };
+  },
+
+  /**
+   * Builds the abbreviated tag string for a category in tag_order sequence.
+   * e.g. category "Power + Non-AC" → "P-NAC"
+   * Falls back to deriving abbreviation from tag name if no abbreviation stored.
+   */
+  buildCategoryTagAbbreviation: async (categoryId: UUID): Promise<string> => {
+    const { data, error } = await supabase
+      .from('category_tag_map')
+      .select('tag_order, tag:project_tags(name, abbreviation)')
+      .eq('category_id', categoryId)
+      .order('tag_order', { ascending: true });
+
+    if (error || !data?.length) return '';
+
+    const parts = (data as any[]).map((row) => {
+      const tag = Array.isArray(row.tag) ? row.tag[0] : row.tag;
+      if (tag?.abbreviation) return String(tag.abbreviation).trim();
+      // Derive from name as fallback
+      const name = String(tag?.name || '').trim();
+      // All-caps short tokens kept as-is (AC, NAC, etc.)
+      if (/^[A-Z0-9-]{1,5}$/.test(name)) return name;
+      // Otherwise take first letter uppercased
+      return name.charAt(0).toUpperCase();
+    });
+
+    return parts.filter(Boolean).join('-');
+  },
+
+  /**
+   * Generates and saves the ipac_reference for a custom box instance.
+   * Format: DESTINATION-TAGABBREV-ITEMNO-SEQID (zero-padded, min 2 digits)
+   * e.g. "ALD-P-NAC-53286-01"
+   * For standard boxes no reference is generated (returns null).
+   */
+  generateAndSaveIpacReference: async (opts: {
+    instanceId: UUID;
+    destination: string;
+    categoryId: UUID;
+    itemNum: string | number | null;
+    instanceSeq: number;
+    isCustomBox: boolean;
+  }): Promise<{ ipacReference: string | null; error: any }> => {
+    if (!opts.isCustomBox) {
+      return { ipacReference: null, error: null };
+    }
+
+    // Build tag abbreviation from DB
+    const tagAbbrev = await baseDb.buildCategoryTagAbbreviation(opts.categoryId);
+
+    const dest = String(opts.destination || '').trim().toUpperCase();
+    const itemNo = String(opts.itemNum ?? '').trim();
+    const seq = String(opts.instanceSeq).padStart(2, '0');
+
+    const parts = [dest];
+    if (tagAbbrev) parts.push(tagAbbrev);
+    if (itemNo) parts.push(itemNo);
+    parts.push(seq);
+
+    const ipacReference = parts.join('-');
+
+    const { error } = await supabase
+      .from('order_pkg_instance')
+      .update({ ipac_reference: ipacReference })
+      .eq('id', opts.instanceId);
+
+    return { ipacReference: error ? null : ipacReference, error };
+  },
+
+  /**
+   * Returns the total packed item quantity for an instance (sum of pkd_item.quantity).
+   * Used at label print time to build the accurate QTY caption for custom boxes.
+   */
+  getInstancePackedItemQty: async (instanceId: UUID): Promise<{ qty: number; error: any }> => {
+    const { data, error } = await supabase
+      .from('pkd_item')
+      .select('quantity')
+      .eq('pkg_instance_id', instanceId);
+
+    if (error) return { qty: 0, error };
+
+    const qty = (data || []).reduce((sum: number, row: any) => {
+      const q = Number(row.quantity);
+      return sum + (Number.isFinite(q) ? q : 0);
+    }, 0);
+
+    return { qty, error: null };
+  },
+
+  /**
+   * Updates destination and/or category_id on an order_pkg_instance row.
+   */
+  updateInstanceFields: async (
+    instanceId: UUID,
+    fields: { destination?: string | null; category_id?: UUID | null }
+  ) => {
+    const patch: Record<string, any> = {};
+    if ('destination' in fields) patch.destination = fields.destination ?? null;
+    if ('category_id' in fields) patch.category_id = fields.category_id ?? null;
+
+    const { error } = await supabase
+      .from('order_pkg_instance')
+      .update(patch)
+      .eq('id', instanceId);
+
+    return { error };
+  },
+
+  /**
+   * Resolves the default destination and category for new boxes in an order,
+   * inherited from the order's most recently created instance that has them set.
+   */
+  getOrderBoxDefaults: async (
+    orderId: UUID
+  ): Promise<{ destination: string | null; categoryId: UUID | null }> => {
+    const { data, error } = await supabase
+      .from('order_pkg_instance')
+      .select('destination, category_id, created_at, order_pkg_overview!inner(order_id)')
+      .eq('order_pkg_overview.order_id', orderId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (error || !data?.length) return { destination: null, categoryId: null };
+
+    const rows = data as any[];
+    const destRow = rows.find((r) => String(r.destination || '').trim());
+    const catRow = rows.find((r) => r.category_id);
+
+    return {
+      destination: destRow ? String(destRow.destination).trim().toUpperCase() : null,
+      categoryId: catRow?.category_id ?? null,
+    };
+  },
+
+  /**
+   * Comma-separated project tag names for a category, in tag_order sequence.
+   * Stored on order_pkg_instance.tag so report tag filters can match by name.
+   */
+  getCategoryTagNames: async (categoryId: UUID): Promise<string | null> => {
+    const { data, error } = await supabase
+      .from('category_tag_map')
+      .select('tag_order, tag:project_tags(name)')
+      .eq('category_id', categoryId)
+      .order('tag_order', { ascending: true });
+
+    if (error || !data?.length) return null;
+
+    const names = (data as any[])
+      .map((row) => {
+        const tag = Array.isArray(row.tag) ? row.tag[0] : row.tag;
+        return String(tag?.name || '').trim();
+      })
+      .filter(Boolean);
+
+    return names.length ? names.join(', ') : null;
+  },
+
+  /**
+   * Duplicates an existing order_pkg_instance, creating a new sibling instance
+   * under the same overview/package. The new instance always gets a fresh
+   * status='design', packed_at=null, and a unique ipac_reference.
+   *
+   * Steps:
+   *   a. Load source instance
+   *   b. Compute nextInstanceNumber for the overview
+   *   c. Insert new order_pkg_instance (destination/category_id/tag copied)
+   *   d. Generate unique ipac_reference via generateAndSaveIpacReference
+   *   e. Bump order_pkg_overview.quantity if needed (mirrors AddPackageTab)
+   *   f. Re-seed pkd_item rows from source
+   *      - default: shadow rows (is_confirmed=false) — packed state reset
+   *      - includeFinalValues=true: copy is_confirmed/quantity verbatim,
+   *        clamping confirmed rows to remaining allocation cap
+   */
+  duplicateBoxInstance: async (
+    sourceInstanceId: UUID,
+    options: { includeFinalValues?: boolean } = {}
+  ): Promise<{
+    data: { newInstanceId: string; instanceNumber: number; ipacReference: string | null } | null;
+    error: any;
+    warning?: string;
+  }> => {
+    const { includeFinalValues = false } = options;
+
+    // ── a. Load source instance ────────────────────────────────────────────
+    const { data: src, error: srcErr } = await supabase
+      .from('order_pkg_instance')
+      .select('id, order_pkg_overview_id, order_package_id, destination, category_id, tag, ipac_reference, status')
+      .eq('id', sourceInstanceId)
+      .maybeSingle();
+
+    if (srcErr) return { data: null, error: srcErr };
+    if (!src?.id) return { data: null, error: { message: 'Source instance not found.' } };
+
+    const overviewId: UUID = src.order_pkg_overview_id;
+    const orderPackageId: UUID = src.order_package_id;
+    const destination: string = String(src.destination || '').trim().toUpperCase();
+    const categoryId: UUID | null = src.category_id || null;
+    const tag: string | null = src.tag ?? null;
+
+    // ── b. Compute nextInstanceNumber ──────────────────────────────────────
+    const { data: lastRow, error: lastRowErr } = await supabase
+      .from('order_pkg_instance')
+      .select('instance_number')
+      .eq('order_pkg_overview_id', overviewId)
+      .order('instance_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (lastRowErr) return { data: null, error: lastRowErr };
+    const nextInstanceNumber = Math.max(1, Number(lastRow?.instance_number || 0) + 1);
+
+    // ── c. Insert new order_pkg_instance ───────────────────────────────────
+    const { data: newInst, error: insertErr } = await supabase
+      .from('order_pkg_instance')
+      .insert({
+        order_pkg_overview_id: overviewId,
+        order_package_id: orderPackageId,
+        instance_number: nextInstanceNumber,
+        status: 'design',
+        packed_at: null,
+        destination: destination || null,
+        category_id: categoryId,
+        tag,
+        ipac_reference: null, // set in step d
+      })
+      .select('id, instance_number')
+      .single();
+
+    if (insertErr || !newInst?.id) return { data: null, error: insertErr || { message: 'Failed to create duplicate instance.' } };
+
+    const newInstanceId: string = newInst.id;
+
+    // ── d. Generate a fresh, unique ipac_reference ─────────────────────────
+    // Always give the duplicate a non-null reference so it is fully operational
+    // in the report + item fetch — matching admin-panel boxes, which ALWAYS set
+    // one. Standard ops boxes were created with a null ref; that is the bug we
+    // are fixing, so we do NOT copy a null reference forward. (generateAndSave
+    // builds DEST-TAG-[ITEM]-SEQ, unique per overview via instanceSeq.)
+    let warning: string | undefined;
+    let ipacReference: string | null = null;
+    if (categoryId && destination) {
+      // Best-effort primary item number for the DEST-TAG-ITEM-SEQ reference.
+      let itemNum: string | number | null = null;
+      const { data: primaryItem } = await supabase
+        .from('pkd_item')
+        .select('items_db:items_db(item_num)')
+        .eq('pkg_instance_id', sourceInstanceId)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (primaryItem) {
+        const idb = Array.isArray((primaryItem as any).items_db)
+          ? (primaryItem as any).items_db[0]
+          : (primaryItem as any).items_db;
+        itemNum = idb?.item_num ?? null;
+      }
+
+      const refResult = await baseDb.generateAndSaveIpacReference({
+        instanceId: newInstanceId,
+        destination,
+        categoryId,
+        itemNum,
+        instanceSeq: nextInstanceNumber,
+        isCustomBox: true,
+      });
+      ipacReference = refResult.ipacReference;
+      if (refResult.error) {
+        warning =
+          'ipac_reference generation failed: ' +
+          (refResult.error.message || String(refResult.error));
+      }
+    }
+
+    // ── e. Bump overview.quantity if needed ────────────────────────────────
+    // Mirrors AddPackageTab: if overview.quantity < nextInstanceNumber, bump it.
+    const { data: ovRow } = await supabase
+      .from('order_pkg_overview')
+      .select('quantity')
+      .eq('id', overviewId)
+      .maybeSingle();
+
+    const currentQty = Number(ovRow?.quantity || 0);
+    if (!Number.isFinite(currentQty) || currentQty < nextInstanceNumber) {
+      await supabase
+        .from('order_pkg_overview')
+        .update({ quantity: nextInstanceNumber })
+        .eq('id', overviewId);
+    }
+
+    // ── f. Re-seed pkd_item rows ───────────────────────────────────────────
+    const { data: srcItems, error: srcItemsErr } = await supabase
+      .from('pkd_item')
+      .select('id, maintenance_db_id, quantity, is_confirmed, created_at')
+      .eq('pkg_instance_id', sourceInstanceId)
+      .order('created_at', { ascending: true });
+
+    if (srcItemsErr) {
+      // Non-fatal: instance was created; return with warning
+      warning = 'pkd_item re-seed failed: ' + (srcItemsErr.message || String(srcItemsErr));
+      return { data: { newInstanceId, instanceNumber: nextInstanceNumber, ipacReference }, error: null, warning };
+    }
+
+    if (srcItems && srcItems.length > 0) {
+      type PkdItemInsert = {
+        maintenance_db_id: string;
+        pkg_instance_id: string;
+        quantity: number;
+        is_confirmed: boolean;
+      };
+      const newRows: PkdItemInsert[] = [];
+
+      for (const item of srcItems as any[]) {
+        const srcQty = Number(item.quantity);
+        const safeQty = Number.isFinite(srcQty) && srcQty > 0 ? srcQty : 1;
+
+        if (includeFinalValues && item.is_confirmed) {
+          // Clamp to remaining allocation cap to avoid exceeding order targets
+          const alloc = await resolvePkdAllocation(sourceInstanceId, item.maintenance_db_id);
+          let clampedQty = safeQty;
+          if (alloc.expected !== null) {
+            const remaining = alloc.expected - alloc.packed;
+            if (remaining <= 0) {
+              // No room — insert as shadow instead
+              newRows.push({ maintenance_db_id: item.maintenance_db_id, pkg_instance_id: newInstanceId, quantity: safeQty, is_confirmed: false });
+              continue;
+            }
+            clampedQty = Math.min(safeQty, remaining);
+          }
+          newRows.push({ maintenance_db_id: item.maintenance_db_id, pkg_instance_id: newInstanceId, quantity: clampedQty, is_confirmed: true });
+        } else {
+          // Default: shadow row — planned quantity preserved, packed state reset
+          newRows.push({ maintenance_db_id: item.maintenance_db_id, pkg_instance_id: newInstanceId, quantity: safeQty, is_confirmed: false });
+        }
+      }
+
+      if (newRows.length > 0) {
+        const { error: itemsInsertErr } = await supabase
+          .from('pkd_item')
+          .insert(newRows);
+
+        if (itemsInsertErr) {
+          warning = 'pkd_item re-seed failed: ' + (itemsInsertErr.message || String(itemsInsertErr));
+        }
+      }
+    }
+
+    return {
+      data: { newInstanceId, instanceNumber: nextInstanceNumber, ipacReference },
+      error: null,
+      ...(warning ? { warning } : {}),
+    };
+  },
+};
+
+/**
+ * Resolve the per-destination allocation row (order_item_allocation) for a pkd_item's
+ * instance. `packed` counts only confirmed pkd_item rows (the recompute trigger), so
+ * callers cap a new/edited quantity against `expected − packed` for that destination.
+ * Returns expected=null when there is no allocation (ad-hoc item / no cap to enforce).
+ */
+const resolvePkdAllocation = async (
+  pkgInstanceId: UUID | null,
+  itemsDbId: UUID | null,
+): Promise<{
+  expected: number | null;
+  packed: number;
+  orderId: UUID | null;
+  destination: string | null;
+}> => {
+  if (!pkgInstanceId || !itemsDbId)
+    return { expected: null, packed: 0, orderId: null, destination: null };
+
+  const { data: inst } = await supabase
+    .from('order_pkg_instance')
+    .select('destination, order_pkg_overview_id')
+    .eq('id', pkgInstanceId)
+    .maybeSingle();
+
+  const code = normalizeDestinationCode(inst?.destination);
+
+  let orderId: UUID | null = null;
+  if (inst?.order_pkg_overview_id) {
+    const { data: ov } = await supabase
+      .from('order_pkg_overview')
+      .select('order_id')
+      .eq('id', inst.order_pkg_overview_id)
+      .maybeSingle();
+    orderId = (ov?.order_id as UUID) || null;
+  }
+  if (!orderId) return { expected: null, packed: 0, orderId: null, destination: code };
+
+  const { data: destRow } = await supabase
+    .from('destinations')
+    .select('id')
+    .eq('code', code)
+    .maybeSingle();
+  let destId: UUID | null = (destRow?.id as UUID) || null;
+  if (!destId) {
+    const { data: fb } = await supabase
+      .from('destinations')
+      .select('id')
+      .eq('code', 'UNASSIGNED')
+      .maybeSingle();
+    destId = (fb?.id as UUID) || null;
+  }
+  if (!destId) return { expected: null, packed: 0, orderId, destination: code };
+
+  const { data: alloc } = await supabase
+    .from('order_item_allocation')
+    .select('expected_qty, packed_qty')
+    .eq('order_id', orderId)
+    .eq('items_db_id', itemsDbId)
+    .eq('destination_id', destId)
+    .maybeSingle();
+  if (!alloc) return { expected: null, packed: 0, orderId, destination: code };
+
+  const ae = Number(alloc.expected_qty);
+  const ap = Number(alloc.packed_qty);
+  return {
+    expected: Number.isFinite(ae) ? ae : 0,
+    packed: Number.isFinite(ap) ? ap : 0,
+    orderId,
+    destination: code,
+  };
+};
+
+const attendanceApi = createAttendanceApi(supabase);
+const packingApi = createPackingApi(supabase);
+const tasksApi = createTasksApi(supabase);
+const servicesApi = createServicesApi(supabase);
+
+export const db = {
+  ...baseDb,
+  ...attendanceApi,
+  ...packingApi,
+  ...tasksApi,
+  ...servicesApi,
+  query: supabase,
+  auth: supabase.auth,
 };
 
 export default supabase;

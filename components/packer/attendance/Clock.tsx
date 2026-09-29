@@ -9,8 +9,15 @@ export const Clock: React.FC<ClockProps> = ({ textClassName }) => {
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
+    // Display only shows minutes — skip re-renders while the minute is unchanged
     const timer = setInterval(() => {
-      setCurrentTime(new Date());
+      setCurrentTime((prev) => {
+        const now = new Date();
+        return prev.getMinutes() === now.getMinutes() &&
+          prev.getHours() === now.getHours()
+          ? prev
+          : now;
+      });
     }, 1000);
 
     return () => clearInterval(timer);

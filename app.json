@@ -1,12 +1,12 @@
 {
   "expo": {
-    "name": "IPAC VALSEM",
+    "name": "IPAC",
     "slug": "ipac-operations-app",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/ios-light.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "scheme": "ipac-operations-app",
     "splash": {
       "image": "./assets/splash-icon-dark.png",
@@ -14,7 +14,12 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow IPAC to scan item QR and barcode labels.",
+        "NSBluetoothAlwaysUsageDescription": "Allow IPAC to connect to nearby label printers.",
+        "NSBluetoothPeripheralUsageDescription": "Allow IPAC to connect to nearby label printers."
+      }
     },
     "android": {
       "package": "com.ipacoperationsapp.app",
@@ -22,7 +27,13 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -30,7 +41,11 @@
       "output": "static",
       "backgroundColor": "#ffffff"
     },
-    "plugins": ["expo-router", "expo-dev-client"],
+    "plugins": [
+      "expo-router",
+      "expo-dev-client",
+      "expo-camera"
+    ],
     "experiments": {
       "typedRoutes": true
     },
