@@ -156,6 +156,10 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 
+    // The Brother SDK is a local AAR. Keep it at the application level so the
+    // React Native library AAR can be bundled by modern Android Gradle Plugin.
+    implementation(files("../../node_modules/official-react-brother-print-sdk/android/libs/BrotherPrintLibrary_4120.aar"))
+
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";
     def isWebpAnimatedEnabled = (findProperty('expo.webp.animated') ?: "") == "true";

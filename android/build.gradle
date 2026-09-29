@@ -20,5 +20,26 @@ allprojects {
   }
 }
 
+// official-react-brother-print-sdk ships a local AAR. AGP does not allow a
+// library project to publish a direct local AAR dependency, so replace the
+// module's runtime dependency with compileOnly. The application declares the
+// AAR directly in app/build.gradle and packages it in the final APK/AAB.
+subprojects {
+  afterEvaluate { project ->
+    if (project.path == ':official-react-brother-print-sdk') {
+      // Autolinking can give this module a project directory under
+      // android/node_modules, while npm installs the package at the app root.
+      // Resolve from rootProject so this does not depend on that projectDir.
+      def brotherAar = rootProject.file('../node_modules/official-react-brother-print-sdk/android/libs/BrotherPrintLibrary_4120.aar')
+      project.configurations.implementation.dependencies.removeAll { dependency ->
+        dependency instanceof FileCollectionDependency && dependency.files.any { file ->
+          file.name == brotherAar.name
+        }
+      }
+      project.dependencies.add('compileOnly', rootProject.files(brotherAar))
+    }
+  }
+}
+
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"

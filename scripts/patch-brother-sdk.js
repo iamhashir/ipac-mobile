@@ -106,4 +106,22 @@ if (fs.existsSync(v4Path)) {
   }
 }
 
-console.log('✓ All patches applied successfully');
+// 6. Keep the vendor AAR out of the library AAR. AGP rejects direct local AAR
+// dependencies on library projects because they cannot be embedded correctly.
+// The application adds this AAR directly in android/app/build.gradle instead.
+const sdkGradlePath = path.join(__dirname, '..', 'node_modules', 'official-react-brother-print-sdk', 'android', 'build.gradle');
+if (fs.existsSync(sdkGradlePath)) {
+  let sdkGradle = fs.readFileSync(sdkGradlePath, 'utf8');
+  const localAarDependency = 'implementation(files("libs/BrotherPrintLibrary_4120.aar"))';
+  if (sdkGradle.includes(localAarDependency)) {
+    sdkGradle = sdkGradle.replace(localAarDependency, 'compileOnly(files("libs/BrotherPrintLibrary_4120.aar"))');
+    fs.writeFileSync(sdkGradlePath, sdkGradle);
+    console.log('✓ Patched Brother SDK AAR dependency for AGP library bundling');
+  } else if (sdkGradle.includes('compileOnly(files("libs/BrotherPrintLibrary_4120.aar"))')) {
+    console.log('✓ Brother SDK AAR dependency is already patched');
+  } else {
+    console.warn('⚠ Brother SDK AAR dependency not found — manual review needed.');
+  }
+}
+
+console.log('✓ All patches applied successfully');
